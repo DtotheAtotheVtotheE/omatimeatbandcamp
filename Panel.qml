@@ -32,6 +32,7 @@ Panel {
   readonly property var trackCache: service ? service.trackCache : ({})
   readonly property bool playing: service ? service.isPlaying : false
   readonly property bool paused: service ? service.isPaused : false
+  readonly property bool refreshing: service ? service.refreshing : false
 
   readonly property string tooltip: currentTrack && currentTrack.title
     ? (currentTrack.title + (currentTrack.artist ? " — " + currentTrack.artist : ""))
@@ -40,10 +41,44 @@ Panel {
   property var selectedAlbum: null
   property var selectedPlaylist: null
 
+  // Overflow (⋯) menu and its confirmation. New menu entries are added to
+  // `menuItems`; destructive ones must go through a ConfirmDialog like logout.
+  property bool menuOpen: false
+  property int menuIndex: 0
+  property bool logoutConfirmOpen: false
+  readonly property var menuItems: [
+    { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
+  ]
+
   implicitWidth: showIcon ? button.implicitWidth : 0
   implicitHeight: showIcon ? button.implicitHeight : 0
 
-  onOpenedChanged: if (opened && service && service.collection.length === 0) service.refresh()
+  onOpenedChanged: {
+    if (!opened) { menuOpen = false; logoutConfirmOpen = false }
+    else if (service && service.collection.length === 0) service.refresh()
+  }
+
+  function toggleMenu() {
+    menuIndex = 0
+    menuOpen = !menuOpen
+    if (!menuOpen) searchField.forceActiveFocus()
+  }
+
+  function runMenuAction(action) {
+    menuOpen = false
+    if (action === "logout") logoutConfirmOpen = true
+  }
+
+  function cancelLogout() {
+    logoutConfirmOpen = false
+    searchField.forceActiveFocus()
+  }
+
+  function confirmLogout() {
+    logoutConfirmOpen = false
+    if (service) service.clearCookies()
+    searchField.forceActiveFocus()
+  }
 
   function pickAlbum(alb) {
     selectedPlaylist = null
@@ -130,34 +165,18 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
         }
 
-        Row {
+        // The only header control. Close is Esc / click outside; logout and
+        // other rare actions live in this menu.
+        BcButton {
+          id: menuButton
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.sm
-
-          PanelActionButton {
-            iconText: "\u21BB"
-            tooltipText: "Refresh library"
-            foreground: root.foreground
-            size: Style.spacing.controlHeight
-            onClicked: if (root.service) root.service.refresh()
-          }
-
-          PanelActionButton {
-            iconText: "\uF08B"
-            tooltipText: "Clear imported Bandcamp session"
-            foreground: root.foreground
-            size: Style.spacing.controlHeight
-            onClicked: if (root.service) root.service.clearCookies()
-          }
-
-          PanelActionButton {
-            iconText: "\u2715"
-            tooltipText: "Close"
-            foreground: root.foreground
-            size: Style.spacing.controlHeight
-            onClicked: root.close()
-          }
+          iconText: "\uf141"
+          tooltipText: "More"
+          active: root.menuOpen
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.toggleMenu()
         }
       }
 
@@ -169,71 +188,104 @@ Panel {
         foreground: root.foreground
         font.family: root.fontFamily
         onTextChanged: if (root.service) root.service.search(text)
+
+        // The search field owns keyboard focus for the whole window, so the
+        // overlays are handled here, before its own text entry. While the
+        // logout confirmation or the ⋯ menu is open it owns the keyboard.
+        // (Qt fires Keys.onEscapePressed before Keys.onPressed, so Esc is
+        // handled in its own handler below.)
+        Keys.priority: Keys.BeforeItem
+        Keys.onPressed: function(event) {
+          if (root.logoutConfirmOpen) {
+            logoutConfirm.handleKey(event)
+            event.accepted = true
+          } else if (root.menuOpen) {
+            if (event.key === Qt.Key_Down) root.menuIndex = Math.min(root.menuItems.length - 1, root.menuIndex + 1)
+            else if (event.key === Qt.Key_Up) root.menuIndex = Math.max(0, root.menuIndex - 1)
+            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
+            event.accepted = true
+          }
+        }
+        // Esc backs out one layer at a time: confirmation, menu, search text, window.
         Keys.onEscapePressed: function(event) {
-          if (text !== "") { text = ""; root.service.search("") }
+          if (root.logoutConfirmOpen) root.cancelLogout()
+          else if (root.menuOpen) root.toggleMenu()
+          else if (text !== "") { text = ""; root.service.search("") }
           else root.close()
           event.accepted = true
         }
       }
 
-      // tabs + status --------------------------------------------------------
+      // toolbar --------------------------------------------------------------
       Item {
         width: parent.width
         height: Style.spacing.controlHeight
 
         Row {
+          id: toolbarLeft
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.spacing.sm
 
-          Button {
+          BcButton {
             text: "Albums (" + root.albums.length + ")"
-            bordered: true
             selected: (root.service ? root.service.activeTab : 0) === 0
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
             onClicked: if (root.service) root.service.activeTab = 0
           }
 
-          Button {
+          BcButton {
             text: "Playlists (" + root.playlists.length + ")"
-            bordered: true
             selected: (root.service ? root.service.activeTab : 0) === 1
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
             onClicked: if (root.service) root.service.activeTab = 1
           }
 
-          Button {
+          BcButton {
             text: "Play all"
-            bordered: true
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
             onClicked: if (root.service) root.service.playAll()
           }
 
-          Button {
+          BcButton {
             text: root.service ? root.service.shuffleLabel : "Shuffle: Off"
-            bordered: true
             selected: root.service && root.service.shuffleMode > 0
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
             onClicked: root.cycleShuffle()
           }
         }
 
-        Text {
-          visible: root.service && root.service.status !== ""
-          text: root.service ? root.service.status : ""
-          color: Qt.darker(root.foreground, 1.4)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+        Row {
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.spacing.sm
+
+          Text {
+            visible: root.service && root.service.status !== ""
+            text: root.service ? root.service.status : ""
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            width: Math.min(implicitWidth, Math.max(0, contentColumn.width - toolbarLeft.width - refreshButton.width - Style.spacing.md * 2))
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          BcButton {
+            id: refreshButton
+            text: "Refresh"
+            iconText: "\u21BB"
+            tooltipText: root.refreshing ? "Refreshing library…" : "Refresh library"
+            enabled: !root.refreshing
+            iconSpinning: root.refreshing
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: if (root.service) root.service.refresh()
+          }
         }
       }
 
@@ -465,68 +517,116 @@ Panel {
             // Nerd Font glyphs (PUA range) so the icons stay monochrome and
             // inherit the theme — Unicode media symbols such as U+23F8 fall
             // back to colour-emoji presentation and paint their own background.
-            Button {
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
+            // Same BcButton as everywhere else; Phase 5 reworks this row.
+            BcButton {
               iconText: "\uf048"
               tooltipText: "Previous"
               foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.prev()
             }
 
-            // Primary play/pause: persistent fill built from the active theme's
-            // accent colour so it matches the theme rather than a fixed hue.
-            BorderSurface {
-              id: playButton
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
-              radius: Style.cornerRadius
-              color: Util.alpha(Color.accent, playMouse.containsMouse ? 0.5 : 0.3)
-              Behavior on color { ColorAnimation { duration: 100 } }
-
-              Text {
-                textFormat: Text.PlainText
-                anchors.centerIn: parent
-                text: root.playing && !root.paused ? "\uf04c" : "\uf04b"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.iconLarge
-              }
-
-              MouseArea {
-                id: playMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (root.service) root.service.togglePlay()
-              }
-
-              PanelToolTip {
-                visible: playMouse.containsMouse
-                text: root.playing && !root.paused ? "Pause" : "Play"
-                fontFamily: root.fontFamily
-              }
+            BcButton {
+              iconText: root.playing && !root.paused ? "\uf04c" : "\uf04b"
+              tooltipText: root.playing && !root.paused ? "Pause" : "Play"
+              active: root.playing && !root.paused
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) root.service.togglePlay()
             }
 
-            Button {
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
+            BcButton {
               iconText: "\uf04d"
               tooltipText: "Stop"
               foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.stop()
             }
-            Button {
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
+
+            BcButton {
               iconText: "\uf051"
               tooltipText: "Next"
               foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.next()
             }
           }
         }
       }
+    }
+
+    // ⋯ menu ------------------------------------------------------------------
+    // Click anywhere outside the card closes the menu (the window itself stays
+    // open); the card sits just under the header button.
+    Item {
+      anchors.fill: parent
+      visible: root.menuOpen
+      z: 50
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.toggleMenu()
+      }
+
+      BorderSurface {
+        id: menuCard
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: Style.spacing.controlHeight + Style.spacing.sm
+        width: Math.min(Style.space(300), parent.width)
+        height: menuColumn.implicitHeight + contentTopInset + contentBottomInset
+        radius: Style.cornerRadius
+        color: Color.popups.background
+        borderSpec: Border.flat(Color.popups.border, Style.normalBorderWidth)
+        padding: Style.space(6)
+
+        MouseArea { anchors.fill: parent; onClicked: {} }
+
+        Column {
+          id: menuColumn
+          anchors.fill: parent
+          anchors.topMargin: menuCard.contentTopInset
+          anchors.rightMargin: menuCard.contentRightInset
+          anchors.bottomMargin: menuCard.contentBottomInset
+          anchors.leftMargin: menuCard.contentLeftInset
+          spacing: Style.spacing.sm
+
+          Repeater {
+            model: root.menuItems
+
+            BcButton {
+              required property int index
+              required property var modelData
+              width: menuColumn.width
+              leftAlign: true
+              text: modelData.label
+              iconText: modelData.icon
+              selected: root.menuIndex === index
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.runMenuAction(modelData.action)
+            }
+          }
+        }
+      }
+    }
+
+    // Logout confirmation. Cancel is preselected so an accidental Return is the
+    // safe answer.
+    ConfirmDialog {
+      id: logoutConfirm
+      anchors.fill: parent
+      z: 100
+      opened: root.logoutConfirmOpen
+      message: "Log out of Bandcamp? This deletes the Bandcamp session the plugin imported from your browser. "
+        + "Your cached library stays, but private items won't load until a session is imported again on the next Refresh."
+      cancelText: "Cancel"
+      confirmText: "Log out"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onOpenedChanged: if (opened) selectedIndex = 0
+      onCanceled: root.cancelLogout()
+      onConfirmed: root.confirmLogout()
     }
   }
 }

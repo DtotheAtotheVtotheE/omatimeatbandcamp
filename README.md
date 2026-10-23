@@ -81,6 +81,6 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - `backend/match.py`: matches the web collection to Subsonic by normalised artist+title, and single-track purchases via their parent album.
 - `backend/library.py`: local cache (`~/.cache/omatimeatbandcamp/library/`) plus background, incremental sync.
   CLI: `python3 backend sync | status | summary`.
-- Tests: `python3 -m unittest discover -s tests -t .` (offline); `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures` (real services).
+- Tests: `python3 -m unittest discover -s tests -t .` (offline); `tests/qml/run.sh` (QML window interaction tests, offscreen); `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures` (real services).
 - Measurements and findings: `spike/SUBSONIC-REPORT.md`.
 

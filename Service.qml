@@ -88,6 +88,9 @@ Item {
   property string detectedUser: ""
   property string status: ""
   property string lastUpdated: ""
+  // True from the moment Refresh starts (browser-session import, then fetch)
+  // until the fetch process exits; drives the toolbar Refresh button.
+  readonly property bool refreshing: fetchProc.running || cookiesProc.running
 
   FileView {
     id: collectionFile
