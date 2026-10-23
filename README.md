@@ -69,3 +69,18 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Data stays local. Cookie jar and cache are never committed (see `.gitignore`).
 - Stream URLs are time-limited; the library refreshes on an interval.
 - This is for personal use; respect Bandcamp ToS.
+
+## Backend (v2, in progress)
+
+`backend/` is the new data layer; the QML UI does not use it yet.
+
+- `backend/subsonic.py`: Subsonic client for `bandcamp.com/api/subsonic` (token auth, fresh salt per session, JSON and XML errors,
+  secrets never logged). Credentials: `~/.config/omatimeatbandcamp/credentials.toml` (`user`, `pass`).
+- `backend/model.py`: Album/Track/Playlist. Explicit per-track `streamable` + reason; declared vs returned track counts; pre-order fields;
+  never pads or substitutes tracks.
+- `backend/match.py`: matches the web collection to Subsonic by normalised artist+title, and single-track purchases via their parent album.
+- `backend/library.py`: local cache (`~/.cache/omatimeatbandcamp/library/`) plus background, incremental sync.
+  CLI: `python3 backend sync | status | summary`.
+- Tests: `python3 -m unittest discover -s tests -t .` (offline); `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures` (real services).
+- Measurements and findings: `spike/SUBSONIC-REPORT.md`.
+
