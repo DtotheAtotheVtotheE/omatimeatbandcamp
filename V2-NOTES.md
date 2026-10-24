@@ -89,3 +89,70 @@ Tests run:
   versa, playing context reorders and restores in place); idle footer Play for library and for a selected album; view switch
   highlight, list content and live counts.
 - `omarchy plugin validate .` OK; `qmllint` no errors beyond the shell's untyped-property noise.
+
+## Phase 4: lists, wrapping, pre-order presentation (+ deselect, spec item 0)
+
+Changed: `Panel.qml` (rewritten lists/header/track rows/menus), `Service.qml`, new `LibraryModel.js`, backend
+(`model.py`, `library.py`, `match.py`, `bandcamp.py`, `__main__.py`), `mpvctl.py`, `tests/`, README, spec item 0.
+
+Done per spec: 0 deselect (click the selected row again; selection, detail pane, Shuffle context follow; the album's
+own Shuffle state is remembered) · 1 two-line rows (title max 2 lines, ellipsis only after line 2; artist on a
+smaller dimmed line) · 2 right-pane header with the same treatment, wrapping track titles · 3 selected row (tint +
+accent bar + bold) and playing track (tint + bar + ▶ marker + bold) · 4 pre-order rendering (row pill + date,
+`PRE-ORDER · releases <date>`, `<n> of <total> tracks available`, unreleased rows at 45% opacity / no hover / `—` /
+click only shows "Not yet released", Play reads "Play available" when streamable < total) · 5 sort menu (Recently added,
+Artist A–Z, Title A–Z, Release date), Hide pre-orders toggle, both persisted in `~/.local/state/omatimeatbandcamp/ui.json`.
+
+Where the existing code forced a decision:
+
+1. **The UI now reads the backend's library cache.** v1's `collection.json` has no pre-order flag, release date, purchase
+   date or per-track streamable flag (and still contained `&amp;`), so none of item 4/5 was renderable from it. `Service.qml`
+   now displays `library/library.json` (the Phase 1 union: 688 albums incl. 47 Subsonic-only), Refresh = browser-session
+   import then `backend sync` in the background (progress in the status line, "Library updated · N albums" on completion,
+   the cached library stays on screen), and `fetch.py` is no longer used by the UI. Albums (N) therefore reads 688, not 645.
+   IPC `play <id>` now takes the library id (e.g. `a:4039254352`); `status.user` comes from the library metadata.
+2. **Playback of Subsonic tracks goes through `backend play <id> --title T`**, which builds the stream URL (it embeds
+   u/t/s) inside the process and hands it to mpv: not in argv, not in output. The queue only ever holds streamable tracks.
+   **A leak was found and fixed during verification:** the first version echoed mpv's `media-title`, which is the full URL
+   (with u/t/s) for a stream without metadata, and that output reached the session transcript. Fixed in `mpvctl.do_load`
+   (always sets `force-media-title`, never reads the URL back) and `backend play` (prints only `ok`/redacted `error`);
+   pinned by 4 unit tests and re-verified live (mpv's title is the track name, output has only `ok`).
+   Open: mpv's `path` property necessarily holds the URL, so the Phase 8 MPRIS work must not publish it.
+3. **Backend additions the sort needed:** track `year` and album `year` (earliest track year; Subsonic has no album
+   release date), epoch `purchased_ts`/`release_ts`, `detail_version` (old caches refetch their tracklists once), single-
+   track parent albums inherit the web purchase date, library metadata `user`, and `sync` options
+   `--cookies/--user-url/--no-playlists` so the existing settings keep working.
+4. **Release date sort**: pre-orders by their page release date, released albums by 1 Jan of their earliest track year,
+   unknown last (4 of 688 albums have no year), newest first.
+5. **Why highlights never showed in v1**: it compared `modelData` objects by identity (`===`), which fails for list-model
+   copies. Selection is now a uid resolved against the live library (it survives a background sync), track identity is a
+   per-track uid, and `Service.indexOfTrack` replaces `indexOf` on objects.
+6. **Whole-library context** (Phase 3) is now every streamable *album* track (no longer album + playlist tracks, which
+   duplicated each other).
+7. The artist line may also wrap to two lines (spec: "no mid-word single-line truncation anywhere"). Playlist rows use
+   "N tracks" as their second line. Header totals use the tracks actually returned; truncated albums add
+   "Showing 3 of 50 tracks (the source returned fewer)"; empty/unloaded albums say so instead of showing nothing.
+8. Sort and Hide pre-orders are offered on the Albums list only; playlists keep the source order.
+9. **Not done (belongs to Phase 5):** the footer now-playing title is still single-line with an ellipsis.
+
+Lint note: `qmllint` now reports `Service.qml:523 QVariantMap -> QVariantHash` on the unchanged `environment:` binding (not
+reported at HEAD); the harness loads that binding without error and the shell ran it before, so it is lint-only.
+
+Tests run:
+
+- `python3 -m unittest discover -s tests -t .`: 66 tests, OK (5 live-only skipped). New: timestamps/year, parent date,
+  detail_version refetch, sync options, `play` never leaking (8 + 4).
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: 5 tests, OK.
+- `tests/qml/run.sh`: 197 checks, OK = phase 1 (fixture library) 173 + relaunch 6 + real-data smoke 15 + 3 script-side
+  checks (decoy cookie deleted; sort/filter written to `ui.json` after phase 1 and phase 2). Covers the deselect round trip,
+  measured wrapping (`lineCount`, `truncated`, row heights), unreleased rows non-interactive, highlights in both states,
+  all four sort orders + filter + persistence across a relaunch, and, on your real library, no HTML entity in any of
+  26,860 strings, all four orders over every adjacent pair, and the First Impressions / La Dee La La / Crocbrain fixtures.
+  Harness artefacts (not product bugs): synthetic clicks never deliver hover-leave, so "not highlighted" asserts the
+  selection tint (0.22) rather than "no fill" (hover is 0.08); `FileView.reload()` in a probe goes stale, so persistence is
+  read from disk by the script.
+- Real `backend play` against Subsonic, throwaway mpv with `--ao=null`: streams, duration 558 s, position advances.
+- `omarchy plugin validate .` OK.
+
+Not verified by the harness: the real `KeyboardPanel` (click-outside/focus) and how it looks in the live shell. Run
+`omarchy restart shell` to load this phase.

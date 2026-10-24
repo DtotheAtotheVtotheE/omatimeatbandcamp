@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import qs.Commons
 import qs.Ui
+import "LibraryModel.js" as LibraryModel
 
 // OmaTimeAtBandCamp popup.
 //
@@ -24,12 +25,12 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  readonly property var albums: service ? service.collection : []
+  // `albums` is what the Albums list shows (sorted, optionally without pre-orders).
+  readonly property var albums: service ? service.albumsView : []
   readonly property var playlists: service ? service.playlists : []
   readonly property string query: service ? service.searchQuery : ""
   readonly property var searchTracks: service ? service.searchResults.tracks : []
   readonly property var currentTrack: service ? service.currentTrack : null
-  readonly property var trackCache: service ? service.trackCache : ({})
   readonly property bool playing: service ? service.isPlaying : false
   readonly property bool paused: service ? service.isPaused : false
   readonly property bool refreshing: service ? service.refreshing : false
@@ -38,8 +39,13 @@ Panel {
     ? (currentTrack.title + (currentTrack.artist ? " — " + currentTrack.artist : ""))
     : "OmaTimeAtBandCamp"
 
-  property var selectedAlbum: null
-  property var selectedPlaylist: null
+  // Selection is kept as a uid and resolved against the live library, so it survives
+  // a background sync replacing the library objects. Clicking the selected row again
+  // clears it (back to the whole-library context).
+  property string selectedAlbumUid: ""
+  property string selectedPlaylistUid: ""
+  readonly property var selectedAlbum: LibraryModel.findByUid(service ? service.collection : [], selectedAlbumUid)
+  readonly property var selectedPlaylist: LibraryModel.findByUid(playlists, selectedPlaylistUid)
 
   // The playback/shuffle context is whatever the detail pane is showing: search
   // results, the selected playlist, the selected album, or (nothing selected) the
@@ -50,32 +56,81 @@ Panel {
     : "library"
   readonly property bool shuffleOn: service ? service.isShuffled(contextKey) : false
 
-  // Overflow (⋯) menu and its confirmation. New menu entries are added to
-  // `menuItems`; destructive ones must go through a ConfirmDialog like logout.
-  property bool menuOpen: false
+  // What the right pane is about.
+  readonly property var detailItem: query !== "" ? null : (selectedPlaylist || selectedAlbum)
+  readonly property bool detailIsAlbum: query === "" && !selectedPlaylist && !!selectedAlbum
+  readonly property var detailTrackList: detailTracks()
+  readonly property int detailTotal: detailTrackList.length
+  readonly property int detailStreamable: {
+    var n = 0
+    for (var i = 0; i < detailTrackList.length; i++) if (detailTrackList[i].streamable !== false) n++
+    return n
+  }
+  readonly property bool detailPlayable: query === "" && !!detailItem
+
+  // Overflow (⋯) menu and Sort menu share one card (menuKind: "", "more", "sort"). New
+  // "more" entries go in moreItems; destructive ones must go through a ConfirmDialog.
+  property string menuKind: ""
+  readonly property bool menuOpen: menuKind !== ""
   property int menuIndex: 0
   property bool logoutConfirmOpen: false
-  readonly property var menuItems: [
+  readonly property var moreItems: [
     { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
   ]
+  readonly property var sortItems: {
+    var out = []
+    for (var i = 0; i < LibraryModel.SORT_MODES.length; i++) {
+      var m = LibraryModel.SORT_MODES[i]
+      out.push({ icon: service && service.sortMode === m.id ? "\uf00c" : "\u2003", label: m.label, action: "sort:" + m.id, checked: service && service.sortMode === m.id })
+    }
+    return out
+  }
+  readonly property var menuItems: menuKind === "sort" ? sortItems : moreItems
 
   implicitWidth: showIcon ? button.implicitWidth : 0
   implicitHeight: showIcon ? button.implicitHeight : 0
 
   onOpenedChanged: {
-    if (!opened) { menuOpen = false; logoutConfirmOpen = false }
+    if (!opened) { menuKind = ""; logoutConfirmOpen = false }
     else if (service && service.collection.length === 0) service.refresh()
+  }
+
+  onMenuKindChanged: if (menuKind !== "") placeMenu()
+
+  function placeMenu() {
+    var b = menuKind === "sort" ? sortButton : menuButton
+    var p = b.mapToItem(menuLayer, 0, 0)
+    var x = menuKind === "sort" ? p.x : p.x + b.width - menuCard.width
+    menuCard.x = Math.max(0, Math.min(menuLayer.width - menuCard.width, x))
+    menuCard.y = p.y + b.height + Style.space(4)
+  }
+
+  function closeMenu() {
+    menuKind = ""
+    searchField.forceActiveFocus()
   }
 
   function toggleMenu() {
     menuIndex = 0
-    menuOpen = !menuOpen
-    if (!menuOpen) searchField.forceActiveFocus()
+    if (menuKind === "more") closeMenu()
+    else menuKind = "more"
+  }
+
+  function toggleSortMenu() {
+    menuIndex = 0
+    if (menuKind === "sort") closeMenu()
+    else menuKind = "sort"
   }
 
   function runMenuAction(action) {
-    menuOpen = false
-    if (action === "logout") logoutConfirmOpen = true
+    var kind = menuKind
+    menuKind = ""
+    if (action === "logout") {
+      logoutConfirmOpen = true
+    } else if (action.indexOf("sort:") === 0) {
+      if (service) service.setSortMode(action.substring(5))
+      searchField.forceActiveFocus()
+    }
   }
 
   function cancelLogout() {
@@ -89,26 +144,27 @@ Panel {
     searchField.forceActiveFocus()
   }
 
+  // Clicking the selected row again deselects it; clicking another row moves the selection.
   function pickAlbum(alb) {
-    selectedPlaylist = null
-    selectedAlbum = alb
-    if (service) service.requestTracks(alb)
+    if (service) service.notice = ""     // a stale "Not yet released" must not follow you to another album
+    selectedPlaylistUid = ""
+    selectedAlbumUid = selectedAlbumUid === alb.uid ? "" : alb.uid
   }
 
   function pickPlaylist(pl) {
-    selectedAlbum = null
-    selectedPlaylist = pl
-    if (service && (!pl.tracks || pl.tracks.length === 0)) service.requestTracks(pl)
+    if (service) service.notice = ""
+    selectedAlbumUid = ""
+    selectedPlaylistUid = selectedPlaylistUid === pl.uid ? "" : pl.uid
   }
 
   function playTrackNow(track, list) {
     if (!service) return
     var tracks = list || [track]
-    service.playContext("list", detailTitle(), tracks, tracks.indexOf(track), contextKey)
+    service.playContext("list", detailTitle(), tracks, service.indexOfTrack(tracks, track), contextKey)
   }
 
-  // Footer Play with nothing loaded: play the current context from its start
-  // (shuffled if that context's Shuffle is On).
+  // Footer Play with nothing loaded, and the detail pane's Play button: play the
+  // current context from its start (shuffled if that context's Shuffle is On).
   function playContextNow() {
     if (!service) return
     if (query !== "") {
@@ -132,8 +188,42 @@ Panel {
   function detailTitle() {
     if (query !== "") return "Search results"
     if (selectedPlaylist) return selectedPlaylist.name || selectedPlaylist.title || "Playlist"
-    if (selectedAlbum) return (selectedAlbum.title || "") + (selectedAlbum.artist ? " — " + selectedAlbum.artist : "")
+    if (selectedAlbum) return selectedAlbum.title || ""
     return "Pick an album or playlist"
+  }
+
+  function detailSubtitle() {
+    if (query !== "") return searchTracks.length + (searchTracks.length === 1 ? " track" : " tracks")
+    if (selectedPlaylist) return detailTotal + (detailTotal === 1 ? " track" : " tracks")
+    if (selectedAlbum) return selectedAlbum.artist || ""
+    return ""
+  }
+
+  function preorderLine() {
+    if (!detailIsAlbum || !selectedAlbum.isPreorder) return ""
+    var d = LibraryModel.fmtDate(selectedAlbum.releaseTs)
+    return "PRE-ORDER" + (d ? " · releases " + d : "")
+  }
+
+  function availabilityLine() {
+    if (!detailItem || query !== "") return ""
+    if (detailIsAlbum && !selectedAlbum.tracksLoaded) return ""
+    if (detailStreamable < detailTotal || (detailIsAlbum && selectedAlbum.isPreorder))
+      return detailStreamable + " of " + detailTotal + " tracks available"
+    return ""
+  }
+
+  function partialLine() {
+    if (!detailIsAlbum || !selectedAlbum.tracksLoaded) return ""
+    var declared = selectedAlbum.declaredCount
+    return declared > detailTotal && detailTotal > 0
+      ? "Showing " + detailTotal + " of " + declared + " tracks (the source returned fewer)" : ""
+  }
+
+  function emptyLine() {
+    if (!detailItem || query !== "" || detailTotal > 0) return ""
+    if (detailIsAlbum && !selectedAlbum.tracksLoaded) return "Tracks are still loading — the library is syncing"
+    return "No tracks in this " + (detailIsAlbum ? "album" : "playlist")
   }
 
   // ---- bar icon -----------------------------------------------------------
@@ -229,7 +319,7 @@ Panel {
         // Esc backs out one layer at a time: confirmation, menu, search text, window.
         Keys.onEscapePressed: function(event) {
           if (root.logoutConfirmOpen) root.cancelLogout()
-          else if (root.menuOpen) root.toggleMenu()
+          else if (root.menuOpen) root.closeMenu()
           else if (text !== "") { text = ""; root.service.search("") }
           else root.close()
           event.accepted = true
@@ -272,6 +362,28 @@ Panel {
             fontFamily: root.fontFamily
             onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
           }
+
+          // Sorting and the pre-order filter apply to the Albums list only.
+          BcButton {
+            id: sortButton
+            visible: !root.service || root.service.activeTab === 0
+            text: "Sort: " + LibraryModel.sortLabel(root.service ? root.service.sortMode : "added")
+            iconText: "\uf0d7"
+            active: root.menuKind === "sort"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.toggleSortMenu()
+          }
+
+          BcButton {
+            id: hidePreorderButton
+            visible: !root.service || root.service.activeTab === 0
+            text: "Hide pre-orders"
+            selected: root.service ? root.service.hidePreorders : false
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: if (root.service) root.service.setHidePreorders(!root.service.hidePreorders)
+          }
         }
 
         Row {
@@ -310,70 +422,170 @@ Panel {
         height: Style.space(430)
         spacing: Style.spacing.md
 
-        ListView {
-          id: listColumn
+        Item {
+          id: leftPane
           width: parent.width * 0.38
           height: parent.height
-          clip: true
-          model: root.query !== ""
-            ? root.searchTracks
-            : (root.service && root.service.activeTab === 1 ? root.playlists : root.albums)
-          delegate: Rectangle {
-            width: listColumn.width
-            height: Style.space(40)
-            color: "transparent"
-            radius: Style.cornerRadius
 
-            readonly property bool isSearch: root.query !== ""
-            readonly property bool isPlaylist: !isSearch && root.service && root.service.activeTab === 1
-            readonly property var item: modelData
-            readonly property bool selected: (!isSearch && !isPlaylist && root.selectedAlbum === item)
-              || (isPlaylist && root.selectedPlaylist === item)
+          ListView {
+            id: listColumn
+            objectName: "leftList"
+            anchors.fill: parent
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.query !== ""
+              ? root.searchTracks
+              : (root.service && root.service.activeTab === 1 ? root.playlists : root.albums)
 
-            Rectangle {
-              anchors.fill: parent
-              radius: parent.radius
-              color: parent.selected ? Style.selectedFillFor(root.foreground, Color.accent)
-                : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
-            }
+            // Two-line rows: title wraps to at most two lines (ellipsis only after the
+            // second), artist (or track count) on a smaller dimmed line below, and a
+            // PRE-ORDER pill with the release date when the album is a pre-order.
+            delegate: Item {
+              id: rowItem
+              width: listColumn.width
+              height: rowCol.implicitHeight + Style.space(14)
 
-            Text {
-              textFormat: Text.PlainText
-              anchors.fill: parent
-              anchors.leftMargin: Style.spacing.sm
-              anchors.rightMargin: Style.spacing.sm
-              verticalAlignment: Text.AlignVCenter
-              elide: Text.ElideRight
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              text: {
-                var it = modelData
-                if (!it) return ""
-                if (parent.isSearch) return (it.title || "") + (it.artist ? "  ·  " + it.artist : "")
-                if (parent.isPlaylist) return it.name || it.title || "Playlist"
-                return (it.title || "") + (it.artist ? "  ·  " + it.artist : "")
+              readonly property bool isSearch: root.query !== ""
+              readonly property bool isPlaylist: !isSearch && root.service && root.service.activeTab === 1
+              readonly property var item: modelData
+              readonly property bool selected: !!item && !isSearch
+                && (isPlaylist ? root.selectedPlaylistUid === item.uid : root.selectedAlbumUid === item.uid)
+              readonly property bool preorder: !!item && !isSearch && !isPlaylist && item.isPreorder === true
+
+              Rectangle {
+                objectName: "rowFill"
+                anchors.fill: parent
+                radius: Style.cornerRadius
+                color: rowItem.selected ? Util.alpha(Color.accent, 0.22)
+                  : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+              }
+
+              Rectangle {
+                objectName: "rowBar"
+                visible: rowItem.selected
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.topMargin: Style.space(3)
+                anchors.bottomMargin: Style.space(3)
+                width: Style.space(3)
+                radius: width / 2
+                color: Color.accent
+              }
+
+              Column {
+                id: rowCol
+                x: Style.space(11)
+                width: parent.width - Style.space(19)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                Text {
+                  objectName: "rowTitle"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: rowItem.selected
+                  text: rowItem.item ? (rowItem.isPlaylist ? (rowItem.item.name || rowItem.item.title || "Playlist") : (rowItem.item.title || "")) : ""
+                }
+
+                Text {
+                  objectName: "rowSub"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  color: Qt.darker(root.foreground, 1.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  text: {
+                    var it = rowItem.item
+                    if (!it) return ""
+                    if (rowItem.isSearch) return (it.artist || "") + (it.album ? "  ·  " + it.album : "")
+                    if (rowItem.isPlaylist) return it.totalCount + (it.totalCount === 1 ? " track" : " tracks")
+                    return it.artist || ""
+                  }
+                }
+
+                Row {
+                  objectName: "rowPill"
+                  visible: rowItem.preorder
+                  spacing: Style.space(6)
+
+                  BorderSurface {
+                    height: Style.space(16)
+                    width: pillText.implicitWidth + Style.space(10)
+                    radius: Style.space(3)
+                    color: Util.alpha(Color.accent, 0.18)
+                    borderSpec: Border.flat(Color.accent, 1)
+
+                    Text {
+                      id: pillText
+                      objectName: "pillText"
+                      textFormat: Text.PlainText
+                      anchors.centerIn: parent
+                      text: "PRE-ORDER"
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  Text {
+                    objectName: "pillDate"
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: text !== ""
+                    text: rowItem.item && rowItem.item.releaseTs ? LibraryModel.fmtDate(rowItem.item.releaseTs) : ""
+                    color: Qt.darker(root.foreground, 1.3)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+
+              MouseArea {
+                id: mouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  var it = rowItem.item
+                  if (!it) return
+                  if (rowItem.isSearch) { root.playTrackNow(it, root.searchTracks); return }
+                  if (rowItem.isPlaylist) root.pickPlaylist(it)
+                  else root.pickAlbum(it)
+                }
               }
             }
+          }
 
-            MouseArea {
-              id: mouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                var it = parent.item
-                if (!it) return
-                if (root.query !== "") { root.playTrackNow(it, root.searchTracks); return }
-                if (root.service && root.service.activeTab === 1) root.pickPlaylist(it)
-                else root.pickAlbum(it)
-              }
-            }
+          Text {
+            objectName: "leftEmpty"
+            anchors.centerIn: parent
+            width: parent.width - Style.space(24)
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+            visible: listColumn.count === 0
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            text: root.query !== "" ? "No tracks match your search"
+              : (root.service && root.service.activeTab === 1 ? "No playlists yet"
+                : (root.service && root.service.hidePreorders && root.service.collection.length > 0 ? "Only pre-orders here — turn off Hide pre-orders"
+                  : "No library yet — press Refresh"))
           }
         }
 
         BorderSurface {
-          width: parent.width - listColumn.width - Style.spacing.md
+          width: parent.width - leftPane.width - Style.spacing.md
           height: parent.height
           radius: Style.cornerRadius
           color: "transparent"
@@ -382,92 +594,258 @@ Panel {
           borderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
 
           Column {
+            id: detailColumn
             anchors.fill: parent
             anchors.margins: Style.spacing.sm
             spacing: Style.spacing.sm
 
-            Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            height: Style.space(24)
-            text: root.detailTitle()
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-            elide: Text.ElideRight
-            verticalAlignment: Text.AlignVCenter
-          }
+            // Header: same two-line treatment as the rows (title wraps, artist or count
+            // on its own dimmed line), plus pre-order state and track availability.
+            Item {
+              id: detailHeader
+              width: parent.width
+              height: Math.max(headerCol.implicitHeight, playButton.visible ? playButton.height : 0)
 
-          ListView {
-            id: trackList
-            width: parent.width
-            height: parent.height - Style.space(24) - parent.spacing
-            clip: true
-            model: root.detailTracks()
-            delegate: Rectangle {
-              width: ListView.view.width
-              height: Style.space(34)
-              color: "transparent"
-              radius: Style.cornerRadius
-
-              readonly property var track: modelData
-              readonly property bool current: root.service && root.currentTrack === track
-
-              Rectangle {
-                anchors.fill: parent
-                radius: parent.radius
-                color: parent.current ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
-              }
-
-              Row {
-                anchors.fill: parent
-                anchors.leftMargin: Style.spacing.sm
-                anchors.rightMargin: Style.spacing.sm
-                spacing: Style.spacing.sm
+              Column {
+                id: headerCol
+                anchors.left: parent.left
+                anchors.right: playButton.visible ? playButton.left : parent.right
+                anchors.rightMargin: playButton.visible ? Style.spacing.md : 0
+                spacing: Style.space(2)
 
                 Text {
+                  objectName: "detailTitle"
                   textFormat: Text.PlainText
-                  text: (track.track_num ? track.track_num + "." : "")
-                  width: Style.space(28)
-                  color: Qt.darker(root.foreground, 1.4)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                  textFormat: Text.PlainText
-                  text: track.title || ""
-                  width: parent.width - Style.space(90)
+                  width: parent.width
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
                   elide: Text.ElideRight
+                  text: root.detailTitle()
                   color: root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  anchors.verticalCenter: parent.verticalCenter
+                  font.pixelSize: Style.font.body
+                  font.bold: true
                 }
                 Text {
+                  objectName: "detailSub"
                   textFormat: Text.PlainText
-                  text: track.duration
-                    ? Math.floor(track.duration / 60) + ":" + ("0" + Math.floor(track.duration % 60)).slice(-2)
-                    : ""
+                  width: parent.width
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  text: root.detailSubtitle()
                   color: Qt.darker(root.foreground, 1.5)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  anchors.verticalCenter: parent.verticalCenter
+                }
+                Text {
+                  objectName: "detailPreorder"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  text: root.preorderLine()
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+                Text {
+                  objectName: "detailAvail"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  text: root.availabilityLine()
+                  color: Qt.darker(root.foreground, 1.2)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  objectName: "detailPartial"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  text: root.partialLine()
+                  color: Qt.darker(root.foreground, 1.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
                 }
               }
 
-              MouseArea {
-                id: tMouse
+              // Plays the current context (this album / playlist) from its start. Reads
+              // "Play available" when some of its tracks cannot be streamed yet.
+              BcButton {
+                id: playButton
+                objectName: "detailPlay"
+                anchors.right: parent.right
+                anchors.top: parent.top
+                visible: root.detailPlayable
+                enabled: root.detailStreamable > 0
+                iconText: "\uf04b"
+                text: root.detailStreamable < root.detailTotal ? "Play available" : "Play"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.playContextNow()
+              }
+            }
+
+            Item {
+              width: parent.width
+              height: parent.height - detailHeader.height - parent.spacing
+
+              ListView {
+                id: trackList
+                objectName: "trackList"
                 anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.playTrackNow(track, root.detailTracks())
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.detailTrackList
+
+                // Track titles wrap. Tracks that cannot be streamed (unreleased) are dimmed,
+                // have no hover and show "—" instead of a duration; clicking one only shows
+                // a notice. The playing track is highlighted with a play marker.
+                delegate: Item {
+                  id: trackRow
+                  width: ListView.view.width
+                  height: Math.max(Style.space(34), trackTitle.implicitHeight + Style.space(14))
+
+                  readonly property var track: modelData
+                  readonly property bool playable: !!track && track.streamable !== false
+                  readonly property bool current: !!track && !!track.uid && !!root.currentTrack && root.currentTrack.uid === track.uid
+                  opacity: playable ? 1.0 : 0.45
+
+                  Rectangle {
+                    objectName: "trackFill"
+                    anchors.fill: parent
+                    radius: Style.cornerRadius
+                    color: trackRow.current ? Util.alpha(Color.accent, 0.22)
+                      : (trackRow.playable && tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                  }
+
+                  Rectangle {
+                    objectName: "trackBar"
+                    visible: trackRow.current
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.topMargin: Style.space(3)
+                    anchors.bottomMargin: Style.space(3)
+                    width: Style.space(3)
+                    radius: width / 2
+                    color: Color.accent
+                  }
+
+                  Text {
+                    objectName: "playingIndicator"
+                    textFormat: Text.PlainText
+                    visible: trackRow.current
+                    x: Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "\uf04b"
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Text {
+                    objectName: "trackNum"
+                    textFormat: Text.PlainText
+                    x: Style.space(22)
+                    width: Style.space(26)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: trackRow.track && trackRow.track.track_num ? trackRow.track.track_num + "." : ""
+                    color: Qt.darker(root.foreground, 1.4)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Text {
+                    id: trackTitle
+                    objectName: "trackTitle"
+                    textFormat: Text.PlainText
+                    x: Style.space(50)
+                    width: parent.width - Style.space(50) - Style.space(58)
+                    anchors.verticalCenter: parent.verticalCenter
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                    text: trackRow.track ? (trackRow.track.title || "") : ""
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: trackRow.current
+                  }
+
+                  Text {
+                    objectName: "trackDuration"
+                    textFormat: Text.PlainText
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    text: trackRow.playable ? LibraryModel.fmtDuration(trackRow.track ? trackRow.track.duration : 0) : "—"
+                    color: Qt.darker(root.foreground, 1.5)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  MouseArea {
+                    id: tMouse
+                    objectName: "trackMouse"
+                    anchors.fill: parent
+                    hoverEnabled: trackRow.playable
+                    cursorShape: trackRow.playable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                      if (!trackRow.track) return
+                      if (trackRow.playable) root.playTrackNow(trackRow.track, root.detailTrackList)
+                      else if (root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
+                    }
+                  }
+                }
+              }
+
+              Text {
+                objectName: "detailEmpty"
+                anchors.centerIn: parent
+                width: parent.width - Style.space(24)
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                visible: text !== ""
+                text: root.emptyLine()
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              // Short-lived message (e.g. "Not yet released"); floats so nothing shifts.
+              BorderSurface {
+                objectName: "noticePill"
+                visible: !!root.service && root.service.notice !== ""
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(8)
+                width: noticeText.implicitWidth + Style.space(24)
+                height: noticeText.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: Color.popups.background
+                borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
+
+                Text {
+                  id: noticeText
+                  objectName: "noticeText"
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: root.service ? root.service.notice : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
               }
             }
           }
-        }
         }
       }
 
@@ -574,25 +952,23 @@ Panel {
       }
     }
 
-    // ⋯ menu ------------------------------------------------------------------
-    // Click anywhere outside the card closes the menu (the window itself stays
-    // open); the card sits just under the header button.
+    // Menu card (⋯ overflow menu and Sort menu) ------------------------------------
+    // Click anywhere outside the card closes the menu (the window itself stays open);
+    // the card sits just under the button that opened it.
     Item {
+      id: menuLayer
       anchors.fill: parent
       visible: root.menuOpen
       z: 50
 
       MouseArea {
         anchors.fill: parent
-        onClicked: root.toggleMenu()
+        onClicked: root.closeMenu()
       }
 
       BorderSurface {
         id: menuCard
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.topMargin: Style.spacing.controlHeight + Style.spacing.sm
-        width: Math.min(Style.space(300), parent.width)
+        width: Math.min(root.menuKind === "sort" ? Style.space(220) : Style.space(300), parent.width)
         height: menuColumn.implicitHeight + contentTopInset + contentBottomInset
         radius: Style.cornerRadius
         color: Color.popups.background
@@ -620,7 +996,8 @@ Panel {
               leftAlign: true
               text: modelData.label
               iconText: modelData.icon
-              selected: root.menuIndex === index
+              selected: modelData.checked === true
+              active: root.menuIndex === index
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.runMenuAction(modelData.action)

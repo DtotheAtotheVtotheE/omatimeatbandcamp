@@ -6,7 +6,7 @@ pause/resume and volume are fast JSON commands rather than process spawns.
 
 Usage:
   mpvctl.py ensure
-  mpvctl.py load <url> [cookiePath]
+  mpvctl.py load <url> [cookiePath] [title]
   mpvctl.py cmd '<json command>'
   mpvctl.py pause
   mpvctl.py play
@@ -127,7 +127,7 @@ def send_json(command):
     return {}
 
 
-def do_load(url, cookie_path=None):
+def do_load(url, cookie_path=None, title=None):
     if not url:
         return json.dumps({"ok": False, "error": "no url"})
     if not ensure():
@@ -147,11 +147,16 @@ def do_load(url, cookie_path=None):
     if hdr.get("error") not in (None, "success"):
         return json.dumps({"ok": False, "error": "headers: " + str(hdr.get("error"))})
 
+    # Without a title mpv falls back to the URL as `media-title`, which for a Subsonic stream
+    # embeds credentials and would surface in every client of the player (MPRIS, bars,
+    # this command's own output). Always set it explicitly ("" clears a stale one).
+    send_json(["set_property", "force-media-title", title or ""])
+
     res = send_json(["loadfile", url, "replace"])
     if res.get("error") != "success":
         return json.dumps({"ok": False, "error": str(res.get("error") or "load failed")})
 
-    title = send_json(["get_property", "media-title"]).get("data")
+    # Never read `media-title` back: it may be (or contain) the URL.
     return json.dumps({"ok": True, "title": title or ""})
 
 
@@ -167,8 +172,9 @@ def main():
     if action == "load":
         if len(sys.argv) < 3:
             return 2
-        cookie = sys.argv[3] if len(sys.argv) > 3 else None
-        print(do_load(sys.argv[2], cookie))
+        cookie = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+        title = sys.argv[4] if len(sys.argv) > 4 else None
+        print(do_load(sys.argv[2], cookie, title))
         return 0
     if action == "cmd":
         if len(sys.argv) < 3:

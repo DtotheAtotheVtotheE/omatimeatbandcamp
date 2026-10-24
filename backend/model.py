@@ -13,9 +13,21 @@ Rules this module exists to enforce:
   as received from the page's data-tralbum.
 """
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from typing import Optional
 
 from .textnorm import album_key, clean
+
+DETAIL_VERSION = 2   # bump when per-album track detail gains fields, so cached tracklists are refetched
+
+
+def parse_bc_date(s):
+    """'03 May 2024 15:23:26 GMT' -> epoch seconds (UTC), or None."""
+    try:
+        return int(datetime.strptime(s, "%d %b %Y %H:%M:%S GMT").replace(tzinfo=timezone.utc).timestamp())
+    except (TypeError, ValueError):
+        return None
+
 
 # streamable_reason values
 R_SUBSONIC = "subsonic-listed"        # the Subsonic server returned the track (stream endpoint serves it)
@@ -38,6 +50,7 @@ class Track:
     album: str = ""
     track_number: Optional[int] = None
     duration: Optional[float] = None
+    year: Optional[int] = None
     streamable: bool = False
     streamable_reason: str = R_NO_FILE
     subsonic_id: Optional[str] = None
@@ -75,6 +88,8 @@ class Album:
     is_preorder: bool = False
     album_is_preorder: Optional[bool] = None
     release_date: Optional[str] = None
+    year: Optional[int] = None               # earliest track year Subsonic reports (release-date sort for released albums)
+    detail_version: int = 0                  # DETAIL_VERSION when the tracklist was fetched
     tracks_source: Optional[str] = None      # "subsonic" | "bandcamp-page"
     sources: list = field(default_factory=list)  # which of "subsonic" / "bandcamp" know this album
 
@@ -93,6 +108,14 @@ class Album:
     @property
     def streamable_track_count(self):
         return sum(1 for t in self.tracks if t.streamable)
+
+    @property
+    def purchased_ts(self):
+        return parse_bc_date(self.purchased)
+
+    @property
+    def release_ts(self):
+        return parse_bc_date(self.release_date)
 
     @property
     def missing_track_count(self):
@@ -115,6 +138,9 @@ class Album:
         self.tracks = sorted(tracks, key=lambda t: (t.track_number is None, t.track_number or 0))
         self.tracks_loaded = True
         self.tracks_source = source
+        years = [t.year for t in self.tracks if t.year and t.year >= 1900]
+        self.year = min(years) if years else None
+        self.detail_version = DETAIL_VERSION
 
     def to_dict(self):
         d = asdict(self)
@@ -124,6 +150,8 @@ class Album:
         d["returned_track_count"] = self.returned_track_count
         d["streamable_track_count"] = self.streamable_track_count
         d["missing_track_count"] = self.missing_track_count
+        d["purchased_ts"] = self.purchased_ts
+        d["release_ts"] = self.release_ts
         return d
 
     @classmethod
@@ -182,6 +210,7 @@ def track_from_subsonic(s, album_fallback=""):
         album=s.get("album") or album_fallback,
         track_number=_num(s.get("track")),
         duration=float(s["duration"]) if s.get("duration") is not None else None,
+        year=_num(s.get("year")),
         streamable=True,
         streamable_reason=R_SUBSONIC,
         subsonic_id=s.get("id"),

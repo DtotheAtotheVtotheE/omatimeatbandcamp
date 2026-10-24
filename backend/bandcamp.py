@@ -91,6 +91,7 @@ def tralbum_summary(t):
 class Bandcamp:
     def __init__(self, cookie=None, http=default_http, pause=0.1):
         self.cookie = cookie
+        self.user_url = None
         self.http = http
         self.pause = pause
 
@@ -112,6 +113,7 @@ class Bandcamp:
         user_url = user_url or self.account_url()
         if not user_url:
             raise BandcampError("not signed in to Bandcamp (no account found for the session cookie)")
+        self.user_url = user_url
         blob = _attr_json(self._get(user_url), "data-blob")
         if not blob:
             raise BandcampError("collection page carried no data-blob")

@@ -360,6 +360,14 @@ outcome below.)
 
 ## Phase 4 — Lists, wrapping, pre-order presentation
 
+0. **Deselect** (owner-approved addition, 2026-10-23; added after Phase 3 showed the
+   whole-library context was unreachable once any row had been clicked). Clicking the
+   currently selected album or playlist row again **deselects** it and returns the UI
+   to the whole-library context. Selection state, the detail pane and the Shuffle
+   context (Phase 3: per-context state) must all follow: after deselect the detail
+   pane shows the empty prompt, Shuffle shows the library context's own state, the row
+   highlight is gone, and the album/playlist's own Shuffle state is remembered for
+   when it is selected again. Clicking a *different* row moves the selection.
 1. **Two-line rows in the left pane.** Line 1: album/playlist title, wrapping
    to a maximum of 2 lines, ellipsis only after line 2. Line 2: artist name,
    smaller, dimmed. No mid-word single-line truncation anywhere.

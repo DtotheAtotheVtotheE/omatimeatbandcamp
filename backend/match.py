@@ -146,6 +146,7 @@ def match_albums(web_albums, sub_albums, sub_tracks_for=None):
                 parent.sources = ["bandcamp", "subsonic"]
                 parent.bandcamp_id = single.bandcamp_id
                 parent.bandcamp_url = single.bandcamp_url
+                parent.purchased = parent.purchased or single.purchased   # Subsonic gives these parents no date
                 parent.web_item_ids = []
             parents[id(parent)].web_item_ids.append(single.bandcamp_id)
             rep.single_items_matched_by_track += 1

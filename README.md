@@ -42,26 +42,32 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 ## Features
 
-- Browse Albums (collection) and Playlists tabs
-- Global search across albums and playlist tracks
-- Shuffle: one On/Off toggle, remembered per context (each album, each playlist, search results, whole library)
-- Streams resolved from Bandcamp's player API (`/api/player/2/player_data_web`),
-  played via a persistent idle mpv with optional cookie headers
-- Album tracklists are fetched lazily on selection and cached in memory
-- Local on-disk cache in `~/.cache/omatimeatbandcamp/`
+- Browse Albums (collection) and Playlists; global search across albums and playlist tracks
+- Library = the union of your Bandcamp collection and Bandcamp's Subsonic server (so owned albums whose
+  pages Bandcamp no longer lists still show up and stream)
+- Pre-orders: PRE-ORDER pill and release date on the row, "N of M tracks available" in the header, unreleased
+  tracks greyed (no hover, not clickable, duration "—"); only streamable tracks are ever queued
+- Two-line rows (titles wrap, artist on a dimmed second line); selected row and playing track highlighted
+- Sort (Recently added, Artist A–Z, Title A–Z, Release date) and a Hide pre-orders filter; both are remembered
+  (`~/.local/state/omatimeatbandcamp/ui.json`)
+- Shuffle: one On/Off toggle, remembered per context (each album, each playlist, search results, whole library);
+  click the selected row again to deselect it and get back to the whole-library context
+- Refresh runs the backend sync in the background (cached library stays on screen); streams for Subsonic tracks
+  are resolved by the backend (`backend play`), so stream URLs/credentials never appear in argv or logs
 
 ## Data sources
 
-- Collection list: `POST /api/fancollection/1/collection_items` (paginated)
-- Playlists: `POST /api/fan_collection/1/playlists`
-- Tracklists/streams: `POST /api/player/2/player_data_web`
-- Account auto-detect: `GET https://bandcamp.com/settings` (`identities.fan`)
+- Library cache: `~/.cache/omatimeatbandcamp/library/library.json`, written by `python3 backend sync`
+  (web collection feed via your browser session + Subsonic `getAlbumList2`/`getAlbum`/`getPlaylist`)
+- Subsonic credentials: `~/.config/omatimeatbandcamp/credentials.toml` (`user`, `pass`)
+- Browser session: imported by `cookies.py` (gitignored) into `~/.cache/omatimeatbandcamp/cookies.txt`
+- `fetch.py` (the v1 scraper) is no longer used by the UI
 
 ## IPC
 
 - `omarchy-shell omatimeatbandcamp status`
 - `omarchy-shell omatimeatbandcamp playPause|next|previous|stop|refresh`
-- `omarchy-shell omatimeatbandcamp play <itemId>`
+- `omarchy-shell omatimeatbandcamp play <itemId>` (the library id, e.g. a Subsonic album id like `a:4039254352` or `pl:783164`)
 - `omarchy-shell omatimeatbandcamp clearCookies`
 
 ## Notes

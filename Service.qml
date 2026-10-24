@@ -2,13 +2,15 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
+import "LibraryModel.js" as LibraryModel
 
 // Shared state for the OmaTimeAtBandCamp bar widget and panel.
 //
 // Settings live in the plugin's entry in ~/.config/omarchy/shell.json (written
 // by the standard settings form), falling back to the manifest defaults.
-// Library data is cached on disk by fetch.py; this service reads the cache,
-// refreshes it on an interval, and drives mpv through mpvctl.py.
+// The library is the backend's cache (backend/library.py -> library.json): the union
+// of the web collection and Subsonic. This service reads it, refreshes it in the
+// background (`backend sync`), and drives mpv (mpvctl.py / `backend play`).
 Item {
   id: root
 
@@ -81,6 +83,7 @@ Item {
   }
 
   // ---- library ------------------------------------------------------------
+  // All albums / playlists, adapted by LibraryModel.adaptLibrary from library.json.
   property var collection: []
   property var playlists: []
   // Which list the window shows: 0 = Albums, 1 = Playlists. Must be declared here:
@@ -92,64 +95,103 @@ Item {
   property string detectedUser: ""
   property string status: ""
   property string lastUpdated: ""
-  // True from the moment Refresh starts (browser-session import, then fetch)
-  // until the fetch process exits; drives the toolbar Refresh button.
-  readonly property bool refreshing: fetchProc.running || cookiesProc.running
+  // Short-lived message for the user ("Not yet released"); cleared by noticeTimer.
+  property string notice: ""
+
+  // Sorting and filtering of the Albums list. Persisted in stateDir/ui.json.
+  property string sortMode: "added"
+  property bool hidePreorders: false
+  readonly property var albumsView: LibraryModel.sortAlbums(collection, sortMode, hidePreorders)
+
+  // True from the moment Refresh starts (browser-session import, then backend sync)
+  // until the sync exits; drives the toolbar Refresh button.
+  readonly property bool refreshing: syncProc.running || cookiesProc.running
+
+  readonly property string stateDir: home + "/.local/state/omatimeatbandcamp"
+
+  function notify(msg) {
+    notice = msg
+    noticeTimer.restart()
+  }
+
+  Timer { id: noticeTimer; interval: 3500; onTriggered: root.notice = "" }
 
   FileView {
-    id: collectionFile
-    path: root.cacheDir + "/collection.json"
+    id: libraryFile
+    path: root.cacheDir + "/library/library.json"
     watchChanges: true
     blockLoading: true
     printErrors: false
-    onLoaded: root.loadCollection()
-    onTextChanged: root.loadCollection()
+    onLoaded: root.loadLibrary()
+    onTextChanged: root.loadLibrary()
   }
 
+  function loadLibrary() {
+    try {
+      var d = JSON.parse(libraryFile.text() || "{}")
+      if (!d.albums) return
+      var m = LibraryModel.adaptLibrary(d)
+      collection = m.albums
+      playlists = m.playlists
+      if (d.meta) {
+        if (d.meta.finished) lastUpdated = String(d.meta.finished)
+        if (d.meta.user) detectedUser = String(d.meta.user)
+      }
+    } catch (e) {
+    }
+  }
+
+  // ---- persisted UI choices -------------------------------------------------
   FileView {
-    id: playlistsFile
-    path: root.cacheDir + "/playlists.json"
-    watchChanges: true
+    id: uiFile
+    path: root.stateDir + "/ui.json"
     blockLoading: true
+    atomicWrites: true
     printErrors: false
-    onLoaded: root.loadPlaylists()
-    onTextChanged: root.loadPlaylists()
   }
 
-  function loadCollection() {
+  Process { id: mkStateDir; running: false; command: ["mkdir", "-p", root.stateDir] }
+
+  function loadUi() {
     try {
-      var d = JSON.parse(collectionFile.text() || "{}")
-      collection = d.items || []
-      lastUpdated = d.last_updated || lastUpdated
+      var d = JSON.parse(uiFile.text() || "{}")
+      if (LibraryModel.validSort(d.sortMode)) sortMode = d.sortMode
+      hidePreorders = d.hidePreorders === true
     } catch (e) {
-      collection = []
     }
   }
 
-  function loadPlaylists() {
-    try {
-      var d = JSON.parse(playlistsFile.text() || "{}")
-      playlists = d.playlists || []
-      if (d.last_updated) lastUpdated = d.last_updated
-    } catch (e) {
-      playlists = []
-    }
+  function saveUi() {
+    mkStateDir.running = true
+    uiFile.setText(JSON.stringify({ sortMode: sortMode, hidePreorders: hidePreorders }) + "\n")
+  }
+
+  function setSortMode(mode) {
+    if (!LibraryModel.validSort(mode) || mode === sortMode) return
+    sortMode = mode
+    saveUi()
+  }
+
+  function setHidePreorders(on) {
+    if (hidePreorders === !!on) return
+    hidePreorders = !!on
+    saveUi()
   }
 
   Component.onCompleted: {
     root.loadSettings()
-    root.loadCollection()
-    root.loadPlaylists()
+    root.loadUi()
+    root.loadLibrary()
   }
 
   // Effective cookie jar: an explicit settings.cookiePath wins; otherwise the
-  // browser's Bandcamp session is exported into the cache before every fetch.
+  // browser's Bandcamp session is exported into the cache before every sync.
   function refresh() {
-    if (fetchProc.running || cookiesProc.running) return
+    if (syncProc.running || cookiesProc.running) return
     var manual = String(root.settings.cookiePath || "")
     if (manual !== "") {
       root.cookiePath = manual
-      startFetch()
+      startSync()
       return
     }
     status = "Importing browser session…"
@@ -161,16 +203,17 @@ Item {
     cookiesProc.running = true
   }
 
-  function startFetch() {
-    if (fetchProc.running) return
-    status = "Fetching library…"
-    fetchProc.command = [
-      "python3", root.pluginDir + "/fetch.py",
-      String(root.settings.userUrl || ""),
-      String(root.cookiePath || ""),
-      root.settings.includePlaylists ? "1" : "0"
-    ]
-    fetchProc.running = true
+  function startSync() {
+    if (syncProc.running) return
+    status = "Syncing library…"
+    syncProc.lastError = ""
+    syncProc.stage = ""
+    var cmd = ["python3", root.pluginDir + "/backend", "sync", "--workers", "4"]
+    if (String(root.cookiePath || "") !== "") cmd = cmd.concat(["--cookies", String(root.cookiePath)])
+    if (String(root.settings.userUrl || "") !== "") cmd = cmd.concat(["--user-url", String(root.settings.userUrl)])
+    if (!root.settings.includePlaylists) cmd.push("--no-playlists")
+    syncProc.command = cmd
+    syncProc.running = true
   }
 
   Process {
@@ -187,35 +230,48 @@ Item {
         root.cookiePath = ""
         root.status = "No browser session found — sign in to Bandcamp to see private items."
       }
-      root.startFetch()
+      root.startSync()
     }
   }
 
+  // The sync runs in its own process and prints one JSON progress line at a time. The
+  // cached library stays on screen throughout and is reloaded when the matched library
+  // is first saved and again when the sync finishes; the UI is never blocked.
   Process {
-    id: fetchProc
+    id: syncProc
     running: false
-    stderr: StdioCollector { id: fetchErr; waitForEnd: true }
-    stdout: StdioCollector { id: fetchOut; waitForEnd: true }
-    onExited: function(code) {
-      if (code === 0) {
-        root.status = ""
+    property string stage: ""
+    property string lastError: ""
+    stdout: SplitParser {
+      onRead: function(line) {
         try {
-          var d = JSON.parse(fetchOut.text || "{}")
-          if (d.user) root.detectedUser = String(d.user)
+          var d = JSON.parse(line)
+          if (d.error) { syncProc.lastError = String(d.error); return }
+          if (d.stage === "playlists" && syncProc.stage !== "playlists") {
+            libraryFile.reload()
+            root.loadLibrary()
+          }
+          syncProc.stage = d.stage
+          root.status = "Syncing library · " + d.stage + (d.total > 0 ? " " + d.done + "/" + d.total : "") + "…"
         } catch (e) {}
-        // Reload explicitly: the shell may run with QS_DISABLE_FILE_WATCHER=1,
-        // in which case FileView keeps serving the previously cached text.
-        collectionFile.reload()
-        playlistsFile.reload()
-        root.loadCollection()
-        root.loadPlaylists()
+      }
+    }
+    stderr: StdioCollector { id: syncErr; waitForEnd: true }
+    onExited: function(code) {
+      // Reload explicitly: the shell may run with QS_DISABLE_FILE_WATCHER=1, in which
+      // case FileView keeps serving the previously cached text.
+      libraryFile.reload()
+      root.loadLibrary()
+      if (code === 0) {
+        root.status = "Library updated · " + root.collection.length + " albums"
+        statusClearTimer.restart()
       } else {
-        var msg = (fetchErr.text || "").trim()
-        try { msg = JSON.parse(fetchOut.text || "{}").error || msg } catch (e) {}
-        root.status = "Fetch failed: " + msg
+        root.status = "Sync failed: " + (syncProc.lastError || (syncErr.text || "").trim() || ("exit " + code))
       }
     }
   }
+
+  Timer { id: statusClearTimer; interval: 8000; onTriggered: if (!root.refreshing) root.status = "" }
 
   Timer {
     id: refreshTimer
@@ -267,78 +323,90 @@ Item {
     if (tracks.length === 0) return
     var cur = currentTrack
     if (on) {
-      var rest = tracks.filter(function(t) { return t !== cur })
+      var rest = tracks.filter(function(t) { return indexOfTrack([cur], t) < 0 })
       queue = cur ? [cur].concat(Model.fisherYates(rest)) : Model.fisherYates(tracks)
       queueIndex = queue.length > 0 ? 0 : -1
     } else {
       queue = tracks.slice()
-      var idx = cur ? queue.indexOf(cur) : -1
-      if (idx < 0 && cur) {
-        for (var i = 0; i < queue.length; i++) {
-          if (trackSignature(queue[i]) === trackSignature(cur)) { idx = i; break }
-        }
-      }
+      var idx = cur ? indexOfTrack(queue, cur) : -1
       queueIndex = idx >= 0 ? idx : (queue.length > 0 ? 0 : -1)
     }
   }
 
+  function indexOfTrack(list, track) {
+    if (!track) return -1
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] === track || (track.uid && list[i].uid === track.uid)) return i
+    }
+    return -1
+  }
+
+  function unavailableMessage(track) {
+    return track && track.reason === "unreleased" ? "Not yet released" : "Not available to stream"
+  }
+
   // Start playing `tracks` as the context identified by `key`. `startIndex` is the
   // track the user clicked; leave it undefined to start from the beginning (or, with
-  // shuffle On, from a random track). With shuffle On the clicked track plays first
-  // and the rest of THIS context follows in random order.
+  // shuffle On, from a random track). The queue only ever holds streamable tracks: a
+  // clicked track that is not streamable plays nothing and only shows a notice. With
+  // shuffle On the clicked track plays first and the rest of THIS context follows in
+  // random order.
   function playContext(type, name, tracks, startIndex, key) {
     var ctxKey = key || ""
-    context = { type: type, name: name, tracks: tracks.slice(), key: ctxKey }
+    var clicked = (startIndex !== undefined && startIndex >= 0 && startIndex < tracks.length) ? tracks[startIndex] : null
+    if (clicked && clicked.streamable === false) {
+      notify(unavailableMessage(clicked))
+      return
+    }
+    var playable = tracks.filter(function(t) { return t.streamable !== false })
+    if (playable.length === 0) {
+      notify("Nothing available to play yet")
+      return
+    }
+    var startAt = clicked ? indexOfTrack(playable, clicked) : -1
+    context = { type: type, name: name, tracks: playable.slice(), key: ctxKey }
     playingContextKey = ctxKey
-    var hasStart = startIndex !== undefined && startIndex >= 0 && startIndex < tracks.length
     if (isShuffled(ctxKey)) {
-      if (hasStart) {
-        var first = tracks[startIndex]
-        var rest = tracks.filter(function(t, i) { return i !== startIndex })
+      if (startAt >= 0) {
+        var first = playable[startAt]
+        var rest = playable.filter(function(t, i) { return i !== startAt })
         queue = [first].concat(Model.fisherYates(rest))
       } else {
-        queue = Model.fisherYates(tracks)
+        queue = Model.fisherYates(playable)
       }
-      queueIndex = queue.length > 0 ? 0 : -1
+      queueIndex = 0
     } else {
-      queue = tracks.slice()
-      queueIndex = hasStart ? startIndex : 0
+      queue = playable.slice()
+      queueIndex = startAt >= 0 ? startAt : 0
     }
     playCurrent()
   }
 
   function playAlbum(alb, startTrack) {
     var tracks = root.tracksFor(alb)
-    if (tracks.length === 0) {
-      root.requestTracks(alb, function() { root.playAlbum(alb, startTrack) })
-      return
-    }
-    var idx = startTrack ? tracks.indexOf(startTrack) : undefined
+    if (tracks.length === 0) { notify("No tracks to play"); return }
+    var idx = startTrack ? indexOfTrack(tracks, startTrack) : undefined
     playContext("album", alb.title || "", tracks, idx, "album:" + alb.id)
   }
 
   function playPlaylist(pl, startTrack) {
     var tracks = root.tracksFor(pl)
-    if (tracks.length === 0) {
-      root.requestTracks(pl, function() { root.playPlaylist(pl, startTrack) })
-      return
-    }
-    var idx = startTrack ? tracks.indexOf(startTrack) : undefined
+    if (tracks.length === 0) { notify("No tracks to play"); return }
+    var idx = startTrack ? indexOfTrack(tracks, startTrack) : undefined
     playContext("playlist", pl.name || pl.title || "", tracks, idx, "playlist:" + pl.id)
   }
 
-  // The whole library as one context (what the window shows when nothing is selected).
-  // Tracks come from what has been loaded so far; collection items only carry tracks
-  // once their album has been opened.
+  // The whole library as one context (what the window shows when nothing is selected):
+  // every streamable album track.
   function playLibrary() {
-    var tracks = Model.flattenTracks(collection, playlists)
-    if (tracks.length === 0) return
+    var tracks = LibraryModel.libraryTracks(collection)
+    if (tracks.length === 0) { notify("Nothing available to play yet"); return }
     playContext("library", "Library", tracks, undefined, "library")
   }
 
   function playTrack(track) {
     // Play a single track within its current context if it belongs to the queue.
-    var idx = queue.indexOf(track)
+    var idx = indexOfTrack(queue, track)
     if (idx >= 0) {
       queueIndex = idx
       playCurrent()
@@ -354,16 +422,23 @@ Item {
   function playCurrent() {
     var t = currentTrack
     if (!t) return
-    if (!t.streamUrl) {
-      playbackError = "No stream URL for: " + (t.title || "?")
+    if (t.streamable === false) {
+      playbackError = unavailableMessage(t)
       isPlaying = false
       return
     }
     playbackError = ""
-    mpvProc.command = [
-      "python3", root.pluginDir + "/mpvctl.py", "load",
-      t.streamUrl, String(root.cookiePath || "")
-    ]
+    if (t.streamUrl) {
+      mpvProc.command = ["python3", root.pluginDir + "/mpvctl.py", "load", t.streamUrl, String(root.cookiePath || ""), t.title || ""]
+    } else if (t.subsonicId) {
+      // The backend builds the Subsonic stream URL (it embeds credentials) and hands it
+      // to mpv itself, so the URL is never in argv, in output or in any log.
+      mpvProc.command = ["python3", root.pluginDir + "/backend", "play", t.subsonicId, "--title", t.title || ""]
+    } else {
+      playbackError = "No stream source for: " + (t.title || "?")
+      isPlaying = false
+      return
+    }
     mpvProc.running = true
     isPlaying = true
     isPaused = false
@@ -467,62 +542,10 @@ Item {
   }
   Process { id: ctlProc; running: false }
 
-  // ---- lazy tracklists ----------------------------------------------------
-  // Collection items carry no tracks; album tracklists are fetched on demand
-  // and memoized here (and on the item itself) to keep refreshes fast.
-  property var trackCache: ({})
-  property var pendingTracks: ({})
-
+  // ---- tracklists -----------------------------------------------------------
+  // Library items carry their tracks (the sync fetches them in the background).
   function tracksFor(item) {
-    if (!item) return []
-    if (item.tracks && item.tracks.length > 0) return item.tracks
-    var cached = trackCache[String(item.id)]
-    return cached || []
-  }
-
-  function requestTracks(item, cb) {
-    if (!item || !item.id) return
-    var have = tracksFor(item)
-    if (have.length > 0) { if (cb) cb(have); return }
-    var key = String(item.id)
-    if (pendingTracks[key]) { if (cb) pendingTracks[key].push(cb); return }
-    pendingTracks[key] = cb ? [cb] : []
-    tracksProc.itemKey = key
-    tracksProc.itemRef = item
-    tracksProc.command = [
-      "python3", root.pluginDir + "/fetch.py", "--tracks",
-      item.type || "album", key, String(root.cookiePath || "")
-    ]
-    tracksProc.running = true
-    status = "Loading " + (item.title || "album") + "…"
-  }
-
-  Process {
-    id: tracksProc
-    running: false
-    property string itemKey: ""
-    property var itemRef: null
-    stdout: StdioCollector { id: tracksOut; waitForEnd: true }
-    stderr: StdioCollector { id: tracksErr; waitForEnd: true }
-    onExited: function(code) {
-      root.status = ""
-      var tracks = []
-      if (code === 0) {
-        try { var d = JSON.parse(tracksOut.text || "{}"); tracks = d.tracks || [] } catch (e) {}
-      } else {
-        root.playbackError = "Track list failed: " + (tracksErr.text || "").trim()
-      }
-      if (tracksProc.itemRef) tracksProc.itemRef.tracks = tracks
-      var tc = {}
-      for (var k in root.trackCache) tc[k] = root.trackCache[k]
-      tc[tracksProc.itemKey] = tracks
-      root.trackCache = tc
-      var cbs = root.pendingTracks[tracksProc.itemKey] || []
-      var np = {}
-      for (var k2 in root.pendingTracks) if (k2 !== tracksProc.itemKey) np[k2] = root.pendingTracks[k2]
-      root.pendingTracks = np
-      for (var i = 0; i < cbs.length; i++) if (cbs[i]) cbs[i](tracks)
-    }
+    return item && item.tracks ? item.tracks : []
   }
 
   // ---- shell IPC ----------------------------------------------------------

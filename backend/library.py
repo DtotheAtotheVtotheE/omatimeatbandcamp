@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import bandcamp as bc
 from .match import match_albums
-from .model import (Album, Playlist, album_from_feed_item, album_from_subsonic_list_entry,
+from .model import (DETAIL_VERSION, Album, Playlist, album_from_feed_item, album_from_subsonic_list_entry,
                     track_from_subsonic, track_from_tralbum, tracks_from_subsonic_album)
 from .subsonic import Client, SubsonicError
 
@@ -158,7 +158,7 @@ class Library:
         except Exception:  # noqa: BLE001 - recorded in status.json for the UI
             log.exception("sync failed")
 
-    def sync(self, workers=4, deep=True, progress=None):
+    def sync(self, workers=4, deep=True, progress=None, user_url=None, playlists=True):
         _secure_dir(self.cache_dir)
         lockf = open(self._p("sync.lock"), "w")
         try:
@@ -169,7 +169,7 @@ class Library:
         try:
             self._cancel.clear()
             self.meta = {"started": time.time()}
-            self._run(workers, deep, progress or (lambda *a: None))
+            self._run(workers, deep, progress or (lambda *a: None), user_url, playlists)
         except Exception as e:
             self._status("error", error=self._redact(str(e)))
             raise
@@ -187,7 +187,7 @@ class Library:
         if self._cancel.is_set():
             raise InterruptedError("sync cancelled")
 
-    def _run(self, workers, deep, progress):
+    def _run(self, workers, deep, progress, user_url=None, playlists=True):
         t_start = time.perf_counter()
         sub = self.subsonic or Client()
         self.subsonic = sub
@@ -201,9 +201,12 @@ class Library:
         # 1. album lists
         self._checkpoint("album lists", progress=progress)
         t = time.perf_counter()
-        feed = web.collection_feed()
+        feed = web.collection_feed(user_url) if user_url else web.collection_feed()
         sub_entries = sub.albums()
         timings["album_lists_s"] = round(time.perf_counter() - t, 2)
+        uurl = getattr(web, "user_url", None)
+        if uurl:
+            self.meta["user"] = uurl.rstrip("/").rsplit("/", 1)[-1]
         web_albums = [album_from_feed_item(v) for v in feed]
         sub_albums = [album_from_subsonic_list_entry(a) for a in sub_entries]
         self._checkpoint("album lists", len(feed) + len(sub_entries), len(feed) + len(sub_entries), progress)
@@ -216,7 +219,7 @@ class Library:
         def sub_tracks_for(sid):
             if sid not in fetched:
                 c = cached.get(sid)
-                if c and c.tracks_loaded and c.tracks_source == "subsonic":
+                if c and c.tracks_loaded and c.tracks_source == "subsonic" and c.detail_version >= DETAIL_VERSION:
                     fetched[sid] = (c.tracks, None)
                 else:
                     payload = sub.album(sid)
@@ -237,9 +240,8 @@ class Library:
         # 3. playlists
         self._checkpoint("playlists", progress=progress)
         t = time.perf_counter()
-        playlists = self._pull_playlists(sub, cached_playlists, progress)
+        self.playlists = self._pull_playlists(sub, cached_playlists, progress) if playlists else []
         timings["playlists_s"] = round(time.perf_counter() - t, 2)
-        self.playlists = playlists
 
         self.save()
 
@@ -301,6 +303,7 @@ class Library:
         for a in merged:
             c = cached.get(a.subsonic_id) if a.subsonic_id else None
             if (c and not a.tracks_loaded and c.tracks_loaded and c.tracks_source == "subsonic"
+                    and c.detail_version >= DETAIL_VERSION
                     and c.declared_track_count == a.declared_track_count and c.purchased == a.purchased):
                 a.set_tracks(c.tracks, "subsonic")
 
