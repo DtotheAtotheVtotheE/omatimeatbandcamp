@@ -51,6 +51,27 @@ Item {
   property var artJob: null
   property int artJobSeq: 0
 
+  // ---- external links -----------------------------------------------------
+  // Phase 7: the links row opens public Bandcamp pages in the default browser.
+  // The executable is overridable so the QML harness records calls instead of
+  // launching a browser. Only https URLs are ever handed to it.
+  readonly property string openCommand: Quickshell.env("OMATIME_OPEN_CMD") || "xdg-open"
+  property string lastOpenedUrl: ""
+  property var openedUrls: []
+
+  function openExternal(url) {
+    var u = String(url || "")
+    if (u.indexOf("https://") !== 0) return false
+    lastOpenedUrl = u
+    openedUrls = openedUrls.concat([u])
+    openProc.command = [openCommand, u]
+    openProc.running = false
+    openProc.running = true
+    return true
+  }
+
+  Process { id: openProc; running: false }
+
   // Path to the Netscape cookies.txt used for authenticated requests. When the
   // user has not set a manual cookiePath, refresh() exports it from the browser.
   property string cookiePath: cacheDir + "/cookies.txt"

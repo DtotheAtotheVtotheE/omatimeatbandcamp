@@ -218,7 +218,7 @@ ShellRoot {
       var hs = {}, ic = {}, bd = {}
       for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
       log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("10 buttons in the open window (Play all and Stop are gone; Sort + Hide pre-orders added)", bs.length === 10)
+      check("16 buttons in the open window (10 controls + 6 external links; Play all and Stop are gone)", bs.length === 16)
       check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
       check("all buttons bordered (one border style)", Object.keys(bd).length === 1 && Object.keys(bd)[0] === "true")
@@ -883,6 +883,44 @@ ShellRoot {
       svc.duration = 0
     },
 
+    // ---- Phase 7: external links row ----
+    function() {
+      var row = named(stage, "linksRow")
+      var labels = ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"]
+      var found = 0, oneRow = true, sameStyle = true, allEnabled = true, y0 = -1
+      for (var i = 0; i < labels.length; i++) {
+        var b = button(labels[i])
+        if (!b) continue
+        found++
+        var y = Math.round(b.mapToItem(row, 0, 0).y)
+        if (y0 < 0) y0 = y
+        else if (y !== y0) oneRow = false
+        if (Math.round(b.height) !== Style.spacing.controlHeight || b.bordered !== true) sameStyle = false
+        if (!b.enabled) allEnabled = false
+      }
+      check("links row has all six labelled buttons, all enabled", found === 6 && allEnabled)
+      check("links row is ONE row of uniform BcButtons (same y, height, border)", oneRow && sameStyle)
+      var sy = searchField().mapToItem(stage, 0, 0).y + searchField().height
+      var ry = row.mapToItem(stage, 0, 0).y
+      var ay = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0).y
+      check("links row sits beneath the search box and above the toolbar", ry >= sy && ry < ay)
+      check("Bandcamp / Discover / Editorials / Radio use the verified URLs",
+        panel.externalLinks[0].url === "https://bandcamp.com" &&
+        panel.externalLinks[1].url === "https://bandcamp.com/discover" &&
+        panel.externalLinks[2].url === "https://daily.bandcamp.com" &&
+        panel.externalLinks[3].url === "https://bandcamp.com/radio")
+      check("Your Feed / Your Collection are built from the library username (fixture-user)",
+        panel.externalLinks[4].url === "https://bandcamp.com/fixture-user/feed" &&
+        panel.externalLinks[5].url === "https://bandcamp.com/fixture-user")
+    },
+    function() { click(button("Bandcamp")) },
+    function() { check("Bandcamp opens https://bandcamp.com", svc.lastOpenedUrl === "https://bandcamp.com"); click(button("Discover")) },
+    function() { check("Discover opens https://bandcamp.com/discover", svc.lastOpenedUrl === "https://bandcamp.com/discover"); click(button("Editorials (Daily)")) },
+    function() { check("Editorials (Daily) opens https://daily.bandcamp.com", svc.lastOpenedUrl === "https://daily.bandcamp.com"); click(button("Radio")) },
+    function() { check("Radio opens https://bandcamp.com/radio", svc.lastOpenedUrl === "https://bandcamp.com/radio"); click(button("Your Feed")) },
+    function() { check("Your Feed opens https://bandcamp.com/fixture-user/feed", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user/feed"); click(button("Your Collection")) },
+    function() { check("Your Collection opens https://bandcamp.com/fixture-user", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user") },
+
     // ---- logout flow (Phase 2) ----
     function() { click(button("\uf141")) },
     function() { click(button("Log out / Clear Bandcamp session")) },
@@ -940,6 +978,10 @@ ShellRoot {
       var n = svc.collection.length
       log("real library: " + n + " albums, " + svc.playlists.length + " playlists")
       check("[real] library loaded (hundreds of albums, playlists present)", n > 500 && svc.playlists.length > 5)
+      check("[real] links build Feed/Collection from the real username",
+        panel.bandcampUser !== "" &&
+        panel.externalLinks[4].url === "https://bandcamp.com/" + panel.bandcampUser + "/feed" &&
+        panel.externalLinks[5].url === "https://bandcamp.com/" + panel.bandcampUser)
       var strings = []
       for (var i = 0; i < svc.collection.length; i++) { var a = svc.collection[i]; strings.push(a.title, a.artist); for (var j = 0; j < a.tracks.length; j++) strings.push(a.tracks[j].title, a.tracks[j].artist, a.tracks[j].album) }
       for (var k = 0; k < svc.playlists.length; k++) { strings.push(svc.playlists[k].name); for (var m = 0; m < svc.playlists[k].tracks.length; m++) strings.push(svc.playlists[k].tracks[m].title, svc.playlists[k].tracks[m].artist) }

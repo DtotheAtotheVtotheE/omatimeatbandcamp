@@ -94,6 +94,19 @@ Panel {
   }
   readonly property var menuItems: menuKind === "sort" ? sortItems : moreItems
 
+  // Phase 7: verified external pages, in spec order. Feed and Collection are
+  // built from the username the backend recorded in the library, so they stay
+  // disabled until it is known. URLs verified live on 2026-10-23 (V2-NOTES).
+  readonly property string bandcampUser: service ? String(service.detectedUser || "") : ""
+  readonly property var externalLinks: [
+    { key: "bandcamp", label: "Bandcamp", url: "https://bandcamp.com" },
+    { key: "discover", label: "Discover", url: "https://bandcamp.com/discover" },
+    { key: "daily", label: "Editorials (Daily)", url: "https://daily.bandcamp.com" },
+    { key: "radio", label: "Radio", url: "https://bandcamp.com/radio" },
+    { key: "feed", label: "Your Feed", url: bandcampUser === "" ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser) + "/feed" },
+    { key: "collection", label: "Your Collection", url: bandcampUser === "" ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser) }
+  ]
+
   implicitWidth: showIcon ? barRow.implicitWidth : 0
   implicitHeight: showIcon ? barRow.implicitHeight : 0
 
@@ -353,6 +366,31 @@ Panel {
         }
       }
 
+      // external links -------------------------------------------------------
+      // One row of uniform BcButtons under the search box. Six labels fit the
+      // 920 px content width, so the overflow menu was not needed. Each opens
+      // the verified page in the default browser (xdg-open).
+      Row {
+        id: linksRow
+        objectName: "linksRow"
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        Repeater {
+          model: root.externalLinks
+          delegate: BcButton {
+            required property var modelData
+            objectName: "link-" + modelData.key
+            text: modelData.label
+            enabled: modelData.url !== ""
+            tooltipText: modelData.url !== "" ? modelData.url : "Username not known yet"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: if (root.service) root.service.openExternal(modelData.url)
+          }
+        }
+      }
+
       // toolbar --------------------------------------------------------------
       Item {
         width: parent.width
@@ -444,9 +482,11 @@ Panel {
       }
 
       // library + detail -----------------------------------------------------
+      // 396, not 430: the Phase 7 links row (28 + 6 spacing) must fit inside the
+      // 660 px popup cap, or the footer's seek area falls below the visible window.
       Row {
         width: parent.width
-        height: Style.space(430)
+        height: Style.space(396)
         spacing: Style.spacing.md
 
         Item {

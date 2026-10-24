@@ -290,3 +290,59 @@ Tests run (final):
 
 Not verified by the harness: the real shell bar after `omarchy restart shell`, and the legacy
 Waybar `image` module (Waybar is not installed here).
+
+## Phase 7: external links row
+
+Changed: `Panel.qml` (links row + URLs, list height), `Service.qml` (`openExternal` + opener
+process), `tests/qml/run.sh` (xdg-open recorder, script-side URL check), `tests/qml/shell.qml`
+(11 phase-1 checks + 1 real-data check), README.
+
+**Placement: one row of six uniform `BcButton`s directly beneath the search box**, not the ⋯
+overflow menu. Measured at the fixture window width: the six labels plus `sm` spacing occupy
+about 640 px of the 920 px content width, so there was no genuine space pressure. The row is
+inside the 660 px popup cap (see deviation 1).
+
+**Verified URLs (checked live 2026-10-23, logged-in session where noted):**
+
+| Button | URL | Verification |
+|---|---|---|
+| Bandcamp | `https://bandcamp.com` | spec URL, HTTP 200 |
+| Discover | `https://bandcamp.com/discover` | spec URL, HTTP 200 |
+| Editorials (Daily) | `https://daily.bandcamp.com` | spec URL, HTTP 200 (final URL has a trailing `/`) |
+| Radio | `https://bandcamp.com/radio` | link found on the bandcamp.com homepage (`/radio?from=homepage&ui_context=bcradio`); clean base URL returns HTTP 200 |
+| Your Feed | `https://bandcamp.com/<username>/feed` | with the saved Bandcamp session: HTTP 200, title "Music feed — Bandcamp". Logged out, `/feed` redirects to the collection page, so this path is the logged-in feed. Verified for this account as `https://bandcamp.com/dtotheatothevtothee/feed` |
+| Your Collection | `https://bandcamp.com/<username>` | with the saved session: HTTP 200, title "<username>'s collection — Bandcamp". Verified for this account as `https://bandcamp.com/dtotheatothevtothee` |
+
+The username is not hardcoded: `Panel.bandcampUser` comes from `Service.detectedUser`, which is
+read from the library cache metadata (`meta.user`). The two per-user buttons stay disabled
+(tooltip "Username not known yet") until that value is loaded, so no guessed URL can be opened.
+Only `https://` URLs are passed to the opener.
+
+Where the existing code/environment forced a decision:
+
+1. **The links row needed 34 px.** It pushed the footer's seek area just below the 660 px popup
+   cap, and the four Phase 5 seek checks started failing (the clicks landed outside the visible
+   window). Fixed in the product, not the tests: the library/detail row is now 396 px instead of
+   430 px, restoring the previous popup height. No existing assertion was weakened.
+2. **Test seam instead of a browser.** `Service.openExternal()` runs
+   `$OMATIME_OPEN_CMD` (default `xdg-open`) with the URL as the only argument. The harness sets
+   it to a recorder script that appends the URL to `$OMATIME_OPEN_LOG`; the shell script then
+   asserts the log contains exactly the six verified URLs in order, so no browser can be
+   launched from the harness.
+3. **Button count.** The shared-style check now expects 16 buttons (10 controls + 6 links), not
+   10; the style invariants (one height, one icon size, bordered) are unchanged.
+
+Tests run (final):
+
+- `python3 -m unittest discover -s tests -t .`: **82 tests, OK (5 live-only skipped)** — unchanged.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests, OK** — unchanged.
+- `tests/qml/run.sh`: **255 checks, OK** = phase 1 (fixture) 229 + relaunch 6 + real-data smoke
+  16 + 3 script-side checks. Baseline was 242. New: all six labelled buttons present, one row,
+  uniform style, placed between search and toolbar; the four fixed URLs exact; Feed/Collection
+  built from the fixture username; each button opens its exact URL through the real
+  `Service.openExternal` path; on the real library, Feed/Collection use the real username; and
+  the script-side check that the recorder received exactly the six URLs in order.
+- `omarchy plugin validate .`: OK. `qmllint`: only the pre-existing unqualified-access warnings.
+
+Not verified by the harness: the live shell look after `omarchy restart shell`, and that the
+owner's default browser actually opens (the harness deliberately intercepts the opener).

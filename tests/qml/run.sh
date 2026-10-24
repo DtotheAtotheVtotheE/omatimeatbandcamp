@@ -32,6 +32,15 @@ ln -s "$plugin" "$work/shell/plug"
 fail=0
 passes=0
 
+# Phase 7: intercept xdg-open. The plugin runs $OMATIME_OPEN_CMD instead of the real
+# browser opener, and this recorder appends the URL it was given to $OMATIME_OPEN_LOG.
+# Nothing in the harness can launch a browser.
+cat > "$work/open-recorder.sh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$1" >> "$OMATIME_OPEN_LOG"
+EOF
+chmod +x "$work/open-recorder.sh"
+
 launch() {  # launch <label> <home> <phase>
   local label=$1 home=$2 phase=$3 out
   # Own mpv socket (never the user's real one) and a null audio sink: the harness must
@@ -39,6 +48,7 @@ launch() {  # launch <label> <home> <phase>
   out=$(HOME="$home" HARNESS_PHASE="$phase" OMARCHY_PATH="$omarchy" QT_QPA_PLATFORM=offscreen \
     OMATIME_MPV_SOCK="$work/mpv-${phase}.sock" OMATIME_MPV_FLAGS="--ao=null" OMATIME_PLUGIN_DIR="$plugin" \
     OMATIME_ART_FIXTURE_DIR="$artdir" \
+    OMATIME_OPEN_CMD="$work/open-recorder.sh" OMATIME_OPEN_LOG="$work/opened-${phase}.log" \
     timeout 240 quickshell -n -p "$work/shell" 2>&1 || true)
   echo "== $label"
   echo "$out" | grep -E "HARNESS|ERROR" | sed -E 's/\x1b\[[0-9;]*m//g; s/^.*HARNESS /  /'
@@ -74,6 +84,21 @@ if echo "$ui_p1" | grep -q '"sortMode":"title"' && echo "$ui_p1" | grep -q '"hid
   echo "  PASS phase 1's sort + filter choices were written to ui.json"; passes=$((passes + 1))
 else
   echo "  FAIL phase 1's choices were not written to ui.json"; fail=1
+fi
+
+# Phase 7: the six link buttons must have invoked the opener with exactly the verified
+# URLs, in spec order. Exact match also proves no other URL was opened. The fixture
+# library's meta.user is "fixture-user".
+expected_links="https://bandcamp.com
+https://bandcamp.com/discover
+https://daily.bandcamp.com
+https://bandcamp.com/radio
+https://bandcamp.com/fixture-user/feed
+https://bandcamp.com/fixture-user"
+if [ -f "$work/opened-1.log" ] && [ "$(cat "$work/opened-1.log")" = "$expected_links" ]; then
+  echo "  PASS xdg-open was called with the six verified URLs, in order"; passes=$((passes + 1))
+else
+  echo "  FAIL link opener log mismatch:"; sed 's/^/    /' "$work/opened-1.log" 2>/dev/null; fail=1
 fi
 
 launch "phase 2 (relaunch, same HOME)" "$home" 2

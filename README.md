@@ -56,6 +56,9 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - The module text is always `BC`. Playback state is only a suffix: `BC ❚❚` playing,
   `BC ▶` paused, plain `BC` stopped.
 - The album-art module sits immediately left of `BC` and follows the current track.
+- Beneath the search box, one row of links opens Bandcamp, Discover, Editorials
+  (Daily), Radio, Your Feed and Your Collection in the default browser (`xdg-open`).
+  Feed and Collection are built from the username in the library cache.
 - Panel has tabs for Collection and Playlists, a search box, and a now-playing bar.
 
 ## Features
@@ -77,6 +80,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Bar art: `backend art` fetches the current Subsonic cover, downscales it to <=128 px and writes
   `~/.cache/omatimeatbandcamp/current-art.jpg`; when stopped it writes the bundled BC placeholder.
   No cover URL ever reaches QML, the bar config or a log
+- External links row: opens the verified public Bandcamp pages with `xdg-open`; Feed/Collection
+  come from the library username, so no per-user URL is hardcoded
 
 ## Data sources
 
