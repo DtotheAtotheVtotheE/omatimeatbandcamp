@@ -92,6 +92,17 @@ ShellRoot {
     command: ["cmp", "-s", svc.artPath, svc.placeholderArt]
     onExited: function(code) { cmpArt.same = code === 0 }
   }
+
+  // Phase 8 metadata fence: read back exactly what Service.qml publishes to the
+  // MPRIS daemon. The state file is the only thing the daemon reads; mpv's
+  // credential-bearing `path` is never in it.
+  Process {
+    id: mprisProbe
+    property string text: ""
+    command: ["cat", svc.mprisStatePath]
+    stdout: StdioCollector { id: mprisOut; waitForEnd: true }
+    onExited: function(code) { mprisProbe.text = mprisOut.text }
+  }
   function check(name, cond) { lastCheck = name; if (!cond) fails++; log((cond ? "PASS " : "FAIL ") + name) }
   Connections { target: svc; function onRefreshingChanged() { if (svc.refreshing) { var b = host.button('Refresh'); host.seen = { enabled: b.enabled, spin: b.iconSpinning, op: b.opacity } } } }
 
@@ -946,6 +957,109 @@ ShellRoot {
       var b = button("Refresh")
       check("refresh finished: not refreshing, button re-enabled and still", !svc.refreshing && b && b.enabled === true && b.iconSpinning === false)
       log("status after refresh: " + JSON.stringify(svc.status))
+    },
+
+    // ---- Phase 8: panel-scoped keyboard navigation ----
+    function() {
+      panel.focusSearch()
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+      panel.focusPane = ""
+      svc.activeTab = 0
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      check("keyboard: search owns focus on open; no list is focused", searchField().activeFocus && panel.focusPane === "")
+    },
+    function() { key(Qt.Key_Down) },
+    function() {
+      var rows = panel.listRows
+      check("keyboard: Down enters the left list at row 0", panel.focusPane === "list" && panel.listCursor === 0)
+      check("keyboard: the list key catcher has focus", named(stage, "listKeyCatcher").activeFocus)
+      check("keyboard: selection follows the cursor (non-toggling)", panel.selectedAlbumUid === rows[0].uid)
+    },
+    function() { key(Qt.Key_Down) },
+    function() {
+      var rows = panel.listRows
+      check("keyboard: second Down moves to row 1", panel.listCursor === 1 && panel.selectedAlbumUid === rows[1].uid)
+      check("keyboard: the cursor row is tinted", alpha(named(leftList().itemAtIndex(1), "rowFill")) > 0.1)
+    },
+    function() { key(Qt.Key_Up) },
+    function() { check("keyboard: Up moves back to row 0", panel.listCursor === 0) },
+    function() { key(Qt.Key_Return) },
+    function() {
+      var rows = panel.listRows
+      check("keyboard: Enter plays the selected album's context", svc.queue.length === rows[0].tracks.length && svc.queueIndex === 0)
+      check("keyboard: Enter uses the selected album context", svc.playingContextKey === "album:" + rows[0].id)
+      // Deterministic playing state: the real backend cannot play in the harness.
+      svc.queue = [{ uid: "kbd-track", title: "Keyboard Track", artist: "Keyboard Artist", album: "Keyboard Album", duration: 120 }]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+      svc.isPaused = false
+      svc.position = 10
+      svc.duration = 120
+    },
+    function() { key(Qt.Key_Space) },
+    function() { check("keyboard: Space in the list pauses playback", svc.isPaused === true); key(Qt.Key_Space) },
+    function() { check("keyboard: Space again resumes playback", svc.isPaused === false) },
+    function() { key(Qt.Key_Slash) },
+    function() { check("keyboard: / returns focus to the search field", panel.focusPane === "" && searchField().activeFocus) },
+    function() { key(Qt.Key_Down) },
+    function() { typeText("a") },
+    function() {
+      check("keyboard: typing in a list refocuses search and keeps the character",
+        searchField().text === "a" && panel.focusPane === "" && svc.searchQuery === "a")
+    },
+    function() {
+      var before = svc.isPaused
+      typeText(" ")
+      check("keyboard: Space while typing in search types a space (never toggles)",
+        searchField().text === "a " && svc.isPaused === before)
+    },
+    function() { key(Qt.Key_Escape) },
+    function() { check("keyboard: Esc clears search before closing", panel.opened && svc.searchQuery === "" && searchField().text === "") },
+    function() { key(Qt.Key_Escape) },
+    function() { check("keyboard: the next Esc closes the window", !panel.opened); panel.open() },
+    function() {
+      var a = panel.albums.filter(function(x) { return svc.tracksFor(x).length > 1 })[0]
+      panel.selectAlbum(a)
+      panel.focusTracks()
+    },
+    function() {
+      check("keyboard: focusTracks enters the track list at its first row", panel.focusPane === "tracks" && panel.trackCursor === 0)
+      check("keyboard: the focused track row is tinted", alpha(named(trackList().itemAtIndex(0), "trackFill")) > 0.1)
+      key(Qt.Key_Down)
+    },
+    function() {
+      check("keyboard: Down moves within the focused track list", panel.detailTrackList.length > 1 && panel.trackCursor === 1)
+      check("keyboard: the previous track row tint is gone", alpha(named(trackList().itemAtIndex(0), "trackFill")) < 0.15)
+      key(Qt.Key_Return)
+    },
+    function() {
+      var rows = panel.detailTrackList
+      check("keyboard: Enter plays the focused track", svc.currentTrack && svc.currentTrack.uid === rows[1].uid && svc.queueIndex === 1)
+    },
+
+    // ---- Phase 8: metadata fence (the daemon reads only this file) ----
+    function() { svc.writeMprisState(); mprisProbe.running = true },
+    function() {
+      var d = {}
+      try { d = JSON.parse(mprisProbe.text || "{}") } catch (e) {}
+      var keys = Object.keys(d).sort().join(",")
+      check("mpris: the state carries title/artist/album from the library",
+        !!svc.currentTrack && d.title === svc.currentTrack.title && d.artist === svc.currentTrack.artist && d.album === svc.currentTrack.album)
+      check("mpris: the state key set is the explicit whitelist",
+        keys === "album,artist,canNext,canPause,canPlay,canPrevious,canSeek,duration,position,status,title,updatedAt")
+      check("mpris: no path/url/cover field is written",
+        !("path" in d) && !("url" in d) && !("coverArtUrl" in d) && !("streamUrl" in d) && !("artUrl" in d))
+      var blob = JSON.stringify(d)
+      check("mpris: no URL scheme, query string or credential word in any value",
+        !/:\/\//.test(blob) && !/\?/.test(blob) && !/\b(u|t|s)=/.test(blob) && !/(token|password|credential|salt)/i.test(blob))
     }
   ]
 

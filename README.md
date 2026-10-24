@@ -60,6 +60,18 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   (Daily), Radio, Your Feed and Your Collection in the default browser (`xdg-open`).
   Feed and Collection are built from the username in the library cache.
 - Panel has tabs for Collection and Playlists, a search box, and a now-playing bar.
+- **Keyboard (panel-scoped only):** the shortcuts work only while the popup is open and focused;
+  no Hyprland binding or global shortcut is added.
+  - `↓` / `↑` from search enters the focused list and moves the cursor; `Enter` plays the
+    selected album, playlist, search result or track.
+  - `←` / `→` switch between the album/playlist list and the track list.
+  - `Space` toggles play/pause when a list is focused; while typing in search it types a space.
+  - `/` returns focus to search. Typing while a list is focused also returns to search and keeps
+    the character.
+  - `Esc` backs out one layer: cancel confirmation, close menu, clear search, close window.
+- **Media keys:** the plugin publishes MPRIS (`org.mpris.MediaPlayer2.omatimeatbandcamp`), so the
+  laptop's Play/Pause, Next and Previous keys work through Omarchy's existing
+  `omarchy-shell media ...` bindings.
 
 ## Features
 
@@ -82,6 +94,10 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   No cover URL ever reaches QML, the bar config or a log
 - External links row: opens the verified public Bandcamp pages with `xdg-open`; Feed/Collection
   come from the library username, so no per-user URL is hardcoded
+- MPRIS: `backend/mpris.py` publishes title/artist/album, a **local** `file://` cover URL,
+  playback status, position and transport controls. mpv's `path` (the credential-bearing stream
+  URL) is never read or published; our mpv runs with `--load-scripts=no` so the system
+  `/etc/mpv/scripts/mpris.so` cannot publish it either. `OMATIME_MPRIS=0` disables the bridge.
 
 ## Data sources
 
@@ -95,7 +111,9 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 ## IPC
 
 - `omarchy-shell omatimeatbandcamp status`
-- `omarchy-shell omatimeatbandcamp playPause|next|previous|stop|refresh`
+- `omarchy-shell omatimeatbandcamp playPause|resume|pause|next|previous|stop|refresh`
+- `omarchy-shell omatimeatbandcamp restartPlayer` (resets to stopped and quits mpv; the next Play uses `--load-scripts=no`)
+- `omarchy-shell omatimeatbandcamp seek <seconds>`
 - `omarchy-shell omatimeatbandcamp play <itemId>` (the library id, e.g. a Subsonic album id like `a:4039254352` or `pl:783164`)
 - `omarchy-shell omatimeatbandcamp clearCookies`
 
@@ -107,7 +125,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 ## Backend (v2, in progress)
 
-`backend/` is the new data layer; the QML UI does not use it yet.
+`backend/` is the data and playback layer; QML invokes its CLIs and the MPRIS daemon.
 
 - `backend/subsonic.py`: Subsonic client for `bandcamp.com/api/subsonic` (token auth, fresh salt per session, JSON and XML errors,
   secrets never logged). Credentials: `~/.config/omatimeatbandcamp/credentials.toml` (`user`, `pass`).
@@ -116,6 +134,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - `backend/match.py`: matches the web collection to Subsonic by normalised artist+title, and single-track purchases via their parent album.
 - `backend/library.py`: local cache (`~/.cache/omatimeatbandcamp/library/`) plus background, incremental sync.
   CLI: `python3 backend sync | status | summary | art`.
+- `backend/mpris.py`: MPRIS D-Bus bridge. Reads only the whitelisted playback state file, builds
+  `mpris:artUrl` from the local cover path, and sends transport commands through the plugin IPC.
 - Tests: `python3 -m unittest discover -s tests -t .` (offline); `tests/qml/run.sh` (QML window interaction tests, offscreen); `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures` (real services).
 - Measurements and findings: `spike/SUBSONIC-REPORT.md`.
 

@@ -56,6 +56,11 @@ def spawn_mpv():
         "--really-quiet",
         "--no-input-terminal",
         "--user-agent=Mozilla/5.0",
+        # /etc/mpv/scripts/mpris.so is auto-loaded into every mpv on this system.
+        # It would publish mpv's `path` (the credential-bearing stream URL) on
+        # D-Bus, so our headless player must never load auto-loaded scripts.
+        # Playback control is exposed by backend/mpris.py with library metadata.
+        "--load-scripts=no",
         f"--input-ipc-server={SOCK}",
     ]
     extra = os.environ.get("OMATIME_MPV_FLAGS", "").strip()

@@ -107,11 +107,118 @@ Panel {
     { key: "collection", label: "Your Collection", url: bandcampUser === "" ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser) }
   ]
 
+  // ---- keyboard (Phase 8) -------------------------------------------------
+  // Panel-scoped only: no global shortcut is registered, no Hyprland binding is
+  // touched. Focus is either the search field ("") or one of the two lists.
+  // Down/Up from search enters the left list; Left/Right switch lists; `/`
+  // returns to search; Esc keeps the Phase 2 layering.
+  property string focusPane: ""       // "", "list", "tracks"
+  property int listCursor: -1
+  property int trackCursor: -1
+  readonly property var listRows: query !== ""
+    ? searchTracks
+    : (service && service.activeTab === 1 ? playlists : albums)
+
+  function focusSearch() {
+    focusPane = ""
+    searchField.forceActiveFocus()
+  }
+
+  function clearSearch() {
+    if (searchField) searchField.text = ""
+    if (service) service.search("")
+    listCursor = -1
+  }
+
+  function handleEscape() {
+    if (logoutConfirmOpen) cancelLogout()
+    else if (menuOpen) closeMenu()
+    else if (query !== "" || (searchField && searchField.text !== "")) { clearSearch(); focusSearch() }
+    else close()
+  }
+
+  // Keyboard selection never toggles: moving the cursor onto the already
+  // selected row must not deselect it (clicking still toggles, Phase 4.0).
+  function selectAlbum(alb) { if (!alb) return; selectedPlaylistUid = ""; selectedAlbumUid = alb.uid }
+  function selectPlaylist(pl) { if (!pl) return; selectedAlbumUid = ""; selectedPlaylistUid = pl.uid }
+
+  function clampCursor(i, n) { return Math.max(0, Math.min(n - 1, i)) }
+
+  function enterList(delta) {
+    var rows = listRows
+    if (!rows.length) return
+    focusPane = "list"
+    if (listCursor < 0 || listCursor >= rows.length) {
+      var i = -1, uid = selectedPlaylistUid || selectedAlbumUid
+      for (var k = 0; k < rows.length; k++) if (rows[k].uid === uid) { i = k; break }
+      listCursor = i >= 0 ? i : (delta > 0 ? 0 : rows.length - 1)
+    } else {
+      listCursor = clampCursor(listCursor + delta, rows.length)
+    }
+    applyListCursor()
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function applyListCursor() {
+    var rows = listRows
+    if (listCursor < 0 || listCursor >= rows.length) return
+    listColumn.positionViewAtIndex(listCursor, ListView.Contain)
+    if (query !== "") return                  // search results: cursor only
+    if (service && service.activeTab === 1) selectPlaylist(rows[listCursor])
+    else selectAlbum(rows[listCursor])
+  }
+
+  function focusTracks() {
+    if (detailTrackList.length === 0) return
+    focusPane = "tracks"
+    if (trackCursor < 0 || trackCursor >= detailTrackList.length) {
+      var i = -1
+      for (var k = 0; k < detailTrackList.length; k++)
+        if (currentTrack && detailTrackList[k].uid === currentTrack.uid) { i = k; break }
+      trackCursor = i >= 0 ? i : 0
+    }
+    trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function moveCursor(delta) {
+    if (focusPane === "tracks") {
+      if (!detailTrackList.length) return
+      trackCursor = clampCursor((trackCursor < 0 ? 0 : trackCursor) + delta, detailTrackList.length)
+      trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+      return
+    }
+    enterList(delta)
+  }
+
+  function switchPane(direction) {
+    if (direction > 0) focusTracks()
+    else if (detailTrackList.length > 0) { focusPane = "list"; listCursor = listCursor < 0 ? 0 : listCursor; applyListCursor(); listKeyCatcher.forceActiveFocus() }
+  }
+
+  function activateCursor() {
+    if (focusPane === "tracks") {
+      var t = detailTrackList[trackCursor]
+      if (!t) return
+      if (t.streamable !== false) playTrackNow(t, detailTrackList)
+      else if (service) service.notify(service.unavailableMessage(t))
+      return
+    }
+    var row = listRows[listCursor]
+    if (!row) return
+    if (query !== "") { playTrackNow(row, searchTracks); return }
+    if (service && service.activeTab === 1) { selectPlaylist(row); service.playPlaylist(row) }
+    else { selectAlbum(row); service.playAlbum(row) }
+  }
+
+  function noteListClick(index) { listCursor = index; focusPane = "list"; listKeyCatcher.forceActiveFocus() }
+  function noteTrackClick(index) { trackCursor = index; focusPane = "tracks"; listKeyCatcher.forceActiveFocus() }
+
   implicitWidth: showIcon ? barRow.implicitWidth : 0
   implicitHeight: showIcon ? barRow.implicitHeight : 0
 
   onOpenedChanged: {
-    if (!opened) { menuKind = ""; logoutConfirmOpen = false }
+    if (!opened) { menuKind = ""; logoutConfirmOpen = false; focusPane = ""; listCursor = -1; trackCursor = -1 }
     else if (service && service.collection.length === 0) service.refresh()
   }
 
@@ -337,7 +444,10 @@ Panel {
         placeholderText: "Search albums, playlists, tracks…"
         foreground: root.foreground
         font.family: root.fontFamily
-        onTextChanged: if (root.service) root.service.search(text)
+        onTextChanged: {
+          if (root.service) root.service.search(text)
+          root.listCursor = -1
+        }
 
         // The search field owns keyboard focus for the whole window, so the
         // overlays are handled here, before its own text entry. While the
@@ -354,14 +464,18 @@ Panel {
             else if (event.key === Qt.Key_Up) root.menuIndex = Math.max(0, root.menuIndex - 1)
             else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
             event.accepted = true
+          } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
+            // Down/Up leave text entry and move through the focused list.
+            root.enterList(event.key === Qt.Key_Down ? 1 : -1)
+            event.accepted = true
+          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            // Enter plays whatever is selected (no-op when nothing is).
+            if (root.listRows.length > 0 && root.listCursor >= 0) { root.activateCursor(); event.accepted = true }
           }
         }
         // Esc backs out one layer at a time: confirmation, menu, search text, window.
         Keys.onEscapePressed: function(event) {
-          if (root.logoutConfirmOpen) root.cancelLogout()
-          else if (root.menuOpen) root.closeMenu()
-          else if (text !== "") { text = ""; root.service.search("") }
-          else root.close()
+          root.handleEscape()
           event.accepted = true
         }
       }
@@ -500,9 +614,7 @@ Panel {
             anchors.fill: parent
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            model: root.query !== ""
-              ? root.searchTracks
-              : (root.service && root.service.activeTab === 1 ? root.playlists : root.albums)
+            model: root.listRows
 
             // Two-line rows: title wraps to at most two lines (ellipsis only after the
             // second), artist (or track count) on a smaller dimmed line below, and a
@@ -517,6 +629,7 @@ Panel {
               readonly property var item: modelData
               readonly property bool selected: !!item && !isSearch
                 && (isPlaylist ? root.selectedPlaylistUid === item.uid : root.selectedAlbumUid === item.uid)
+              readonly property bool cursor: root.focusPane === "list" && index === root.listCursor
               readonly property bool preorder: !!item && !isSearch && !isPlaylist && item.isPreorder === true
 
               Rectangle {
@@ -524,7 +637,8 @@ Panel {
                 anchors.fill: parent
                 radius: Style.cornerRadius
                 color: rowItem.selected ? Util.alpha(Color.accent, 0.22)
-                  : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                  : (rowItem.cursor ? Util.alpha(Color.accent, 0.12)
+                    : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"))
               }
 
               Rectangle {
@@ -626,6 +740,7 @@ Panel {
                 onClicked: {
                   var it = rowItem.item
                   if (!it) return
+                  root.noteListClick(index)
                   if (rowItem.isSearch) { root.playTrackNow(it, root.searchTracks); return }
                   if (rowItem.isPlaylist) root.pickPlaylist(it)
                   else root.pickAlbum(it)
@@ -782,6 +897,7 @@ Panel {
                   readonly property var track: modelData
                   readonly property bool playable: !!track && track.streamable !== false
                   readonly property bool current: !!track && !!track.uid && !!root.currentTrack && root.currentTrack.uid === track.uid
+                  readonly property bool cursor: root.focusPane === "tracks" && index === root.trackCursor
                   opacity: playable ? 1.0 : 0.45
 
                   Rectangle {
@@ -789,7 +905,8 @@ Panel {
                     anchors.fill: parent
                     radius: Style.cornerRadius
                     color: trackRow.current ? Util.alpha(Color.accent, 0.22)
-                      : (trackRow.playable && tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                      : (trackRow.cursor ? Util.alpha(Color.accent, 0.12)
+                        : (trackRow.playable && tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"))
                   }
 
                   Rectangle {
@@ -867,6 +984,7 @@ Panel {
                     cursorShape: trackRow.playable ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: {
                       if (!trackRow.track) return
+                      root.noteTrackClick(index)
                       if (trackRow.playable) root.playTrackNow(trackRow.track, root.detailTrackList)
                       else if (root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
                     }
@@ -1125,6 +1243,43 @@ Panel {
               }
             }
           }
+        }
+      }
+    }
+
+    // Panel-scoped key catcher for the two lists. It only has focus after the
+    // user enters a list (Down/Up or a row click); it registers nothing global.
+    Item {
+      id: listKeyCatcher
+      objectName: "listKeyCatcher"
+      anchors.fill: parent
+      focus: true
+      Keys.priority: Keys.BeforeItem
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape) {
+          root.handleEscape(); event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+          root.moveCursor(event.key === Qt.Key_Down ? 1 : -1); event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Left) { root.switchPane(-1); event.accepted = true; return }
+        if (event.key === Qt.Key_Right) { root.switchPane(1); event.accepted = true; return }
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+          root.activateCursor(); event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Space) {
+          // Only reached when the search field does NOT have focus, so Space
+          // never steals a space from a search query.
+          if (root.service) root.service.togglePlay()
+          event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Slash || event.text === "/") { root.focusSearch(); event.accepted = true; return }
+        // Typing while a list is focused returns to search and keeps the character.
+        if (event.text && event.text.length === 1 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+          root.focusSearch()
+          searchField.text = searchField.text + event.text
+          searchField.cursorPosition = searchField.text.length
+          event.accepted = true
         }
       }
     }

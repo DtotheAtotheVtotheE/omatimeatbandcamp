@@ -346,3 +346,133 @@ Tests run (final):
 
 Not verified by the harness: the live shell look after `omarchy restart shell`, and that the
 owner's default browser actually opens (the harness deliberately intercepts the opener).
+
+## Phase 8: keyboard navigation + MPRIS
+
+Changed: `Panel.qml` (panel-scoped key model, list/track cursors, row click focus, shared Esc
+layering), `Service.qml` (whitelisted MPRIS state file, daemon spawn, IPC `resume`/`pause`/`seek`/`restartPlayer`),
+`backend/mpris.py` (new MPRIS D-Bus service), `mpvctl.py` (`--load-scripts=no`), `tests/qml/run.sh`
+(`OMATIME_MPRIS=0`, harness mpv cleanup, no-global-shortcut source check), `tests/qml/shell.qml`
+(25 keyboard + metadata-fence checks), `tests/test_phase8_mpris.py` (new D-Bus tests), README.
+
+### Keybind inventory (2026-10-24)
+
+- **Hyprland/Omarchy:** `hyprctl binds -j` reports **235 active binds**. Every bind whose key is
+  an arrow, Return, Space, slash or Escape carries SUPER (`modmask 64`) or ALT (`8`): e.g.
+  SUPER+arrows focus/swap/move/group windows, SUPER+SLASH monitor scaling, SUPER+SPACE Omarchy
+  menu, SUPER+ESCAPE system menu, SUPER+RETURN terminal, ALT+SPACE oma-cast. **There is no
+  unmodified global bind on any Phase 8 key**, so the panel-scoped bare keys cannot collide.
+- **Quickshell shell:** `Ui/PanelKeyCatcher.qml` is a per-panel dispatcher wrapped by
+  `Ui/KeyboardPanel.qml`; it is only active while that panel owns keyboard focus. The shell has
+  no global single-key shortcut API in use. `Ui/KeyboardPanel.qml` gives this plugin's window
+  keyboard focus only while the popup is open (Exclusive prime, then OnDemand).
+- **This plugin before Phase 8:** only the search `TextField` handled keys (`Keys.priority:
+  BeforeItem`): Esc layering (confirmation → menu → search text → close) and Up/Down/Enter while
+  the ⋯/Sort menu was open. Nothing was registered globally.
+- **Media keys:** `XF86AudioPlay/Pause/Next/Previous` are globally bound by
+  `/usr/share/omarchy/default/hypr/bindings/media.lua` to `omarchy-shell media ...`, i.e. MPRIS.
+  Exposing the player is what makes the laptop media keys work; no new bind was added.
+
+No key conflict was found, so nothing was remapped. All new handling lives in the plugin's
+`searchField` and a panel-only `listKeyCatcher` Item (`Keys.priority: Keys.BeforeItem`); no
+Hyprland `bind`, `GlobalShortcut`, or owner keybind file was touched.
+
+### Keyboard model
+
+Search owns focus on open. Down/Up from search enters the left list (album/playlist/search
+results) at the current selection or row 0; Up from search enters at the last row. Inside a list:
+
+- Up/Down move the cursor; the left list's selection follows it with a non-toggling
+  `selectAlbum`/`selectPlaylist` (clicking still deselects, per Phase 4.0).
+- Enter plays the focused album/playlist/track (or the focused search result).
+- Space toggles play/pause. Space in the search field still types a space, which is the spec's
+  "when not typing in search" case.
+- Left/Right switch between the left list and the detail track list (panel-only extension; both
+  are "the focused list").
+- `/` returns focus to search (consumed from a list; typed normally inside search).
+- Typing any printable character while a list is focused returns to search and keeps the
+  character, so navigation never traps the keyboard.
+- Esc uses the existing layering: cancel logout confirmation → close menu → clear search →
+  close window. It is now shared by both focus panes (`handleEscape()`).
+- Clicking a row also focuses its list and sets the cursor, so mouse and keyboard agree.
+
+### MPRIS
+
+Implemented, not deferred. `backend/mpris.py` is a standalone dbus-python service that owns
+`org.mpris.MediaPlayer2.omatimeatbandcamp` at `/org/mpris/MediaPlayer2`. It publishes
+`PlaybackStatus`, `Position`, `Metadata` (`xesam:title`, `xesam:artist`, `xesam:album`,
+`mpris:length`, `mpris:artUrl`), `CanPlay/Pause/Seek/GoNext/GoPrevious/Control`, and implements
+Play/Pause/PlayPause/Stop/Next/Previous/Seek/SetPosition. Controls call the plugin's existing IPC:
+`omarchy-shell omatimeatbandcamp playPause|resume|pause|next|previous|stop|seek <seconds>`.
+
+The QML side writes `~/.cache/omatimeatbandcamp/mpris-state.json` every second with an **explicit
+whitelist**: `title, artist, album, status, position, duration, updatedAt, canSeek, canPlay,
+canPause, canNext, canPrevious`. The daemon copies only those keys and ignores everything else.
+`mpris:artUrl` is built by the daemon from its `--art` argument (the local cached
+`current-art.jpg`), never from the state file, so a remote cover URL cannot enter metadata.
+
+**Security finding:** `/etc/mpv/scripts/mpris.so` (mpv-mpris) is auto-loaded into *every* mpv on
+this machine, including our headless player. mpv-mpris publishes `xesam:url` from mpv's `path`,
+which for Bandcamp is the signed stream URL with `u`/`t`/`s` parameters. It also created duplicate
+MPRIS players (14 stale harness mpv processes were owning names). `mpvctl.spawn_mpv()` now passes
+`--load-scripts=no`: our mpv loads no auto scripts, so it can never publish the stream URL, and
+only `backend/mpris.py` appears to MPRIS clients. The daemon itself never reads mpv's `path`; the
+metadata comes from the library track object. A decoy `path`/`url`/`coverArtUrl` written into the
+test state file is ignored (asserted in `tests/test_phase8_mpris.py`).
+
+`OMATIME_MPRIS=0` disables the daemon; `tests/qml/run.sh` sets it so the harness never starts a
+real player. The daemon exits if another instance owns the name, after 60 s without a state
+update (the plugin writes every second while loaded), and when its Quickshell parent dies
+(`PR_SET_PDEATHSIG`), so a shell restart does not leave an orphan holding the MPRIS name.
+
+`playerctl` is not installed on this machine, so the D-Bus test dumps the same properties with
+dbus-python on a private `dbus-daemon` session and asserts: title/artist/album match the library
+track; `mpris:artUrl` is exactly the local `file://` cover; no `path`/`url`/`coverArtUrl` key is
+published; and no non-art value contains `://`, `?`, `u=`/`t=`/`s=`, token/password/credential/salt.
+The daemon is also exercised through `PlayPause`, `Next`, `Previous`, `Pause`, `Play`, `Seek` and
+`SetPosition`, and the test asserts `--load-scripts=no` is in the spawn args.
+
+Tests run (final, raw counts):
+
+- `python3 -m unittest discover -s tests -t .`: **86 tests, OK (5 live-only skipped)**. Baseline was
+  82. Four new MPRIS tests: published metadata is clean and local; state updates are published;
+  control methods reach the plugin IPC; our mpv spawn disables the global MPRIS script.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests, OK** (unchanged).
+- `tests/qml/run.sh`: **281 checks, OK** = phase 1 (fixture) 254 + relaunch 6 + real-data smoke 16 +
+  5 script-side checks. Baseline was 255 = 229 + 6 + 16 + 4 script-side (the Phase 7 note said 3
+  script-side; the actual run.sh has four: logout deletion, phase-1 ui.json, link log, phase-2
+  ui.json). New checks cover: search focus on open; Down enters the list and selects row 0;
+  non-toggling selection; second Down/Up; Enter plays the album context; Space pauses/resumes in
+  the list; `/` returns to search; typing in a list refocuses search and keeps the character;
+  Space in search types a space and does not toggle; Esc clears then closes; track-pane focus,
+  cursor tint, Down/Up, Enter plays the focused track; and the metadata fence (title/artist/album
+  present, exact whitelist, no path/url/cover field, no URL scheme/query/credential word). One
+  script-side check scans the plugin for `GlobalShortcut`/window `Shortcut`.
+- `omarchy plugin validate .`: OK. `qmllint`: only the pre-existing unqualified-access warnings.
+- Harness mpv cleanup: `tests/qml/run.sh` now kills only processes whose IPC socket is under its
+  own `$work` dir, so harness runs no longer leave 14 idle mpv players holding MPRIS names.
+
+Not verified by the harness: the live shell after `omarchy restart shell`, the physical media
+keys, and the real Quickshell `KeyboardPanel` focus/click-outside behavior (stubbed offscreen).
+
+### Owner live check
+
+1. `omarchy restart shell`, then open the panel from `BC`.
+2. **One-time migration:** an mpv started before this update still has the global
+   `/etc/mpv/scripts/mpris.so` loaded and publishes `xesam:url` for the loaded track. On this
+   machine the pre-update player was paused mid-track, so it was left alone. After the shell
+   restart (which installs the new IPC), run
+   `omarchy-shell omatimeatbandcamp restartPlayer` (keeps the queue, resets to stopped, quits the
+   old mpv) and press Play; the next mpv is spawned with `--load-scripts=no`, and only then is the
+   old MPRIS name gone.
+3. Type a search; press Esc once (search clears), Esc again (window closes).
+4. Reopen; press Down (list focus), Down/Up (selection moves), Enter (album plays).
+5. With the list focused, press Space (pause), Space again (resume); press `/` (search focus).
+6. Click an album, then Right (track list), Down/Up, Enter.
+7. Play a track and check the media keys: Play/Pause, Next, Previous.
+8. Dump the published player without `playerctl` (not installed):
+   `busctl --user list | grep omatimeatbandcamp` and
+   `gdbus call --session --dest org.mpris.MediaPlayer2.omatimeatbandcamp --object-path /org/mpris/MediaPlayer2 --method org.freedesktop.DBus.Properties.GetAll org.mpris.MediaPlayer2.Player`.
+   Expect title/artist/album and a `file://.../current-art.jpg` art URL; no stream URL, query
+   parameters, or credentials. There should be no `org.mpris.MediaPlayer2.mpv.*` name for our
+   player (the global mpv-mpris script is disabled for it).

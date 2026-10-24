@@ -22,7 +22,12 @@ here=$(cd "$(dirname "$0")" && pwd)
 plugin=$(cd "$here/../.." && pwd)
 omarchy=${OMARCHY_PATH:-/usr/share/omarchy}
 work=$(mktemp -d "${TMPDIR:-/tmp}/omatime-qml.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+cleanup() {
+  # mpv is spawned detached; kill only this run's sockets (never the user's player).
+  pkill -f "input-ipc-server=$work/mpv-" 2>/dev/null || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 cp -r "$omarchy/shell" "$work/shell"
 cp "$here/KeyboardPanel.stub.qml" "$work/shell/Ui/KeyboardPanel.qml"
@@ -47,6 +52,7 @@ launch() {  # launch <label> <home> <phase>
   # not query or play through the live player.
   out=$(HOME="$home" HARNESS_PHASE="$phase" OMARCHY_PATH="$omarchy" QT_QPA_PLATFORM=offscreen \
     OMATIME_MPV_SOCK="$work/mpv-${phase}.sock" OMATIME_MPV_FLAGS="--ao=null" OMATIME_PLUGIN_DIR="$plugin" \
+    OMATIME_MPRIS=0 \
     OMATIME_ART_FIXTURE_DIR="$artdir" \
     OMATIME_OPEN_CMD="$work/open-recorder.sh" OMATIME_OPEN_LOG="$work/opened-${phase}.log" \
     timeout 240 quickshell -n -p "$work/shell" 2>&1 || true)
@@ -99,6 +105,15 @@ if [ -f "$work/opened-1.log" ] && [ "$(cat "$work/opened-1.log")" = "$expected_l
   echo "  PASS xdg-open was called with the six verified URLs, in order"; passes=$((passes + 1))
 else
   echo "  FAIL link opener log mismatch:"; sed 's/^/    /' "$work/opened-1.log" 2>/dev/null; fail=1
+fi
+
+# Phase 8: the keyboard is panel-scoped. No global shortcut type may appear in the
+# plugin, and no Hyprland binding is registered (the harness cannot see Hyprland;
+# the source check is the enforceable half).
+if grep -qE "GlobalShortcut|Shortcut[[:space:]]*\{" "$plugin/Panel.qml" "$plugin/Service.qml"; then
+  echo "  FAIL plugin registers a global/window Shortcut (keys must be panel-scoped)"; fail=1
+else
+  echo "  PASS no global/window shortcut API in the plugin (keys are panel-scoped)"; passes=$((passes + 1))
 fi
 
 launch "phase 2 (relaunch, same HOME)" "$home" 2

@@ -227,6 +227,7 @@ Item {
     root.loadUi()
     root.loadLibrary()
     root.scheduleBarArt()   // no track yet: write the bundled placeholder
+    root.startMpris()
   }
 
   // Effective cookie jar: an explicit settings.cookiePath wins; otherwise the
@@ -856,14 +857,89 @@ Item {
 
   Process { id: clearProc; running: false }
 
+  // ---- MPRIS ---------------------------------------------------------------
+  // The QML shell has no D-Bus server API, so backend/mpris.py publishes this
+  // playback state. The file is an explicit whitelist: title/artist/album come
+  // from the library, never from mpv, so mpv's credential-bearing `path` (the
+  // signed stream URL) cannot reach D-Bus. The daemon builds mpris:artUrl from
+  // the local cached cover only. `OMATIME_MPRIS=0` disables it (test harness).
+  readonly property string mprisStatePath: cacheDir + "/mpris-state.json"
+  readonly property bool mprisEnabled: Quickshell.env("OMATIME_MPRIS") !== "0"
+  property bool mprisStarted: false
+
+  function mprisPlaybackStatus() {
+    if (!isPlaying) return "Stopped"
+    return isPaused ? "Paused" : "Playing"
+  }
+
+  function writeMprisState() {
+    var t = currentTrack
+    var state = {
+      title: t ? String(t.title || "") : "",
+      artist: t ? String(t.artist || "") : "",
+      album: t ? String(t.album || "") : "",
+      status: mprisPlaybackStatus(),
+      position: Number(position) || 0,
+      duration: Number(duration) || 0,
+      updatedAt: Date.now(),
+      canSeek: !!t && duration > 0,
+      canPlay: !!t,
+      canPause: !!t,
+      // The plugin's Next/Prev wrap at the ends, so MPRIS keeps them enabled
+      // whenever there is a queue (media keys then behave like the footer).
+      canNext: queue.length > 0,
+      canPrevious: queue.length > 0
+    }
+    mprisFile.setText(JSON.stringify(state) + "\n")
+  }
+
+  function startMpris() {
+    if (!mprisEnabled || mprisStarted) return
+    mprisStarted = true
+    Quickshell.execDetached(["mkdir", "-p", root.cacheDir])
+    writeMprisState()
+    mprisProc.command = ["python3", root.pluginDir + "/backend/mpris.py",
+      "--state", root.mprisStatePath, "--art", root.artPath]
+    mprisProc.running = true
+    mprisTimer.start()
+  }
+
+  Timer {
+    id: mprisTimer
+    interval: 1000
+    repeat: true
+    running: false
+    onTriggered: root.writeMprisState()
+  }
+  FileView { id: mprisFile; path: root.mprisStatePath }
+  Process { id: mprisProc; running: false }
+  Process { id: quitPlayerProc; running: false }
+
+  // One-time migration helper for players spawned before --load-scripts=no.
+  // Resets the UI to stopped and asks mpv to quit; the next Play spawns a new
+  // player with the MPRIS script disabled. The queue is kept.
+  function restartPlayer() {
+    isPlaying = false
+    isPaused = false
+    position = 0
+    pendingSeek = -1
+    quitPlayerProc.command = ["python3", root.pluginDir + "/mpvctl.py", "quit"]
+    quitPlayerProc.running = true
+    return "ok"
+  }
+
   IpcHandler {
     target: "omatimeatbandcamp"
 
     function status(): string { return root.statusJson() }
     function playPause(): string { root.togglePlay(); return "ok" }
+    function resume(): string { if (!root.isPlaying || root.isPaused) root.togglePlay(); return "ok" }
+    function pause(): string { root.pause(); return "ok" }
+    function seek(seconds: string): string { root.seekTo(Number(seconds)); return "ok" }
     function next(): string { root.next(); return "ok" }
     function previous(): string { root.prev(); return "ok" }
     function stop(): string { root.stop(); return "ok" }
+    function restartPlayer(): string { return root.restartPlayer() }
     function refresh(): string { root.refresh(); return "ok" }
     function play(id: string): string { return root.playById(id) }
     function clearCookies(): string { return root.clearCookies() }
