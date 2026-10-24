@@ -58,7 +58,16 @@ ShellRoot {
         id: panel
         bar: fakeBar
         anchors.top: parent.top
-        width: 60; height: 30
+        width: 160; height: 30
+      }
+      Loader {
+        id: artWidgetLoader
+        active: true
+        source: "plug/bar-art/ArtWidget.qml"
+        onLoaded: {
+          item.bar = fakeBar
+          item.settings = ({ barArtSize: 24 })
+        }
       }
     }
   }
@@ -67,6 +76,22 @@ ShellRoot {
   property int fails: 0
   property var seen: null
   property string lastCheck: ""
+  property int artRev1: 0
+
+  Image {
+    id: artProbe
+    visible: false
+    cache: false
+    asynchronous: true
+    source: "file://" + svc.artPath + "?v=" + svc.artRevision
+  }
+
+  Process {
+    id: cmpArt
+    property bool same: false
+    command: ["cmp", "-s", svc.artPath, svc.placeholderArt]
+    onExited: function(code) { cmpArt.same = code === 0 }
+  }
   function check(name, cond) { lastCheck = name; if (!cond) fails++; log((cond ? "PASS " : "FAIL ") + name) }
   Connections { target: svc; function onRefreshingChanged() { if (svc.refreshing) { var b = host.button('Refresh'); host.seen = { enabled: b.enabled, spin: b.iconSpinning, op: b.opacity } } } }
 
@@ -114,6 +139,10 @@ ShellRoot {
   function leftList() { return named(stage, "leftList") }
   function trackList() { return named(stage, "trackList") }
   function click(item) { tc.mouseClick(item) }
+  function rightClick(item) { tc.mouseClick(item, item.width / 2, item.height / 2, Qt.RightButton) }
+  function middleClick(item) { tc.mouseClick(item, item.width / 2, item.height / 2, Qt.MiddleButton) }
+  function barButton() { return named(panel, "barButton") }
+  function comparePlaceholder() { cmpArt.same = false; cmpArt.running = true }
   function key(k) { tc.keyClick(k, Qt.NoModifier) }
   function typeText(t) { for (var i = 0; i < t.length; i++) tc.keyClick(t.charAt(i)) }
 
@@ -755,6 +784,101 @@ ShellRoot {
       svc.isPlaying = false
       svc.isPaused = false
       svc.playbackError = ""
+      svc.position = 0
+      svc.duration = 0
+    },
+
+    // ---- Phase 6: bar text suffix, clicks, album art ----
+    function() {
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      comparePlaceholder()
+    },
+    function() {
+      var b = barButton()
+      check("bar text is exactly BC when stopped (no play/pause glyph instead of BC)", !!b && b.text === "BC")
+      check("separate art module (bar-art/ArtWidget.qml) loads", artWidgetLoader.status === Loader.Ready && !!named(artWidgetLoader.item, "artImage") && artWidgetLoader.item.implicitWidth === 24)
+      check("art module displays the local current-art.jpg (no URL)", String(named(artWidgetLoader.item, "artImage").source).indexOf("current-art.jpg") >= 0)
+      check("stopped writes the bundled placeholder (byte-identical to assets/current-art-placeholder.jpg)", cmpArt.same === true)
+      check("placeholder is a valid 128x128 image (never a broken image)", artProbe.status === Image.Ready && artProbe.implicitWidth === 128 && artProbe.implicitHeight === 128)
+      svc.queue = [{ uid: "art1", title: "Art One", artist: "A", album: "X", duration: 100, streamable: true,
+                     subsonicId: "t:art1", subsonicAlbumId: "", coverArtId: "fx-a" }]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+      svc.isPaused = false
+      svc.duration = 100
+    },
+    function() {
+      var b = barButton()
+      check("playing suffix is 'BC ❚❚' (BC stays the text)", b.text === "BC \u275A\u275A")
+      check("first cover was written and downscaled to <=128 px", artProbe.status === Image.Ready && artProbe.implicitWidth <= 128 && artProbe.implicitHeight <= 128)
+      check("first cover keeps its 300x120 aspect (128x51)", artProbe.implicitWidth === 128 && artProbe.implicitHeight === 51)
+      check("playing art is not the placeholder", svc.barArtIsPlaceholder === false)
+      host.artRev1 = svc.artRevision
+      svc.isPaused = true
+    },
+    function() {
+      var b = barButton()
+      check("paused suffix is 'BC ▶' (still BC, not a bare glyph)", b.text === "BC \u25B6")
+      check("pausing keeps the current cover (no placeholder while paused)", svc.barArtIsPlaceholder === false && artProbe.implicitWidth === 128 && artProbe.implicitHeight === 51)
+      svc.isPaused = false
+      svc.queue = [{ uid: "art2", title: "Art Two", artist: "A", album: "X", duration: 100, streamable: true,
+                     subsonicId: "t:art2", subsonicAlbumId: "", coverArtId: "fx-b" }]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+    },
+    function() {
+      check("track change rewrote current-art.jpg", svc.artRevision > host.artRev1)
+      check("second cover replaced the first and was downscaled (90x260 -> 44x128)", artProbe.status === Image.Ready && artProbe.implicitWidth === 44 && artProbe.implicitHeight === 128)
+      check("track-change art is not the placeholder", svc.barArtIsPlaceholder === false)
+      check("playing suffix still 'BC ❚❚' after the track change", barButton().text === "BC \u275A\u275A")
+      svc.isPlaying = false
+      svc.isPaused = false
+    },
+    function() {
+      check("stopping restores the placeholder image (128x128)", artProbe.status === Image.Ready && artProbe.implicitWidth === 128 && artProbe.implicitHeight === 128)
+      check("stopped suffix returns to plain BC", barButton().text === "BC")
+      comparePlaceholder()
+    },
+    function() {
+      check("stopping restores the placeholder file", cmpArt.same === true && svc.barArtIsPlaceholder === true)
+      svc.queue = [
+        { uid: "c1", title: "Click One", artist: "A", album: "X", duration: 100, streamable: true, subsonicId: "t:c1", coverArtId: "fx-a" },
+        { uid: "c2", title: "Click Two", artist: "A", album: "X", duration: 100, streamable: true, subsonicId: "t:c2", coverArtId: "fx-a" }
+      ]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+      svc.isPaused = false
+    },
+    function() {
+      rightClick(barButton())
+    },
+    function() {
+      check("right-click toggles play/pause (paused)", svc.isPaused === true)
+      rightClick(barButton())
+    },
+    function() {
+      check("right-click toggles back to playing", svc.isPaused === false)
+      middleClick(barButton())
+    },
+    function() {
+      check("middle-click goes to the next track", svc.queueIndex === 1 && svc.currentTrack.uid === "c2")
+      click(barButton())
+    },
+    function() {
+      check("left-click closes the window (and toggles it open again)", !panel.opened)
+      click(barButton())
+    },
+    function() {
+      check("left-click opens the window again", panel.opened)
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
       svc.position = 0
       svc.duration = 0
     },

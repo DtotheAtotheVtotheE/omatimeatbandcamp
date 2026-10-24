@@ -21,6 +21,10 @@ Panel {
     var v = setting("showIcon", true)
     return !(v === false || v === "false" || v === 0 || v === "0")
   }
+  // The module text is always "BC"; playback state is only a suffix.
+  readonly property string barStateSuffix: (service && service.isPlaying)
+    ? (service.isPaused ? " \u25B6" : " \u275A\u275A") : ""
+  readonly property string barLabel: "BC" + barStateSuffix
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -90,8 +94,8 @@ Panel {
   }
   readonly property var menuItems: menuKind === "sort" ? sortItems : moreItems
 
-  implicitWidth: showIcon ? button.implicitWidth : 0
-  implicitHeight: showIcon ? button.implicitHeight : 0
+  implicitWidth: showIcon ? barRow.implicitWidth : 0
+  implicitHeight: showIcon ? barRow.implicitHeight : 0
 
   onOpenedChanged: {
     if (!opened) { menuKind = ""; logoutConfirmOpen = false }
@@ -243,18 +247,25 @@ Panel {
   }
 
   // ---- bar icon -----------------------------------------------------------
-  BarIconButton {
-    id: button
+  // The BC click target of record. Album art is a separate companion bar
+  // widget (bar-art/ArtWidget.qml) placed immediately to the left in shell.json.
+  Row {
+    id: barRow
     visible: root.showIcon
-    anchors.fill: parent
-    bar: root.bar
-    text: root.playing && !root.paused ? "\uf04c" : "BC"
-    tooltipText: root.tooltip
-    onPressed: function(b) {
-      if (b === Qt.MiddleButton) {
-        if (root.service) root.service.togglePlay()
-      } else {
-        root.toggle()
+
+    WidgetButton {
+      id: button
+      objectName: "barButton"
+      bar: root.bar
+      text: root.barLabel
+      fontFamily: root.fontFamily
+      fixedWidth: -1
+      tooltipText: root.tooltip
+      onPressed: function(b) {
+        if (!root.service) return
+        if (b === Qt.RightButton) root.service.togglePlay()
+        else if (b === Qt.MiddleButton) root.service.next()
+        else root.toggle()             // left: open/close the window
       }
     }
   }

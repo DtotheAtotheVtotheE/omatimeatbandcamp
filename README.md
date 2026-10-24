@@ -15,6 +15,21 @@ Bandcamp collection/playlists player with stream extraction for Omarchy.
 - `mpvFlags`: Extra mpv flags (optional; video is always disabled)
 - `autoPlayOnSelect`: Auto-play on track selection (reserved)
 
+## Bar art module
+
+Omarchy's current shell is Quickshell, not Waybar, so the art is a companion bar
+widget instead of a Waybar `image` module. Its source lives in `bar-art/`; install
+it as a sibling plugin and put its id immediately before the BC id in
+`~/.config/omarchy/shell.json`:
+
+```sh
+ln -s ~/.config/omarchy/plugins/com.github.dtotheatothevtothee.omatimeatbandcamp/bar-art \
+      ~/.config/omarchy/plugins/com.github.dtotheatothevtothee.omatimeatbandcamp-art
+```
+
+The main plugin still emits `RTMIN+8` after every art write for a legacy Waybar
+`image` module; Quickshell updates through its file watcher.
+
 ## Credentials & privacy
 
 There are no usernames, passwords, or API tokens in this plugin. Authentication is
@@ -35,9 +50,12 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 ## Usage
 
-- Click the bar icon to open the panel (toggle from anywhere with
+- Left-click the bar item to open/close the panel (toggle from anywhere with
   `omarchy-shell shell toggle com.github.dtotheatothevtothee.omatimeatbandcamp`).
-- Middle-click the bar icon to play/pause.
+- Right-click the bar item to play/pause; middle-click goes to the next track.
+- The module text is always `BC`. Playback state is only a suffix: `BC ❚❚` playing,
+  `BC ▶` paused, plain `BC` stopped.
+- The album-art module sits immediately left of `BC` and follows the current track.
 - Panel has tabs for Collection and Playlists, a search box, and a now-playing bar.
 
 ## Features
@@ -56,6 +74,9 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   text, and a visible notice plus automatic skip when a stream fails
 - Refresh runs the backend sync in the background (cached library stays on screen); streams for Subsonic tracks
   are resolved by the backend (`backend play`), so stream URLs/credentials never appear in argv or logs
+- Bar art: `backend art` fetches the current Subsonic cover, downscales it to <=128 px and writes
+  `~/.cache/omatimeatbandcamp/current-art.jpg`; when stopped it writes the bundled BC placeholder.
+  No cover URL ever reaches QML, the bar config or a log
 
 ## Data sources
 
@@ -63,6 +84,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   (web collection feed via your browser session + Subsonic `getAlbumList2`/`getAlbum`/`getPlaylist`)
 - Subsonic credentials: `~/.config/omatimeatbandcamp/credentials.toml` (`user`, `pass`)
 - Browser session: imported by `cookies.py` (gitignored) into `~/.cache/omatimeatbandcamp/cookies.txt`
+- Bar art: `~/.cache/omatimeatbandcamp/current-art.jpg` (local copy only; source is Subsonic `getCoverArt`)
 - `fetch.py` (the v1 scraper) is no longer used by the UI
 
 ## IPC
@@ -88,7 +110,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   never pads or substitutes tracks.
 - `backend/match.py`: matches the web collection to Subsonic by normalised artist+title, and single-track purchases via their parent album.
 - `backend/library.py`: local cache (`~/.cache/omatimeatbandcamp/library/`) plus background, incremental sync.
-  CLI: `python3 backend sync | status | summary`.
+  CLI: `python3 backend sync | status | summary | art`.
 - Tests: `python3 -m unittest discover -s tests -t .` (offline); `tests/qml/run.sh` (QML window interaction tests, offscreen); `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures` (real services).
 - Measurements and findings: `spike/SUBSONIC-REPORT.md`.
 

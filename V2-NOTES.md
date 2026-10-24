@@ -231,3 +231,62 @@ Tests run:
 - `omarchy plugin validate .`: OK. `qmllint`: only the pre-existing `Service.qml environment:` type warning.
 
 Not verified by the harness: the real `KeyboardPanel` and live-shell look. Run `omarchy restart shell`.
+
+## Phase 6: Waybar module (BC suffix, clicks, album art)
+
+Changed: `Panel.qml` (bar text/click targets), `Service.qml` (art jobs + RTMIN signal),
+`backend/art.py` + `backend/__main__.py` (`art` command), `LibraryModel.js` (cover/subsonic
+album ids), `bar-art/` (separate companion bar widget), `assets/current-art-placeholder.jpg`,
+`tests/test_phase6_art.py`, `tests/qml/`, README.
+
+Done per spec: 1 the module text is always `BC`; state is only a suffix — `BC ❚❚` playing,
+`BC ▶` paused, plain `BC` stopped. It never becomes a bare play/pause glyph. 2 left-click
+opens/closes the window, right-click toggles play/pause, middle-click goes to the next track
+(the optional middle-click is implemented). 3 album art is a separate bar widget placed
+immediately left of `BC`; on every track change the backend writes
+`~/.cache/omatimeatbandcamp/current-art.jpg`, downscaled to <=128 px, and the service emits
+`RTMIN+8`; stopping writes the bundled BC placeholder. A missing/partial file falls back to
+the placeholder, so the bar never paints a broken image.
+
+Where the environment/code forced a decision (flagging because the spec says Waybar):
+
+1. **This machine has no Waybar.** Omarchy's bar is Quickshell; there is no
+   `~/.config/waybar/`, no `image` module type, and no module signal numbers to inspect.
+   The equivalent is a second bar widget (`bar-art/ArtWidget.qml`), installed as the sibling
+   plugin `com.github.dtotheatothevtothee.omatimeatbandcamp-art` (a symlink to `bar-art/` so
+   the source stays in git) and inserted immediately before the BC entry in
+   `~/.config/omarchy/shell.json`. That config file is outside the repo and was backed up to
+   `shell.json.bak-2026-10-23` before editing. Quickshell updates through `FileView` watching
+   the local file; a 900 ms retry keeps the placeholder up if the file is not written yet.
+   `RTMIN+8` is still emitted (`pkill -RTMIN+8 waybar`) for a legacy Waybar image module, but
+   nothing on this machine consumes it. No existing config used any RTMIN signal.
+2. **Art source.** The library is hybrid: tracks carry `subsonic_album_id`, albums carry
+   `cover_art_id`. `Service.coverArtIdFor()` uses a track's own cover id, else the album's
+   cover id by Subsonic album id, else album+artist. Web-only/pre-order tracks have no cover
+   id and get the placeholder (they are unplayable anyway).
+3. **Downscaling uses ImageMagick.** Pillow is not installed. `backend/art.py` fetches through
+   the authenticated Subsonic client and runs `convert ... -resize '128x128>'` (shrink-only).
+   The raw URL is local to the backend function; neither the CLI nor QML ever sees it.
+4. **Always-valid file.** A fetch/scale failure still writes the bundled placeholder and
+   returns `{ok:false, placeholder:true}`; the UI never shows a broken image.
+5. **Test seam.** `OMATIME_ART_FIXTURE_DIR` maps a cover id to `<dir>/<id>.jpg` so the QML
+   harness exercises the real downscale path offline; it is only set by `tests/qml/run.sh`.
+
+Tests run (final):
+
+- `python3 -m unittest discover -s tests -t .`: **82 tests, OK (5 live-only skipped)** — baseline
+  was 76. Six new tests pin: placeholder is a valid 128x128 private JPEG; downscale shrinks but
+  never enlarges; a track change replaces the bytes; fetch uses the client URL internally; a
+  fetch failure message contains no URL/token/salt; the CLI prints only local paths.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests, OK** (unchanged).
+- `tests/qml/run.sh`: **242 checks, OK** = phase 1 (fixture) 218 + relaunch 6 + real-data smoke
+  15 + 3 script-side checks. Baseline was 219. The 23 new checks cover: stopped/playing/paused
+  suffix text, the separate art module loading and showing the local file, placeholder written
+  byte-identically on stop, first cover 300x120 -> 128x51, pause keeps the cover, a track change
+  replaces it with 90x260 -> 44x128, stop restores 128x128, right-click play/pause, middle-click
+  next, left-click open/close.
+- `omarchy plugin validate .` and `omarchy plugin validate bar-art`: OK. `qmllint`: only the
+  pre-existing import/unqualified warnings (no new errors).
+
+Not verified by the harness: the real shell bar after `omarchy restart shell`, and the legacy
+Waybar `image` module (Waybar is not installed here).

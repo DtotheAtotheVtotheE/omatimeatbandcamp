@@ -63,6 +63,8 @@ function adaptTrack(t, base, i) {
     streamable: t.streamable === true,
     reason: t.streamable_reason || "",
     subsonicId: t.subsonic_id || "",
+    subsonicAlbumId: t.subsonic_album_id || "",
+    coverArtId: t.cover_art_id || "",
     bandcampId: t.bandcamp_id || ""
   }
 }
@@ -85,6 +87,8 @@ function adaptAlbum(a) {
     kind: a.kind || "album",
     title: a.title || "",
     artist: a.artist || "",
+    subsonicId: a.subsonic_id || "",
+    coverArtId: a.cover_art_id || "",
     tracks: tracks,
     tracksLoaded: a.tracks_loaded === true,
     isPreorder: a.is_preorder === true,

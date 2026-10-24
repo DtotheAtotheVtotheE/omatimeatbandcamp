@@ -38,6 +38,7 @@ launch() {  # launch <label> <home> <phase>
   # not query or play through the live player.
   out=$(HOME="$home" HARNESS_PHASE="$phase" OMARCHY_PATH="$omarchy" QT_QPA_PLATFORM=offscreen \
     OMATIME_MPV_SOCK="$work/mpv-${phase}.sock" OMATIME_MPV_FLAGS="--ao=null" OMATIME_PLUGIN_DIR="$plugin" \
+    OMATIME_ART_FIXTURE_DIR="$artdir" \
     timeout 240 quickshell -n -p "$work/shell" 2>&1 || true)
   echo "== $label"
   echo "$out" | grep -E "HARNESS|ERROR" | sed -E 's/\x1b\[[0-9;]*m//g; s/^.*HARNESS /  /'
@@ -52,6 +53,14 @@ home="$work/home"
 mkdir -p "$home/.cache/omatimeatbandcamp/library"
 cp "$here/fixtures/library.json" "$home/.cache/omatimeatbandcamp/library/library.json"
 echo "DECOY-NOT-A-REAL-COOKIE" > "$home/.cache/omatimeatbandcamp/cookies.txt"
+
+# Phase 6 art fixtures: two clearly different shapes/colours so a replacement is measurable.
+# The service maps cover ids to <dir>/<id>.jpg when OMATIME_ART_FIXTURE_DIR is set, so the
+# harness exercises the real backend downscale path without any network or credentials.
+artdir="$work/art"
+mkdir -p "$artdir"
+convert -size 300x120 xc:'#c33' "$artdir/fx-a.jpg" 2>/dev/null
+convert -size 90x260 xc:'#3c3' "$artdir/fx-b.jpg" 2>/dev/null
 
 launch "phase 1 (fixture library)" "$home" 1
 if [ -e "$home/.cache/omatimeatbandcamp/cookies.txt" ]; then

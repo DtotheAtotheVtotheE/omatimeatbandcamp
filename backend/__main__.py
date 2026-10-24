@@ -8,6 +8,11 @@
                                         not in mpv's media-title)
     status                              print status.json (idle|running|done|error)
     summary                             print counts from the cached library (no network)
+    art [cover-id] [--out FILE] [--placeholder] [--from-file IMAGE]
+                                        write the bar's current-art.jpg: fetch a Subsonic cover
+                                        and downscale it to <=128 px, copy the bundled
+                                        placeholder, or import a local image (harness/offline).
+                                        Prints only {ok, path, placeholder}; never a URL.
 """
 import argparse
 import json
@@ -59,6 +64,38 @@ def play(track_id, title=""):
     return 0 if out["ok"] else 1
 
 
+def art(cover_id="", out="", placeholder=False, from_file=""):
+    """Write the bar art file. The file is always valid: on any fetch/scale
+    failure it falls back to the bundled placeholder. Output never contains a
+    cover-art URL, token or credential."""
+    from backend import art as artmod
+    dest = os.path.expanduser(out) if out else artmod.art_path()
+    used_placeholder = False
+    ok = True
+    error = ""
+    try:
+        if placeholder or (not cover_id and not from_file):
+            artmod.write_placeholder(dest)
+            used_placeholder = True
+        elif from_file:
+            artmod.write_from_file(os.path.expanduser(from_file), dest)
+        else:
+            artmod.write_cover(cover_id, dest)
+    except Exception as e:  # noqa: BLE001 - the bar must still have a valid image
+        ok = False
+        error = "cover art unavailable"
+        try:
+            artmod.write_placeholder(dest)
+            used_placeholder = True
+        except Exception:
+            pass
+        # Keep the reason local: never echo a URL or the raw urllib error.
+        if isinstance(e, RuntimeError):
+            error = str(e)
+    print(json.dumps({"ok": ok, "path": dest, "placeholder": used_placeholder, "error": error}))
+    return 0 if ok else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="backend")
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -73,9 +110,16 @@ def main(argv=None):
     pl.add_argument("--title", default="")
     sp.add_parser("status")
     sp.add_parser("summary")
+    ar = sp.add_parser("art")
+    ar.add_argument("cover_id", nargs="?", default="")
+    ar.add_argument("--out", default="")
+    ar.add_argument("--placeholder", action="store_true")
+    ar.add_argument("--from-file", default="")
     args = ap.parse_args(argv)
     if args.cmd == "play":
         return play(args.track_id, args.title)
+    if args.cmd == "art":
+        return art(args.cover_id, args.out, args.placeholder, args.from_file)
     lib = Library()
     if args.cmd == "status":
         print(json.dumps(lib.status()))

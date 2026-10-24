@@ -37,6 +37,20 @@ Item {
   readonly property string cacheDir: home + "/.cache/omatimeatbandcamp"
   readonly property string shellConfigPath: home + "/.config/omarchy/shell.json"
 
+  // ---- bar album art ------------------------------------------------------
+  // The bar's art widget only reads this one small local JPEG. The backend
+  // fetches/downscales it (cover URLs embed credentials, so they never leave
+  // the backend process) and writes the bundled placeholder when stopped.
+  readonly property string artPath: cacheDir + "/current-art.jpg"
+  readonly property string placeholderArt: pluginDir + "/assets/current-art-placeholder.jpg"
+  // Harness/offline override: cover ids map to <dir>/<id>.jpg instead of the network.
+  readonly property string artFixtureDir: Quickshell.env("OMATIME_ART_FIXTURE_DIR") || ""
+  readonly property string waybarArtSignal: "RTMIN+8"
+  property int artRevision: 0
+  property bool barArtIsPlaceholder: true
+  property var artJob: null
+  property int artJobSeq: 0
+
   // Path to the Netscape cookies.txt used for authenticated requests. When the
   // user has not set a manual cookiePath, refresh() exports it from the browser.
   property string cookiePath: cacheDir + "/cookies.txt"
@@ -191,6 +205,7 @@ Item {
     root.loadSettings()
     root.loadUi()
     root.loadLibrary()
+    root.scheduleBarArt()   // no track yet: write the bundled placeholder
   }
 
   // Effective cookie jar: an explicit settings.cookiePath wins; otherwise the
@@ -323,6 +338,92 @@ Item {
   readonly property var currentTrack: (queueIndex >= 0 && queueIndex < queue.length) ? queue[queueIndex] : null
 
   readonly property string playIcon: isPlaying && !isPaused ? "\u23F8" : "\u25B6"
+
+  // ---- bar art ------------------------------------------------------------
+  // Resolve a track to an album cover id. Tracks carry the Subsonic album id;
+  // the cover id lives on the album (and on newer cached tracks directly).
+  function coverArtIdFor(track) {
+    if (!track) return ""
+    if (track.coverArtId) return String(track.coverArtId)
+    var aid = String(track.subsonicAlbumId || "")
+    var i
+    if (aid !== "") {
+      for (i = 0; i < collection.length; i++) {
+        if (String(collection[i].subsonicId || "") === aid) return String(collection[i].coverArtId || "")
+      }
+    }
+    for (i = 0; i < collection.length; i++) {
+      var a = collection[i]
+      if (a.title === track.album && a.artist === track.artist && a.coverArtId) return String(a.coverArtId)
+    }
+    return ""
+  }
+
+  // Coalesce the several property changes one track load makes into one job.
+  function scheduleBarArt() { artDebounce.restart() }
+
+  function updateBarArt() {
+    var t = currentTrack
+    var active = !!t && (isPlaying || isPaused)
+    if (!active) { queueArtJob({ placeholder: true }); return }
+    var cover = coverArtIdFor(t)
+    if (cover === "") { queueArtJob({ placeholder: true }); return }
+    if (artFixtureDir !== "") { queueArtJob({ fromFile: artFixtureDir + "/" + cover + ".jpg" }); return }
+    queueArtJob({ cover: cover })
+  }
+
+  function queueArtJob(job) {
+    artJob = job
+    if (!artProc.running) runArtJob()
+  }
+
+  function runArtJob() {
+    var job = artJob
+    if (!job) return
+    artJob = null
+    artJobSeq += 1
+    var cmd = ["python3", root.pluginDir + "/backend", "art", "--out", root.artPath]
+    if (job.placeholder) cmd.push("--placeholder")
+    else if (job.fromFile) { cmd.push("--from-file", String(job.fromFile)) }
+    else cmd.push(String(job.cover))
+    artProc.job = job
+    artProc.req = artJobSeq
+    artProc.command = cmd
+    artProc.running = true
+  }
+
+  function signalBarArt() {
+    // Omarchy's Quickshell bar watches the file; this RTMIN signal keeps a
+    // legacy Waybar image module in sync too. No Waybar config is assumed.
+    artSignalProc.running = false
+    artSignalProc.running = true
+  }
+
+  onCurrentTrackChanged: scheduleBarArt()
+  onIsPlayingChanged: scheduleBarArt()
+  onIsPausedChanged: scheduleBarArt()
+
+  Timer { id: artDebounce; interval: 80; onTriggered: root.updateBarArt() }
+
+  Process {
+    id: artProc
+    running: false
+    property var job: null
+    property int req: 0
+    stdout: StdioCollector { id: artOut; waitForEnd: true }
+    stderr: StdioCollector { id: artErr; waitForEnd: true }
+    onExited: function(code) {
+      if (artProc.req !== root.artJobSeq) return
+      var d = {}
+      try { d = JSON.parse(artOut.text || "{}") } catch (e) {}
+      root.barArtIsPlaceholder = d.placeholder === true || (artProc.job && artProc.job.placeholder === true)
+      root.artRevision += 1
+      root.signalBarArt()
+      if (root.artJob) root.runArtJob()
+    }
+  }
+
+  Process { id: artSignalProc; running: false; command: ["pkill", "-" + root.waybarArtSignal, "waybar"] }
 
   function trackSignature(t) {
     if (!t) return ""
