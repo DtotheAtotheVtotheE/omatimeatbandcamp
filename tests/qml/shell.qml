@@ -84,6 +84,7 @@ ShellRoot {
     function() { panel.open() },
     function() {
       check("panel opened", panel.opened)
+      log("library as the plugin loaded it from the cache: " + button("Albums (" + svc.collection.length + ")").text + " / Playlists (" + svc.playlists.length + ")")
       check("search field has focus on open", searchField().activeFocus)
       check("no close (X) button anywhere", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\u2715" }))
       check("no clear-session icon in header", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uF08B" && it.visible }))
