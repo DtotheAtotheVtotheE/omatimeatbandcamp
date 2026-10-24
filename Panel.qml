@@ -77,6 +77,12 @@ Panel {
   // It is the detail pane's existing theme-accent border, now shared by all three.
   readonly property var paneBorderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
 
+  // v3.1: one control height for every named control (search field, gear,
+  // Collection, Albums/Playlists/Sort and the four footer transport buttons).
+  // The token is BcButton's existing height, so the buttons and the field
+  // cannot drift apart.
+  readonly property int controlHeight: Style.spacing.controlHeight
+
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
   // Refresh and the Hide pre-orders filter live here in v3, not in the toolbar.
@@ -420,65 +426,55 @@ Panel {
       spacing: Style.spacing.sm
 
       // header ---------------------------------------------------------------
+      // v3.1: the title is the only thing in this row. The gear moved down to
+      // the search row, and the title is one step larger (about +2 pt).
       Item {
+        id: headerRow
+        objectName: "headerRow"
         width: parent.width
-        height: Style.spacing.controlHeight
+        height: root.controlHeight
 
         Text {
+          objectName: "headerTitle"
           textFormat: Text.PlainText
           text: "OmaTimeAtBandCamp"
           color: root.foreground
           font.family: root.fontFamily
-          font.pixelSize: Style.font.subtitle
+          font.pixelSize: Style.font.subtitle + 2
           font.bold: true
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
         }
-
-        // The only header control. Close is Esc / click outside; Refresh,
-        // Hide pre-orders and logout live in this gear menu.
-        BcButton {
-          id: menuButton
-          objectName: "settingsButton"
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          iconText: "\uf013"
-          tooltipText: "Settings"
-          active: root.menuOpen
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          onClicked: root.toggleMenu()
-        }
       }
 
       // search ---------------------------------------------------------------
-      // Magnifier, shortened field, then the single Collection link (v3).
+      // v3.1, left to right: the flexible search field (the magnifier now sits
+      // inside its right end), Collection, then the gear/settings button.
       Item {
         width: parent.width
-        height: Style.spacing.controlHeight
+        height: root.controlHeight
 
         Row {
           id: searchRow
+          objectName: "searchRow"
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          height: Style.spacing.controlHeight
+          height: root.controlHeight
           spacing: Style.spacing.sm
-
-          Text {
-            id: searchIcon
-            objectName: "searchIcon"
-            textFormat: Text.PlainText
-            text: "\uf002"
-            color: Qt.darker(root.foreground, 1.3)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            anchors.verticalCenter: parent.verticalCenter
-          }
 
           TextField {
             id: searchField
-            width: Math.max(0, searchRow.width - searchIcon.width - collectionButton.width - searchRow.spacing * 2)
+            objectName: "searchField"
+            // Roughly half the row, flexible with the window and never below
+            // that; Collection and the gear follow it, in that order.
+            width: Math.round(searchRow.width * 0.5)
+            height: root.controlHeight
+            // A little less vertical padding than the stock 30 px field: the
+            // text still fits (asserted by the harness) at the shared 28 px.
+            verticalPadding: Style.spacing.sm
+            // Leave room inside the right edge for the magnifier glyph.
+            rightPadding: horizontalPadding + Style.space(16) + Style.spacing.sm
             anchors.verticalCenter: parent.verticalCenter
             placeholderText: "Search albums, playlists, tracks…"
             foreground: root.foreground
@@ -486,6 +482,23 @@ Panel {
             onTextChanged: {
               if (root.service) root.service.search(text)
               root.listCursor = -1
+            }
+
+            // Dimmed magnifier INSIDE the field, at its right end, the same size
+            // as the footer transport glyphs. It is a plain Text with no input
+            // handlers and enabled: false, so it can never take a click or block
+            // typing; rightPadding above keeps entered text out from under it.
+            Text {
+              objectName: "searchMagnifier"
+              textFormat: Text.PlainText
+              text: "\uf002"
+              color: Qt.darker(root.foreground, 1.3)
+              font.family: root.fontFamily
+              font.pixelSize: Style.space(16)
+              enabled: false
+              anchors.right: parent.right
+              anchors.rightMargin: Style.spacing.controlPaddingX
+              anchors.verticalCenter: parent.verticalCenter
             }
 
             // The search field owns keyboard focus for the whole window, so the
@@ -523,6 +536,7 @@ Panel {
             id: collectionButton
             objectName: "link-collection"
             text: "Collection"
+            height: root.controlHeight
             enabled: root.collectionUrl !== ""
             tooltipText: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet"
             foreground: root.foreground
@@ -530,13 +544,28 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             onClicked: if (root.service) root.service.openExternal(root.collectionUrl)
           }
+
+          // v3.1: the gear/settings button now lives in the search row. Its menu
+          // entries and behaviour are unchanged.
+          BcButton {
+            id: menuButton
+            objectName: "settingsButton"
+            iconText: "\uf013"
+            height: root.controlHeight
+            tooltipText: "Settings"
+            active: root.menuOpen
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            anchors.verticalCenter: parent.verticalCenter
+            onClicked: root.toggleMenu()
+          }
         }
       }
 
       // toolbar --------------------------------------------------------------
       Item {
         width: parent.width
-        height: Style.spacing.controlHeight
+        height: root.controlHeight
 
         Row {
           id: toolbarLeft
@@ -546,6 +575,7 @@ Panel {
 
           BcButton {
             text: "Albums (" + root.albums.length + ")"
+            height: root.controlHeight
             selected: (root.service ? root.service.activeTab : 0) === 0
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -554,6 +584,7 @@ Panel {
 
           BcButton {
             text: "Playlists (" + root.playlists.length + ")"
+            height: root.controlHeight
             selected: (root.service ? root.service.activeTab : 0) === 1
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -565,6 +596,7 @@ Panel {
           BcButton {
             id: sortButton
             visible: !root.service || root.service.activeTab === 0
+            height: root.controlHeight
             text: "Sort: " + LibraryModel.sortLabel(root.service ? root.service.sortMode : "added")
             iconText: "\uf0d7"
             active: root.menuKind === "sort"
@@ -1076,7 +1108,15 @@ Panel {
         id: footer
         objectName: "footer"
         width: parent.width
-        height: Style.space(84)
+        // v3.1: the blank band between the now-playing text and the progress
+        // bar is halved. The footer's v3 inner height (84 - 2*5) left
+        // 54 - nowPlaying.height between them; half of that is used here, so
+        // the popup is shorter by the saving in every now-playing state and
+        // the two-line case still has positive space (nothing is clipped).
+        readonly property real footerGap: Math.max(0,
+          (Style.space(54) - nowPlaying.implicitHeight) / 2)
+        height: Math.round(Style.space(5) + nowPlaying.implicitHeight + footerGap
+          + progressRow.height + Style.space(5))
         radius: Style.cornerRadius
         color: Style.normalFillFor(root.foreground, Color.accent)
         // v3: the album list, detail pane and footer share one border colour.
@@ -1154,11 +1194,27 @@ Panel {
               id: footerShuffle
               objectName: "footerShuffle"
               iconText: "\uf074"
+              height: root.controlHeight
               tooltipText: "Shuffle: " + (root.shuffleOn ? "On" : "Off")
               selected: root.shuffleOn
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
+
+              // v3.1: a tiny dot centred under the glyph marks this context's
+              // Shuffle as On. It lives in the button's bottom padding, so the
+              // button's height/layout never change.
+              Rectangle {
+                objectName: "shuffleDot"
+                visible: root.shuffleOn
+                width: Style.space(4)
+                height: width
+                radius: width / 2
+                color: Color.accent
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(2)
+              }
             }
 
             // Nerd Font glyphs (PUA range) so the icons stay monochrome and
@@ -1167,6 +1223,7 @@ Panel {
             BcButton {
               objectName: "footerPrev"
               iconText: "\uf048"
+              height: root.controlHeight
               tooltipText: "Previous"
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -1179,6 +1236,7 @@ Panel {
               id: footerPlay
               objectName: "footerPlay"
               iconText: root.playing && !root.paused ? "\uf04c" : "\uf04b"
+              height: root.controlHeight
               tooltipText: root.playing && !root.paused ? "Pause" : "Play"
               active: root.playing && !root.paused
               foreground: root.foreground
@@ -1193,6 +1251,7 @@ Panel {
             BcButton {
               objectName: "footerNext"
               iconText: "\uf051"
+              height: root.controlHeight
               tooltipText: "Next"
               foreground: root.foreground
               fontFamily: root.fontFamily

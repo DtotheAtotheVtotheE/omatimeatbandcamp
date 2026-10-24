@@ -48,8 +48,9 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Right-click the bar item to play/pause; middle-click goes to the next track.
 - The module text is always plain `BC`; there is no playback suffix and no separate
   album-art bar widget (v3).
-- The search row has a magnifier, the search field and one Collection link built from
-  the username in the library cache (`xdg-open`). It is disabled until the username is known.
+- The search row has the flexible search field (with a dimmed magnifier inside its
+  right end), the single Collection link built from the username in the library cache
+  (`xdg-open`; disabled until the username is known), and the gear button.
 - The gear menu holds Refresh library, Hide pre-orders (checkable, remembered) and
   Log out / Clear Bandcamp session (with confirmation).
 - Panel has tabs for Albums and Playlists, a search box, and a now-playing bar.
@@ -78,12 +79,13 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Sort (Recently added, Artist A–Z, Title A–Z, Release date) from the toolbar and a Hide pre-orders
   filter in the gear menu; both are remembered (`~/.local/state/omatimeatbandcamp/ui.json`)
 - Shuffle: one On/Off icon in the footer transport, remembered per context (each album, each playlist,
-  search results, whole library); click the selected row again to deselect it and get back to the
-  whole-library context
+  search results, whole library), with a small dot under the glyph while the current context is On;
+  click the selected row again to deselect it and get back to the whole-library context
 - Footer: Shuffle / Prev / Play-Pause / Next (no Stop), right-justified, a seekable progress bar with
-  elapsed/total time, two-line now-playing text, and a visible notice plus automatic skip when a
-  stream fails. Track rows select on single-click and play on double-click; Enter and the footer
-  also start playback. The detail header has no Play button (v3).
+  elapsed/total time, compact spacing between the now-playing text and the bar, two-line now-playing
+  text, and a visible notice plus automatic skip when a stream fails. Track rows select on single-click
+  and play on double-click; Enter and the footer also start playback. The detail header has no Play
+  button (v3).
 - Refresh runs the backend sync in the background from the gear menu (cached library stays on screen);
   streams for Subsonic tracks are resolved by the backend (`backend play`), so stream URLs/credentials
   never appear in argv or logs

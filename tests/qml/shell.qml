@@ -23,6 +23,10 @@ ShellRoot {
   readonly property string longTrack: "An Extremely Long Track Title That Has To Wrap Across Several Lines Of The Track List Instead Of Being Cut Off In The Middle Of A Word By A Single Line Truncation"
   readonly property string croc: "Crocbrain, or, Two Big Steps For Mankind"
   readonly property string fi: "First Impressions (Deluxe Edition)"
+  // Measured in this harness on the v3 build (commit 68b90f8) with the long
+  // now-playing fixture: footer 84 px, popup content height 612 px. v3.1 must
+  // stay under this and under the 660 px cap.
+  readonly property real v3PopupHeight: 612
 
   Plug.Service { id: svc }
 
@@ -139,8 +143,21 @@ ShellRoot {
     return out
   }
   function shuffleButton() { return shuffleButtons()[0] }
+  function shuffleDot() { return named(named(stage, "footerShuffle"), "shuffleDot") }
   function settingsButton() { return named(stage, "settingsButton") }
   function collectionButton() { return named(stage, "link-collection") }
+  function searchMagnifier() { return named(stage, "searchMagnifier") }
+  function keyboardPanel() { return find(stage, function(it) { return typeof it.fittedContentHeight === "function" }) }
+  function isInside(item, ancestor) {
+    if (!item || !ancestor) return false
+    for (var p = item; p; p = p.parent) if (p === ancestor) return true
+    return false
+  }
+  function clickMagnifier() {
+    var m = searchMagnifier()
+    var pt = m.mapToItem(stage, m.width / 2, m.height / 2)
+    tc.mouseClick(stage, pt.x, pt.y)
+  }
   function doubleClick(item) { tc.mouseDoubleClickSequence(item, item.width / 2, item.height / 2, Qt.LeftButton) }
   // v3: Refresh and Hide pre-orders live in the gear menu. Open it, then click the entry.
   // Open the gear menu. The offscreen harness sometimes swallows the first click
@@ -238,12 +255,59 @@ ShellRoot {
       check("search field has focus on open", searchField().activeFocus)
       check("no close (X) button anywhere", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\u2715" }))
       check("no clear-session icon in header", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uF08B" && it.visible }))
-      check("header has a gear (settings) button, not the old ⋯ overflow", !!settingsButton() && settingsButton().iconText === "\uf013" && settingsButton().tooltipText === "Settings" && !button("\uf141"))
+      check("header row contains ONLY the title (the gear is no longer in it)", !!named(stage, "headerTitle") && named(stage, "headerTitle").text === "OmaTimeAtBandCamp" && allButtons(named(stage, "headerRow"), []).length === 0)
+      check("v3.1: title font is one step larger (+2 pt over the v3 subtitle size)", named(stage, "headerTitle").font.pixelSize === Style.font.subtitle + 2)
+      check("gear (settings) button still exists, with its menu, and now lives in the search row",
+        !!settingsButton() && settingsButton().iconText === "\uf013" && settingsButton().tooltipText === "Settings" &&
+        isInside(settingsButton(), named(stage, "searchRow")) && !button("\uf141"))
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
-      check("search row has a magnifying-glass icon", named(stage, "searchIcon").text === "\uf002")
+      check("v3.1: the old left-hand search icon is gone", !named(stage, "searchIcon"))
       check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
       check("Collection is the only link button", !!collectionButton() && collectionButton().text === "Collection" && ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"].every(function(l) { return !button(l) }))
       check("the old links row is gone", !named(stage, "linksRow"))
+    },
+    function() {
+      var sf = searchField(), cb = collectionButton(), gear = settingsButton(), row = named(stage, "searchRow")
+      var s = sf.mapToItem(stage, 0, 0), c = cb.mapToItem(stage, 0, 0), g = gear.mapToItem(stage, 0, 0)
+      log("v3.1 search row width=" + row.width + " field=" + sf.width)
+      check("v3.1: search row order is field → Collection → gear, all vertically centred",
+        s.x < c.x && c.x < g.x && Math.abs(c.y - s.y) <= 2 && Math.abs(g.y - s.y) <= 2)
+      check("v3.1: the search field is flexible and at least half the row", sf.width >= row.width * 0.5 - 1 && sf.width < row.width)
+      check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
+      var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
+      check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
+        Math.abs(s.x - lp.x) <= 1 && Math.abs(s.x - tb.x) <= 1)
+      var m = searchMagnifier(), ms = m.mapToItem(stage, 0, 0)
+      check("v3.1: magnifier is INSIDE the field at its right end",
+        isInside(m, sf) && ms.x > s.x + sf.width * 0.5 && ms.x + m.width <= s.x + sf.width && ms.x >= s.x + sf.width - 40)
+      check("v3.1: magnifier glyph is the footer transport glyph size", m.font.pixelSize === named(stage, "footerPrev").iconSize && m.font.pixelSize === Style.space(16))
+      check("v3.1: magnifier is dimmed and non-interactive (plain disabled Text, no input handlers)",
+        m.color.hslLightness < panel.foreground.hslLightness && m.enabled === false &&
+        !find(m, function(it) { return it.hasOwnProperty("containsMouse") || it.hasOwnProperty("acceptedButtons") }))
+      var controls = [sf, gear, cb, button("Albums (" + svc.albumsView.length + ")"), button("Playlists (" + svc.playlists.length + ")"), sortButton(),
+        named(stage, "footerShuffle"), named(stage, "footerPrev"), named(stage, "footerPlay"), named(stage, "footerNext")]
+      var ch = {}
+      for (var i = 0; i < controls.length; i++) ch[Math.round(controls[i].height)] = 1
+      log("v3.1 named control heights=" + Object.keys(ch))
+      check("v3.1: search field, gear, Collection, Albums (N), Playlists (N), Sort and the four footer transport buttons share ONE measured height",
+        controls.every(function(x) { return !!x }) && Object.keys(ch).length === 1 && Object.keys(ch)[0] == Style.spacing.controlHeight)
+    },
+    function() {
+      // Prove the in-field glyph cannot take input: click it while the list owns
+      // focus, then type. The field must focus and receive the character.
+      searchField().text = ""; svc.search("")
+      named(stage, "listKeyCatcher").forceActiveFocus()
+      clickMagnifier()
+    },
+    function() {
+      check("v3.1: clicking the magnifier focuses the field (it does not block clicks)", searchField().activeFocus)
+      typeText("q")
+    },
+    function() {
+      check("v3.1: typing after a magnifier click reaches the field (it does not block text entry)", svc.searchQuery === "q")
+      searchField().text = ""; svc.search("")
+      panel.focusPane = ""
+      searchField().forceActiveFocus()
     },
     function() {
       var bs = allButtons(stage, [])
@@ -270,7 +334,7 @@ ShellRoot {
     function() { check("second Esc closes", !panel.opened); panel.open() },
     function() { click(settingsButton()) },
     function() {
-      check("gear menu opens", panel.menuOpen && panel.menuKind === "more")
+      check("gear menu opens from its search-row position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "searchRow")))
       check("gear menu has exactly Refresh library / Hide pre-orders / Log out, in order",
         panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh library|Hide pre-orders|Log out / Clear Bandcamp session")
       check("Hide pre-orders is checkable and reflects the persisted state",
@@ -313,16 +377,25 @@ ShellRoot {
       check("album context starts Off", shuffleButton().selected === false)
       click(shuffleButton())
       check("toggling in the album context turns the album On", shuffleButton().selected === true && svc.isShuffled(kA))
+      check("v3.1: shuffle dot appears when the current album context is On", shuffleDot() && shuffleDot().visible === true)
+      var sb = shuffleButton(), sd = shuffleDot(), dp = sd.mapToItem(sb, 0, 0)
+      check("v3.1: shuffle dot is 3-4 px, centred under the glyph, inside the button (height unchanged)",
+        sd.width >= 3 && sd.width <= 4 && sd.height === sd.width && Math.abs((dp.x + sd.width / 2) - sb.width / 2) <= 0.5 &&
+        dp.y >= sb.height / 2 && dp.y + sd.height <= sb.height && sb.height === Style.spacing.controlHeight && sb.selected === true)
       panel.pickPlaylist(pl)
       check("selecting a playlist switches the context to that playlist", panel.contextKey === kP)
       check("playlist context still Off after toggling the album (button and service)", shuffleButton().selected === false && !svc.isShuffled(kP))
+      check("v3.1: shuffle dot is hidden for the Off playlist even though the album context is On", shuffleDot().visible === false)
       check("whole-library context also untouched", !svc.isShuffled("library"))
       click(shuffleButton())
       check("playlist now On, album still On (independent states)", svc.isShuffled(kP) && svc.isShuffled(kA))
+      check("v3.1: shuffle dot appears for the On playlist context", shuffleDot().visible === true && shuffleButton().selected === true)
       panel.pickAlbum(albA)
       check("returning to the album shows its own remembered On", shuffleButton().selected === true)
+      check("v3.1: returning to the On album shows the dot again", shuffleDot().visible === true)
       click(shuffleButton())
       check("turning the album Off leaves the playlist On", !svc.isShuffled(kA) && svc.isShuffled(kP))
+      check("v3.1: dot follows the album context Off while the playlist remains On", shuffleDot().visible === false && shuffleButton().selected === false)
       panel.pickAlbum(albB)
       check("a different album has its own state (Off)", panel.contextKey === kB && shuffleButton().selected === false)
       svc.setShuffle(kP, false)
@@ -782,6 +855,19 @@ ShellRoot {
         Math.abs(right - (f.width - Style.spacing.md)) <= 1)
       check("Shuffle sits on the left edge of the right-justified transport group",
         named(stage, "footerShuffle").mapToItem(tr, 0, 0).x === 0 && named(stage, "footerNext").mapToItem(tr, 0, 0).x > 0)
+      var title = named(stage, "footerTitle"), sub = named(stage, "footerSub"), pr = named(stage, "progressRow"), kp = keyboardPanel()
+      var subBottom = sub.mapToItem(f, 0, 0).y + sub.height
+      var progressTop = pr.mapToItem(f, 0, 0).y
+      var gap = progressTop - subBottom
+      log("v3.1 footer height=" + f.height + " gap=" + gap + " popup=" + kp.contentHeight)
+      check("v3.1: footer blank band above the progress bar is roughly halved (v3: 6 px, now 2-4 px)", gap >= 2 && gap <= 4)
+      check("v3.1: footer is shorter than the v3 84 px", f.height < 84 && f.height > 70)
+      check("v3.1: nothing is clipped — title, artist and progress bar sit inside the footer and do not overlap",
+        title.mapToItem(f, 0, 0).y >= 0 && sub.mapToItem(f, 0, 0).y + sub.height <= f.height &&
+        pr.mapToItem(f, 0, 0).y + pr.height <= f.height && subBottom <= progressTop)
+      check("v3.1: total popup is shorter than the v3 build and still under the 660 px cap",
+        kp.contentHeight < host.v3PopupHeight && kp.contentHeight <= 660 &&
+        pr.mapToItem(kp, 0, 0).y + pr.height <= kp.height)
       svc.isPlaying = true
       svc.isPaused = false
     },
@@ -974,7 +1060,7 @@ ShellRoot {
 
     // ---- Phase 7: the single Collection link in the search row ----
     function() {
-      var cb = collectionButton(), sf = searchField(), icon = named(stage, "searchIcon")
+      var cb = collectionButton(), sf = searchField(), m = searchMagnifier(), gear = settingsButton()
       var gone = ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"]
       check("v3: Collection is the only link button", !!cb && cb.text === "Collection" && gone.every(function(l) { return !button(l) }))
       check("v3: the links row is gone", !named(stage, "linksRow"))
@@ -982,7 +1068,10 @@ ShellRoot {
       var right = sf.mapToItem(stage, 0, 0).x + sf.width
       check("Collection is inline in the search row, to the right of the field",
         Math.abs(cy - fy) <= 2 && cb.mapToItem(stage, 0, 0).x >= right - 1)
-      check("the magnifier sits to the left of the search field", icon.mapToItem(stage, 0, 0).x < sf.mapToItem(stage, 0, 0).x)
+      check("v3.1: magnifier sits inside the field's right end, not to its left",
+        isInside(m, sf) && m.mapToItem(stage, 0, 0).x >= right - 40 && m.mapToItem(stage, 0, 0).x + m.width <= right)
+      check("v3.1: the gear is the last control in the search row, after Collection",
+        gear.mapToItem(stage, 0, 0).x >= cb.mapToItem(stage, 0, 0).x + cb.width - 1)
       check("Collection keeps the library-username URL and BcButton style (fixture-user)",
         panel.collectionUrl === "https://bandcamp.com/fixture-user" && cb.tooltipText === "https://bandcamp.com/fixture-user" &&
         cb.enabled === true && cb.height === Style.spacing.controlHeight && cb.bordered === true)
