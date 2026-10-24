@@ -37,9 +37,9 @@ ln -s "$plugin" "$work/shell/plug"
 fail=0
 passes=0
 
-# Phase 7: intercept xdg-open. The plugin runs $OMATIME_OPEN_CMD instead of the real
-# browser opener, and this recorder appends the URL it was given to $OMATIME_OPEN_LOG.
-# Nothing in the harness can launch a browser.
+# Phase 7 (v3): intercept xdg-open. The plugin runs $OMATIME_OPEN_CMD instead of the
+# real browser opener, and this recorder appends the URL it was given to $OMATIME_OPEN_LOG.
+# Nothing in the harness can launch a browser. v3 keeps only the Collection link.
 cat > "$work/open-recorder.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$1" >> "$OMATIME_OPEN_LOG"
@@ -92,19 +92,21 @@ else
   echo "  FAIL phase 1's choices were not written to ui.json"; fail=1
 fi
 
-# Phase 7: the six link buttons must have invoked the opener with exactly the verified
-# URLs, in spec order. Exact match also proves no other URL was opened. The fixture
+# Phase 7 (v3): the single Collection link must have invoked the opener with exactly
+# the verified URL. Exact match also proves no other URL was opened. The fixture
 # library's meta.user is "fixture-user".
-expected_links="https://bandcamp.com
-https://bandcamp.com/discover
-https://daily.bandcamp.com
-https://bandcamp.com/radio
-https://bandcamp.com/fixture-user/feed
-https://bandcamp.com/fixture-user"
+expected_links="https://bandcamp.com/fixture-user"
 if [ -f "$work/opened-1.log" ] && [ "$(cat "$work/opened-1.log")" = "$expected_links" ]; then
-  echo "  PASS xdg-open was called with the six verified URLs, in order"; passes=$((passes + 1))
+  echo "  PASS xdg-open was called with only the Collection URL"; passes=$((passes + 1))
 else
   echo "  FAIL link opener log mismatch:"; sed 's/^/    /' "$work/opened-1.log" 2>/dev/null; fail=1
+fi
+
+# v3: the companion bar-art widget is gone from the plugin, and nothing references it.
+if [ ! -e "$plugin/bar-art" ] && ! grep -q "bar-art/ArtWidget" "$plugin/Panel.qml" "$plugin/Service.qml" "$plugin/README.md"; then
+  echo "  PASS bar-art widget removed from the plugin and no source references it"; passes=$((passes + 1))
+else
+  echo "  FAIL bar-art widget or a source reference still exists"; fail=1
 fi
 
 # Phase 8: the keyboard is panel-scoped. No global shortcut type may appear in the

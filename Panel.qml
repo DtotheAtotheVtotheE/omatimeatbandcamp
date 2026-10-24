@@ -21,10 +21,9 @@ Panel {
     var v = setting("showIcon", true)
     return !(v === false || v === "false" || v === 0 || v === "0")
   }
-  // The module text is always "BC"; playback state is only a suffix.
-  readonly property string barStateSuffix: (service && service.isPlaying)
-    ? (service.isPaused ? " \u25B6" : " \u275A\u275A") : ""
-  readonly property string barLabel: "BC" + barStateSuffix
+  // v3: the bar text is plain "BC" in every playback state. The separate
+  // bar-art widget is gone; backend cover art is kept for MPRIS.
+  readonly property string barLabel: "BC"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
@@ -73,15 +72,21 @@ Panel {
     for (var i = 0; i < detailTrackList.length; i++) if (detailTrackList[i].streamable !== false) n++
     return n
   }
-  readonly property bool detailPlayable: query === "" && !!detailItem
 
-  // Overflow (⋯) menu and Sort menu share one card (menuKind: "", "more", "sort"). New
-  // "more" entries go in moreItems; destructive ones must go through a ConfirmDialog.
+  // v3: one border colour for the album list, the detail pane and the footer.
+  // It is the detail pane's existing theme-accent border, now shared by all three.
+  readonly property var paneBorderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
+
+  // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
+  // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
+  // Refresh and the Hide pre-orders filter live here in v3, not in the toolbar.
   property string menuKind: ""
   readonly property bool menuOpen: menuKind !== ""
   property int menuIndex: 0
   property bool logoutConfirmOpen: false
   readonly property var moreItems: [
+    { icon: "\u21BB", label: "Refresh library", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
+    { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
     { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
   ]
   readonly property var sortItems: {
@@ -94,18 +99,12 @@ Panel {
   }
   readonly property var menuItems: menuKind === "sort" ? sortItems : moreItems
 
-  // Phase 7: verified external pages, in spec order. Feed and Collection are
-  // built from the username the backend recorded in the library, so they stay
-  // disabled until it is known. URLs verified live on 2026-10-23 (V2-NOTES).
+  // v3: one Collection link remains. Its URL is built from the username the
+  // backend recorded in the library, so it stays disabled until it is known.
+  // Verified live on 2026-10-23 (V2-NOTES Phase 7).
   readonly property string bandcampUser: service ? String(service.detectedUser || "") : ""
-  readonly property var externalLinks: [
-    { key: "bandcamp", label: "Bandcamp", url: "https://bandcamp.com" },
-    { key: "discover", label: "Discover", url: "https://bandcamp.com/discover" },
-    { key: "daily", label: "Editorials (Daily)", url: "https://daily.bandcamp.com" },
-    { key: "radio", label: "Radio", url: "https://bandcamp.com/radio" },
-    { key: "feed", label: "Your Feed", url: bandcampUser === "" ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser) + "/feed" },
-    { key: "collection", label: "Your Collection", url: bandcampUser === "" ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser) }
-  ]
+  readonly property string collectionUrl: bandcampUser === ""
+    ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser)
 
   // ---- keyboard (Phase 8) -------------------------------------------------
   // Panel-scoped only: no global shortcut is registered, no Hyprland binding is
@@ -254,6 +253,12 @@ Panel {
     menuKind = ""
     if (action === "logout") {
       logoutConfirmOpen = true
+    } else if (action === "refresh") {
+      if (service && !service.refreshing) service.refresh()
+      searchField.forceActiveFocus()
+    } else if (action === "hide-preorders") {
+      if (service) service.setHidePreorders(!service.hidePreorders)
+      searchField.forceActiveFocus()
     } else if (action.indexOf("sort:") === 0) {
       if (service) service.setSortMode(action.substring(5))
       searchField.forceActiveFocus()
@@ -348,8 +353,13 @@ Panel {
   function availabilityLine() {
     if (!detailItem || query !== "") return ""
     if (detailIsAlbum && !selectedAlbum.tracksLoaded) return ""
-    if (detailStreamable < detailTotal || (detailIsAlbum && selectedAlbum.isPreorder))
-      return detailStreamable + " of " + detailTotal + " tracks available"
+    if (detailStreamable < detailTotal || (detailIsAlbum && selectedAlbum.isPreorder)) {
+      var line = detailStreamable + " of " + detailTotal + " tracks available"
+      // v3: the old detail-pane "Play available" button is gone. Preserve the
+      // information in the availability line for partially released contexts.
+      if (detailStreamable > 0 && detailStreamable < detailTotal) line += " · Play available"
+      return line
+    }
     return ""
   }
 
@@ -367,8 +377,9 @@ Panel {
   }
 
   // ---- bar icon -----------------------------------------------------------
-  // The BC click target of record. Album art is a separate companion bar
-  // widget (bar-art/ArtWidget.qml) placed immediately to the left in shell.json.
+  // The BC click target of record. v3 removed the companion art widget and the
+  // play/pause suffix, so the bar always reads plain BC; cover art is still
+  // cached for MPRIS.
   Row {
     id: barRow
     visible: root.showIcon
@@ -404,7 +415,9 @@ Panel {
     Column {
       id: contentColumn
       anchors.fill: parent
-      spacing: Style.spacing.md
+      // v3 compact pass: sections sit a little closer together. Wrapping and
+      // the 660 px popup cap are unchanged.
+      spacing: Style.spacing.sm
 
       // header ---------------------------------------------------------------
       Item {
@@ -422,14 +435,15 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
         }
 
-        // The only header control. Close is Esc / click outside; logout and
-        // other rare actions live in this menu.
+        // The only header control. Close is Esc / click outside; Refresh,
+        // Hide pre-orders and logout live in this gear menu.
         BcButton {
           id: menuButton
+          objectName: "settingsButton"
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          iconText: "\uf141"
-          tooltipText: "More"
+          iconText: "\uf013"
+          tooltipText: "Settings"
           active: root.menuOpen
           foreground: root.foreground
           fontFamily: root.fontFamily
@@ -438,69 +452,83 @@ Panel {
       }
 
       // search ---------------------------------------------------------------
-      TextField {
-        id: searchField
+      // Magnifier, shortened field, then the single Collection link (v3).
+      Item {
         width: parent.width
-        placeholderText: "Search albums, playlists, tracks…"
-        foreground: root.foreground
-        font.family: root.fontFamily
-        onTextChanged: {
-          if (root.service) root.service.search(text)
-          root.listCursor = -1
-        }
+        height: Style.spacing.controlHeight
 
-        // The search field owns keyboard focus for the whole window, so the
-        // overlays are handled here, before its own text entry. While the
-        // logout confirmation or the ⋯ menu is open it owns the keyboard.
-        // (Qt fires Keys.onEscapePressed before Keys.onPressed, so Esc is
-        // handled in its own handler below.)
-        Keys.priority: Keys.BeforeItem
-        Keys.onPressed: function(event) {
-          if (root.logoutConfirmOpen) {
-            logoutConfirm.handleKey(event)
-            event.accepted = true
-          } else if (root.menuOpen) {
-            if (event.key === Qt.Key_Down) root.menuIndex = Math.min(root.menuItems.length - 1, root.menuIndex + 1)
-            else if (event.key === Qt.Key_Up) root.menuIndex = Math.max(0, root.menuIndex - 1)
-            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
-            event.accepted = true
-          } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
-            // Down/Up leave text entry and move through the focused list.
-            root.enterList(event.key === Qt.Key_Down ? 1 : -1)
-            event.accepted = true
-          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            // Enter plays whatever is selected (no-op when nothing is).
-            if (root.listRows.length > 0 && root.listCursor >= 0) { root.activateCursor(); event.accepted = true }
+        Row {
+          id: searchRow
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          height: Style.spacing.controlHeight
+          spacing: Style.spacing.sm
+
+          Text {
+            id: searchIcon
+            objectName: "searchIcon"
+            textFormat: Text.PlainText
+            text: "\uf002"
+            color: Qt.darker(root.foreground, 1.3)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            anchors.verticalCenter: parent.verticalCenter
           }
-        }
-        // Esc backs out one layer at a time: confirmation, menu, search text, window.
-        Keys.onEscapePressed: function(event) {
-          root.handleEscape()
-          event.accepted = true
-        }
-      }
 
-      // external links -------------------------------------------------------
-      // One row of uniform BcButtons under the search box. Six labels fit the
-      // 920 px content width, so the overflow menu was not needed. Each opens
-      // the verified page in the default browser (xdg-open).
-      Row {
-        id: linksRow
-        objectName: "linksRow"
-        width: parent.width
-        spacing: Style.spacing.sm
+          TextField {
+            id: searchField
+            width: Math.max(0, searchRow.width - searchIcon.width - collectionButton.width - searchRow.spacing * 2)
+            anchors.verticalCenter: parent.verticalCenter
+            placeholderText: "Search albums, playlists, tracks…"
+            foreground: root.foreground
+            font.family: root.fontFamily
+            onTextChanged: {
+              if (root.service) root.service.search(text)
+              root.listCursor = -1
+            }
 
-        Repeater {
-          model: root.externalLinks
-          delegate: BcButton {
-            required property var modelData
-            objectName: "link-" + modelData.key
-            text: modelData.label
-            enabled: modelData.url !== ""
-            tooltipText: modelData.url !== "" ? modelData.url : "Username not known yet"
+            // The search field owns keyboard focus for the whole window, so the
+            // overlays are handled here, before its own text entry. While the
+            // logout confirmation or the menu is open it owns the keyboard.
+            // (Qt fires Keys.onEscapePressed before Keys.onPressed, so Esc is
+            // handled in its own handler below.)
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (root.logoutConfirmOpen) {
+                logoutConfirm.handleKey(event)
+                event.accepted = true
+              } else if (root.menuOpen) {
+                if (event.key === Qt.Key_Down) root.menuIndex = Math.min(root.menuItems.length - 1, root.menuIndex + 1)
+                else if (event.key === Qt.Key_Up) root.menuIndex = Math.max(0, root.menuIndex - 1)
+                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
+                // Down/Up leave text entry and move through the focused list.
+                root.enterList(event.key === Qt.Key_Down ? 1 : -1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                // Enter plays whatever is selected (no-op when nothing is).
+                if (root.listRows.length > 0 && root.listCursor >= 0) { root.activateCursor(); event.accepted = true }
+              }
+            }
+            // Esc backs out one layer at a time: confirmation, menu, search text, window.
+            Keys.onEscapePressed: function(event) {
+              root.handleEscape()
+              event.accepted = true
+            }
+          }
+
+          BcButton {
+            id: collectionButton
+            objectName: "link-collection"
+            text: "Collection"
+            enabled: root.collectionUrl !== ""
+            tooltipText: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet"
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onClicked: if (root.service) root.service.openExternal(modelData.url)
+            anchors.verticalCenter: parent.verticalCenter
+            onClicked: if (root.service) root.service.openExternal(root.collectionUrl)
           }
         }
       }
@@ -532,17 +560,8 @@ Panel {
             onClicked: if (root.service) root.service.activeTab = 1
           }
 
-          // One toggle with exactly two states, highlighted when On; applies to the
-          // current context only (see contextKey).
-          BcButton {
-            text: "Shuffle: " + (root.shuffleOn ? "On" : "Off")
-            selected: root.shuffleOn
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
-          }
-
-          // Sorting and the pre-order filter apply to the Albums list only.
+          // Sorting applies to the Albums list only. Shuffle moved to the
+          // footer transport in v3; Refresh/Hide pre-orders moved to the gear menu.
           BcButton {
             id: sortButton
             visible: !root.service || root.service.activeTab === 0
@@ -552,16 +571,6 @@ Panel {
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: root.toggleSortMenu()
-          }
-
-          BcButton {
-            id: hidePreorderButton
-            visible: !root.service || root.service.activeTab === 0
-            text: "Hide pre-orders"
-            selected: root.service ? root.service.hidePreorders : false
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: if (root.service) root.service.setHidePreorders(!root.service.hidePreorders)
           }
         }
 
@@ -577,36 +586,32 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
-            width: Math.min(implicitWidth, Math.max(0, contentColumn.width - toolbarLeft.width - refreshButton.width - Style.spacing.md * 2))
+            width: Math.min(implicitWidth, Math.max(0, contentColumn.width - toolbarLeft.width - Style.spacing.md * 2))
             anchors.verticalCenter: parent.verticalCenter
-          }
-
-          BcButton {
-            id: refreshButton
-            text: "Refresh"
-            iconText: "\u21BB"
-            tooltipText: root.refreshing ? "Refreshing library…" : "Refresh library"
-            enabled: !root.refreshing
-            iconSpinning: root.refreshing
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: if (root.service) root.service.refresh()
           }
         }
       }
 
       // library + detail -----------------------------------------------------
-      // 396, not 430: the Phase 7 links row (28 + 6 spacing) must fit inside the
-      // 660 px popup cap, or the footer's seek area falls below the visible window.
+      // 396 keeps the footer's seek area inside the 660 px popup cap. v3 moved
+      // the links into the search row, so the list can keep its measured height.
       Row {
         width: parent.width
         height: Style.space(396)
         spacing: Style.spacing.md
 
-        Item {
+        BorderSurface {
           id: leftPane
+          objectName: "leftPane"
           width: parent.width * 0.38
           height: parent.height
+          radius: Style.cornerRadius
+          color: "transparent"
+          borderSpec: root.paneBorderSpec
+
+          Item {
+            anchors.fill: parent
+            anchors.margins: Style.space(1)
 
           ListView {
             id: listColumn
@@ -622,7 +627,7 @@ Panel {
             delegate: Item {
               id: rowItem
               width: listColumn.width
-              height: rowCol.implicitHeight + Style.space(14)
+              height: rowCol.implicitHeight + Style.space(10)
 
               readonly property bool isSearch: root.query !== ""
               readonly property bool isPlaylist: !isSearch && root.service && root.service.activeTab === 1
@@ -665,6 +670,8 @@ Panel {
                   objectName: "rowTitle"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   wrapMode: Text.Wrap
                   maximumLineCount: 2
                   elide: Text.ElideRight
@@ -679,6 +686,8 @@ Panel {
                   objectName: "rowSub"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   wrapMode: Text.Wrap
                   maximumLineCount: 2
                   elide: Text.ElideRight
@@ -711,6 +720,8 @@ Panel {
                       objectName: "pillText"
                       textFormat: Text.PlainText
                       anchors.centerIn: parent
+                      horizontalAlignment: Text.AlignLeft
+                      LayoutMirroring.enabled: false
                       text: "PRE-ORDER"
                       color: root.foreground
                       font.family: root.fontFamily
@@ -723,6 +734,8 @@ Panel {
                     objectName: "pillDate"
                     textFormat: Text.PlainText
                     anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
                     visible: text !== ""
                     text: rowItem.item && rowItem.item.releaseTs ? LibraryModel.fmtDate(rowItem.item.releaseTs) : ""
                     color: Qt.darker(root.foreground, 1.3)
@@ -738,12 +751,20 @@ Panel {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
+                  // v3: a single click only selects. Search results are tracks too,
+                  // so they also wait for a double-click before starting audio.
                   var it = rowItem.item
                   if (!it) return
                   root.noteListClick(index)
-                  if (rowItem.isSearch) { root.playTrackNow(it, root.searchTracks); return }
+                  if (rowItem.isSearch) return
                   if (rowItem.isPlaylist) root.pickPlaylist(it)
                   else root.pickAlbum(it)
+                }
+                onDoubleClicked: {
+                  var it = rowItem.item
+                  if (!it || !rowItem.isSearch) return
+                  root.noteListClick(index)
+                  root.playTrackNow(it, root.searchTracks)
                 }
               }
             }
@@ -754,6 +775,7 @@ Panel {
             anchors.centerIn: parent
             width: parent.width - Style.space(24)
             horizontalAlignment: Text.AlignHCenter
+            LayoutMirroring.enabled: false
             wrapMode: Text.Wrap
             visible: listColumn.count === 0
             color: Qt.darker(root.foreground, 1.4)
@@ -764,16 +786,17 @@ Panel {
                 : (root.service && root.service.hidePreorders && root.service.collection.length > 0 ? "Only pre-orders here — turn off Hide pre-orders"
                   : "No library yet — press Refresh"))
           }
+          }
         }
 
         BorderSurface {
+          objectName: "detailPane"
           width: parent.width - leftPane.width - Style.spacing.md
           height: parent.height
           radius: Style.cornerRadius
           color: "transparent"
-          // Frame the detail pane with the theme's brightest colour so it
-          // reads as its own surface, distinct from the list on the left.
-          borderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
+          // v3: same shared border as the album list and the footer.
+          borderSpec: root.paneBorderSpec
 
           Column {
             id: detailColumn
@@ -783,22 +806,25 @@ Panel {
 
             // Header: same two-line treatment as the rows (title wraps, artist or count
             // on its own dimmed line), plus pre-order state and track availability.
+            // v3: no Play button here; playback starts from a double-click, Enter or
+            // the footer. "Play available" is carried by the availability line.
             Item {
               id: detailHeader
               width: parent.width
-              height: Math.max(headerCol.implicitHeight, playButton.visible ? playButton.height : 0)
+              height: headerCol.implicitHeight
 
               Column {
                 id: headerCol
                 anchors.left: parent.left
-                anchors.right: playButton.visible ? playButton.left : parent.right
-                anchors.rightMargin: playButton.visible ? Style.spacing.md : 0
+                anchors.right: parent.right
                 spacing: Style.space(2)
 
                 Text {
                   objectName: "detailTitle"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   wrapMode: Text.Wrap
                   maximumLineCount: 2
                   elide: Text.ElideRight
@@ -812,6 +838,8 @@ Panel {
                   objectName: "detailSub"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   visible: text !== ""
                   wrapMode: Text.Wrap
                   maximumLineCount: 2
@@ -825,6 +853,8 @@ Panel {
                   objectName: "detailPreorder"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   visible: text !== ""
                   wrapMode: Text.Wrap
                   text: root.preorderLine()
@@ -837,6 +867,8 @@ Panel {
                   objectName: "detailAvail"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   visible: text !== ""
                   wrapMode: Text.Wrap
                   text: root.availabilityLine()
@@ -848,6 +880,8 @@ Panel {
                   objectName: "detailPartial"
                   textFormat: Text.PlainText
                   width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   visible: text !== ""
                   wrapMode: Text.Wrap
                   text: root.partialLine()
@@ -855,22 +889,6 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                 }
-              }
-
-              // Plays the current context (this album / playlist) from its start. Reads
-              // "Play available" when some of its tracks cannot be streamed yet.
-              BcButton {
-                id: playButton
-                objectName: "detailPlay"
-                anchors.right: parent.right
-                anchors.top: parent.top
-                visible: root.detailPlayable
-                enabled: root.detailStreamable > 0
-                iconText: "\uf04b"
-                text: root.detailStreamable < root.detailTotal ? "Play available" : "Play"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.playContextNow()
               }
             }
 
@@ -887,12 +905,13 @@ Panel {
                 model: root.detailTrackList
 
                 // Track titles wrap. Tracks that cannot be streamed (unreleased) are dimmed,
-                // have no hover and show "—" instead of a duration; clicking one only shows
-                // a notice. The playing track is highlighted with a play marker.
+                // have no hover and show "—" instead of a duration. v3: a single click only
+                // selects; a double-click starts playback at that track. Unreleased tracks
+                // cannot start playback by any gesture.
                 delegate: Item {
                   id: trackRow
                   width: ListView.view.width
-                  height: Math.max(Style.space(34), trackTitle.implicitHeight + Style.space(14))
+                  height: Math.max(Style.space(30), trackTitle.implicitHeight + Style.space(10))
 
                   readonly property var track: modelData
                   readonly property bool playable: !!track && track.streamable !== false
@@ -940,6 +959,8 @@ Panel {
                     x: Style.space(22)
                     width: Style.space(26)
                     anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
                     text: trackRow.track && trackRow.track.track_num ? trackRow.track.track_num + "." : ""
                     color: Qt.darker(root.foreground, 1.4)
                     font.family: root.fontFamily
@@ -953,6 +974,8 @@ Panel {
                     x: Style.space(50)
                     width: parent.width - Style.space(50) - Style.space(58)
                     anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
                     wrapMode: Text.Wrap
                     maximumLineCount: 3
                     elide: Text.ElideRight
@@ -970,6 +993,7 @@ Panel {
                     anchors.rightMargin: Style.space(8)
                     anchors.verticalCenter: parent.verticalCenter
                     horizontalAlignment: Text.AlignRight
+                    LayoutMirroring.enabled: false
                     text: trackRow.playable ? LibraryModel.fmtDuration(trackRow.track ? trackRow.track.duration : 0) : "—"
                     color: Qt.darker(root.foreground, 1.5)
                     font.family: root.fontFamily
@@ -984,6 +1008,12 @@ Panel {
                     cursorShape: trackRow.playable ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: {
                       if (!trackRow.track) return
+                      // Selection only. Audio starts on double-click (or Enter/footer).
+                      root.noteTrackClick(index)
+                      if (!trackRow.playable && root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
+                    }
+                    onDoubleClicked: {
+                      if (!trackRow.track) return
                       root.noteTrackClick(index)
                       if (trackRow.playable) root.playTrackNow(trackRow.track, root.detailTrackList)
                       else if (root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
@@ -997,6 +1027,7 @@ Panel {
                 anchors.centerIn: parent
                 width: parent.width - Style.space(24)
                 horizontalAlignment: Text.AlignHCenter
+                LayoutMirroring.enabled: false
                 wrapMode: Text.Wrap
                 visible: text !== ""
                 text: root.emptyLine()
@@ -1023,6 +1054,8 @@ Panel {
                   objectName: "noticeText"
                   textFormat: Text.PlainText
                   anchors.centerIn: parent
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
                   text: root.service ? root.service.notice : ""
                   color: root.foreground
                   font.family: root.fontFamily
@@ -1035,9 +1068,10 @@ Panel {
       }
 
       // now playing ----------------------------------------------------------
-      // Two-line now-playing text, centred transport (identical BcButton style, no Stop
-      // button), and a seekable progress bar with elapsed/total labels. A failed stream
-      // replaces the Artist · Album line with a visible error notice.
+      // Two-line now-playing text on the left; transport (Shuffle, Prev, Play/Pause,
+      // Next) right-justified. Identical BcButton style, no Stop button. A seekable
+      // progress bar with elapsed/total labels. A failed stream replaces the
+      // Artist · Album line with a visible error notice.
       BorderSurface {
         id: footer
         objectName: "footer"
@@ -1045,7 +1079,8 @@ Panel {
         height: Style.space(84)
         radius: Style.cornerRadius
         color: Style.normalFillFor(root.foreground, Color.accent)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        // v3: the album list, detail pane and footer share one border colour.
+        borderSpec: root.paneBorderSpec
 
         Item {
           anchors.fill: parent
@@ -1064,6 +1099,8 @@ Panel {
             Text {
               objectName: "footerTitle"
               textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
               text: root.currentTrack ? (root.currentTrack.title || "") : "Nothing playing"
               color: root.foreground
               font.family: root.fontFamily
@@ -1077,6 +1114,8 @@ Panel {
             Text {
               objectName: "footerSub"
               textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
               visible: root.playbackError === ""
               text: root.currentTrack
                 ? ((root.currentTrack.artist || "") + (root.currentTrack.album ? "  ·  " + root.currentTrack.album : ""))
@@ -1090,6 +1129,8 @@ Panel {
             Text {
               objectName: "footerError"
               textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
               visible: root.playbackError !== ""
               text: root.playbackError
               color: Color.urgent
@@ -1103,9 +1144,22 @@ Panel {
           Row {
             id: transportRow
             objectName: "transportRow"
-            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.right: parent.right
             anchors.top: parent.top
             spacing: Style.spacing.sm
+
+            // Per-context shuffle moved here from the toolbar in v3. Same state
+            // model as v2; highlighted while the current context is On.
+            BcButton {
+              id: footerShuffle
+              objectName: "footerShuffle"
+              iconText: "\uf074"
+              tooltipText: "Shuffle: " + (root.shuffleOn ? "On" : "Off")
+              selected: root.shuffleOn
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
+            }
 
             // Nerd Font glyphs (PUA range) so the icons stay monochrome and
             // inherit the theme — Unicode media symbols such as U+23F8 fall
@@ -1160,6 +1214,8 @@ Panel {
               textFormat: Text.PlainText
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
               text: root.fmtTime(root.shownSeconds())
               color: Qt.darker(root.foreground, 1.3)
               font.family: root.fontFamily
@@ -1172,6 +1228,8 @@ Panel {
               textFormat: Text.PlainText
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignRight
+              LayoutMirroring.enabled: false
               text: root.fmtTime(root.duration)
               color: Qt.darker(root.foreground, 1.3)
               font.family: root.fontFamily
@@ -1330,6 +1388,8 @@ Panel {
               iconText: modelData.icon
               selected: modelData.checked === true
               active: root.menuIndex === index
+              enabled: modelData.enabled !== false
+              iconSpinning: modelData.spinning === true
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.runMenuAction(modelData.action)

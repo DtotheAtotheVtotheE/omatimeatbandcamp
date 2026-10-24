@@ -37,22 +37,23 @@ Item {
   readonly property string cacheDir: home + "/.cache/omatimeatbandcamp"
   readonly property string shellConfigPath: home + "/.config/omarchy/shell.json"
 
-  // ---- bar album art ------------------------------------------------------
-  // The bar's art widget only reads this one small local JPEG. The backend
-  // fetches/downscales it (cover URLs embed credentials, so they never leave
-  // the backend process) and writes the bundled placeholder when stopped.
+  // ---- cached cover art (MPRIS) -------------------------------------------
+  // The bar-art widget is gone in v3. The backend still fetches/downscales the
+  // current cover to this one small local JPEG because MPRIS publishes it, and
+  // writes the bundled placeholder when stopped. Cover URLs embed credentials,
+  // so they never leave the backend process.
   readonly property string artPath: cacheDir + "/current-art.jpg"
   readonly property string placeholderArt: pluginDir + "/assets/current-art-placeholder.jpg"
   // Harness/offline override: cover ids map to <dir>/<id>.jpg instead of the network.
   readonly property string artFixtureDir: Quickshell.env("OMATIME_ART_FIXTURE_DIR") || ""
-  readonly property string waybarArtSignal: "RTMIN+8"
   property int artRevision: 0
   property bool barArtIsPlaceholder: true
   property var artJob: null
   property int artJobSeq: 0
 
   // ---- external links -----------------------------------------------------
-  // Phase 7: the links row opens public Bandcamp pages in the default browser.
+  // Phase 7 (v3): the single Collection button opens the owner's public page
+  // in the default browser using the local opener command in tests.
   // The executable is overridable so the QML harness records calls instead of
   // launching a browser. Only https URLs are ever handed to it.
   readonly property string openCommand: Quickshell.env("OMATIME_OPEN_CMD") || "xdg-open"
@@ -415,10 +416,9 @@ Item {
   }
 
   function signalBarArt() {
-    // Omarchy's Quickshell bar watches the file; this RTMIN signal keeps a
-    // legacy Waybar image module in sync too. No Waybar config is assumed.
-    artSignalProc.running = false
-    artSignalProc.running = true
+    // Art file changes are picked up by MPRIS clients / Image probes through the
+    // local file itself; no bar widget or legacy Waybar image module remains.
+    artRevision += 1
   }
 
   onCurrentTrackChanged: scheduleBarArt()
@@ -439,13 +439,10 @@ Item {
       var d = {}
       try { d = JSON.parse(artOut.text || "{}") } catch (e) {}
       root.barArtIsPlaceholder = d.placeholder === true || (artProc.job && artProc.job.placeholder === true)
-      root.artRevision += 1
       root.signalBarArt()
       if (root.artJob) root.runArtJob()
     }
   }
-
-  Process { id: artSignalProc; running: false; command: ["pkill", "-" + root.waybarArtSignal, "waybar"] }
 
   function trackSignature(t) {
     if (!t) return ""

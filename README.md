@@ -15,20 +15,13 @@ Bandcamp collection/playlists player with stream extraction for Omarchy.
 - `mpvFlags`: Extra mpv flags (optional; video is always disabled)
 - `autoPlayOnSelect`: Auto-play on track selection (reserved)
 
-## Bar art module
+## Cached cover art
 
-Omarchy's current shell is Quickshell, not Waybar, so the art is a companion bar
-widget instead of a Waybar `image` module. Its source lives in `bar-art/`; install
-it as a sibling plugin and put its id immediately before the BC id in
-`~/.config/omarchy/shell.json`:
-
-```sh
-ln -s ~/.config/omarchy/plugins/com.github.dtotheatothevtothee.omatimeatbandcamp/bar-art \
-      ~/.config/omarchy/plugins/com.github.dtotheatothevtothee.omatimeatbandcamp-art
-```
-
-The main plugin still emits `RTMIN+8` after every art write for a legacy Waybar
-`image` module; Quickshell updates through its file watcher.
+The bar-art widget was removed in v3. The backend still writes the current
+Subsonic cover, downscaled to <=128 px, to
+`~/.cache/omatimeatbandcamp/current-art.jpg` because MPRIS publishes that local
+file as `mpris:artUrl`; when stopped it writes the bundled BC placeholder. No
+cover URL ever reaches QML, the bar config or a log.
 
 ## Credentials & privacy
 
@@ -43,8 +36,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   cache. `fetch.py` sends it as a `Cookie` header; `mpvctl.py` passes it to mpv.
 - The cookie jar and cache live in `~/.cache/omatimeatbandcamp/` (dir `0700`,
   `cookies.txt` `0600`) and are **never** part of the plugin source.
-- Use the clear-session button in the panel header (or `clearCookies` over IPC) to
-  delete the imported jar; the next refresh re-imports it.
+- Use the gear menu's "Log out / Clear Bandcamp session" item (or `clearCookies`
+  over IPC) to delete the imported jar; the next refresh re-imports it.
 - If your browser is not running or the keyring is locked, cookies may be
   unavailable; set `cookiePath` to a file you export yourself instead.
 
@@ -53,13 +46,13 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Left-click the bar item to open/close the panel (toggle from anywhere with
   `omarchy-shell shell toggle com.github.dtotheatothevtothee.omatimeatbandcamp`).
 - Right-click the bar item to play/pause; middle-click goes to the next track.
-- The module text is always `BC`. Playback state is only a suffix: `BC ❚❚` playing,
-  `BC ▶` paused, plain `BC` stopped.
-- The album-art module sits immediately left of `BC` and follows the current track.
-- Beneath the search box, one row of links opens Bandcamp, Discover, Editorials
-  (Daily), Radio, Your Feed and Your Collection in the default browser (`xdg-open`).
-  Feed and Collection are built from the username in the library cache.
-- Panel has tabs for Collection and Playlists, a search box, and a now-playing bar.
+- The module text is always plain `BC`; there is no playback suffix and no separate
+  album-art bar widget (v3).
+- The search row has a magnifier, the search field and one Collection link built from
+  the username in the library cache (`xdg-open`). It is disabled until the username is known.
+- The gear menu holds Refresh library, Hide pre-orders (checkable, remembered) and
+  Log out / Clear Bandcamp session (with confirmation).
+- Panel has tabs for Albums and Playlists, a search box, and a now-playing bar.
 - **Keyboard (panel-scoped only):** the shortcuts work only while the popup is open and focused;
   no Hyprland binding or global shortcut is added.
   - `↓` / `↑` from search enters the focused list and moves the cursor; `Enter` plays the
@@ -78,22 +71,27 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Browse Albums (collection) and Playlists; global search across albums and playlist tracks
 - Library = the union of your Bandcamp collection and Bandcamp's Subsonic server (so owned albums whose
   pages Bandcamp no longer lists still show up and stream)
-- Pre-orders: PRE-ORDER pill and release date on the row, "N of M tracks available" in the header, unreleased
-  tracks greyed (no hover, not clickable, duration "—"); only streamable tracks are ever queued
+- Pre-orders: PRE-ORDER pill and release date on the row, "N of M tracks available" (plus
+  "Play available" when partially released) in the header; unreleased tracks greyed and
+  non-playable by any gesture; only streamable tracks are ever queued
 - Two-line rows (titles wrap, artist on a dimmed second line); selected row and playing track highlighted
-- Sort (Recently added, Artist A–Z, Title A–Z, Release date) and a Hide pre-orders filter; both are remembered
-  (`~/.local/state/omatimeatbandcamp/ui.json`)
-- Shuffle: one On/Off toggle, remembered per context (each album, each playlist, search results, whole library);
-  click the selected row again to deselect it and get back to the whole-library context
-- Footer: Prev / Play-Pause / Next (no Stop), a seekable progress bar with elapsed/total time, two-line now-playing
-  text, and a visible notice plus automatic skip when a stream fails
-- Refresh runs the backend sync in the background (cached library stays on screen); streams for Subsonic tracks
-  are resolved by the backend (`backend play`), so stream URLs/credentials never appear in argv or logs
-- Bar art: `backend art` fetches the current Subsonic cover, downscales it to <=128 px and writes
-  `~/.cache/omatimeatbandcamp/current-art.jpg`; when stopped it writes the bundled BC placeholder.
-  No cover URL ever reaches QML, the bar config or a log
-- External links row: opens the verified public Bandcamp pages with `xdg-open`; Feed/Collection
-  come from the library username, so no per-user URL is hardcoded
+- Sort (Recently added, Artist A–Z, Title A–Z, Release date) from the toolbar and a Hide pre-orders
+  filter in the gear menu; both are remembered (`~/.local/state/omatimeatbandcamp/ui.json`)
+- Shuffle: one On/Off icon in the footer transport, remembered per context (each album, each playlist,
+  search results, whole library); click the selected row again to deselect it and get back to the
+  whole-library context
+- Footer: Shuffle / Prev / Play-Pause / Next (no Stop), right-justified, a seekable progress bar with
+  elapsed/total time, two-line now-playing text, and a visible notice plus automatic skip when a
+  stream fails. Track rows select on single-click and play on double-click; Enter and the footer
+  also start playback. The detail header has no Play button (v3).
+- Refresh runs the backend sync in the background from the gear menu (cached library stays on screen);
+  streams for Subsonic tracks are resolved by the backend (`backend play`), so stream URLs/credentials
+  never appear in argv or logs
+- Cached cover art: `backend art` fetches the current Subsonic cover, downscales it to <=128 px and
+  writes `~/.cache/omatimeatbandcamp/current-art.jpg` for MPRIS; when stopped it writes the bundled
+  BC placeholder. No cover URL ever reaches QML, the bar config or a log
+- Collection link: opens the verified collection page with `xdg-open`; the username comes from the
+  library cache, so no per-user URL is hardcoded
 - MPRIS: `backend/mpris.py` publishes title/artist/album, a **local** `file://` cover URL,
   playback status, position and transport controls. mpv's `path` (the credential-bearing stream
   URL) is never read or published; our mpv runs with `--load-scripts=no` so the system
@@ -105,7 +103,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   (web collection feed via your browser session + Subsonic `getAlbumList2`/`getAlbum`/`getPlaylist`)
 - Subsonic credentials: `~/.config/omatimeatbandcamp/credentials.toml` (`user`, `pass`)
 - Browser session: imported by `cookies.py` (gitignored) into `~/.cache/omatimeatbandcamp/cookies.txt`
-- Bar art: `~/.cache/omatimeatbandcamp/current-art.jpg` (local copy only; source is Subsonic `getCoverArt`)
+- Cached cover: `~/.cache/omatimeatbandcamp/current-art.jpg` (local copy only; source is Subsonic `getCoverArt`)
 - `fetch.py` (the v1 scraper) is no longer used by the UI
 
 ## IPC

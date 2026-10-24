@@ -60,15 +60,6 @@ ShellRoot {
         anchors.top: parent.top
         width: 160; height: 30
       }
-      Loader {
-        id: artWidgetLoader
-        active: true
-        source: "plug/bar-art/ArtWidget.qml"
-        onLoaded: {
-          item.bar = fakeBar
-          item.settings = ({ barArtSize: 24 })
-        }
-      }
     }
   }
 
@@ -104,7 +95,14 @@ ShellRoot {
     onExited: function(code) { mprisProbe.text = mprisOut.text }
   }
   function check(name, cond) { lastCheck = name; if (!cond) fails++; log((cond ? "PASS " : "FAIL ") + name) }
-  Connections { target: svc; function onRefreshingChanged() { if (svc.refreshing) { var b = host.button('Refresh'); host.seen = { enabled: b.enabled, spin: b.iconSpinning, op: b.opacity } } } }
+  Connections {
+    target: svc
+    function onRefreshingChanged() {
+      if (!svc.refreshing) return
+      var b = host.menuItemByText("Refresh library")
+      host.seen = { enabled: b ? b.enabled : panel.moreItems[0].enabled, spin: b ? b.iconSpinning : panel.moreItems[0].spinning, op: b ? b.opacity : 1 }
+    }
+  }
 
   // ---- tree helpers --------------------------------------------------------------------
   function find(item, pred) {
@@ -140,7 +138,25 @@ ShellRoot {
     for (var i = 0; i < all.length; i++) if (/shuffle/i.test(all[i].text) || /shuffle/i.test(all[i].tooltipText)) out.push(all[i])
     return out
   }
-  // The footer transport's play button (the detail pane's Play button shares the glyph; it comes first in the tree).
+  function shuffleButton() { return shuffleButtons()[0] }
+  function settingsButton() { return named(stage, "settingsButton") }
+  function collectionButton() { return named(stage, "link-collection") }
+  function doubleClick(item) { tc.mouseDoubleClickSequence(item, item.width / 2, item.height / 2, Qt.LeftButton) }
+  // v3: Refresh and Hide pre-orders live in the gear menu. Open it, then click the entry.
+  // Open the gear menu. The offscreen harness sometimes swallows the first click
+  // after a link/tooltip/dialog; a second click only happens if the menu did not open.
+  function menuItemByText(t) {
+    return find(stage, function(it) { return it.hasOwnProperty("iconText") && it.hasOwnProperty("bordered") && it.text === t })
+  }
+  function openSettings() {
+    if (panel.menuOpen) return
+    click(settingsButton())
+    if (!panel.menuOpen) click(settingsButton())
+  }
+  function toggleHidePreorders() { openSettings(); click(button("Hide pre-orders")) }
+  function refreshLibrary() { openSettings(); click(button("Refresh library")) }
+  function shuffleLabel() { return shuffleButton() ? shuffleButton().tooltipText : "" }
+  // The footer transport's play button.
   function footerPlay() {
     var all = allButtons(stage, []).filter(function(b) { return b.iconText === "\uf04b" || b.iconText === "\uf04c" })
     return all[all.length - 1]
@@ -154,6 +170,7 @@ ShellRoot {
   function middleClick(item) { tc.mouseClick(item, item.width / 2, item.height / 2, Qt.MiddleButton) }
   function barButton() { return named(panel, "barButton") }
   function comparePlaceholder() { cmpArt.same = false; cmpArt.running = true }
+
   function key(k) { tc.keyClick(k, Qt.NoModifier) }
   function typeText(t) { for (var i = 0; i < t.length; i++) tc.keyClick(t.charAt(i)) }
 
@@ -221,18 +238,27 @@ ShellRoot {
       check("search field has focus on open", searchField().activeFocus)
       check("no close (X) button anywhere", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\u2715" }))
       check("no clear-session icon in header", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uF08B" && it.visible }))
-      check("Refresh is a labelled toolbar button with icon", !!button("Refresh") && button("Refresh").iconText !== "")
+      check("header has a gear (settings) button, not the old ⋯ overflow", !!settingsButton() && settingsButton().iconText === "\uf013" && settingsButton().tooltipText === "Settings" && !button("\uf141"))
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
+      check("search row has a magnifying-glass icon", named(stage, "searchIcon").text === "\uf002")
+      check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
+      check("Collection is the only link button", !!collectionButton() && collectionButton().text === "Collection" && ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"].every(function(l) { return !button(l) }))
+      check("the old links row is gone", !named(stage, "linksRow"))
     },
     function() {
       var bs = allButtons(stage, [])
       var hs = {}, ic = {}, bd = {}
       for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
       log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("16 buttons in the open window (10 controls + 6 external links; Play all and Stop are gone)", bs.length === 16)
+      check("9 buttons in the open window (gear, Collection, 3 toolbar, 4 footer; Play all, Stop, Refresh and Shuffle are gone from the toolbar)", bs.length === 9)
       check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
       check("all buttons bordered (one border style)", Object.keys(bd).length === 1 && Object.keys(bd)[0] === "true")
+      var lp = named(stage, "leftPane"), dp = named(stage, "detailPane"), ft = named(stage, "footer")
+      log("border colours: left=" + lp.border.color + " detail=" + dp.border.color + " footer=" + ft.border.color)
+      check("album list, detail pane and footer share ONE border colour (the detail pane's theme accent)",
+        !!lp && !!dp && !!ft && String(lp.border.color) === String(dp.border.color) && String(dp.border.color) === String(ft.border.color) &&
+        String(dp.border.color) === String(Util.alpha(Color.accent, 0.75)) && lp.border.width === dp.border.width && dp.border.width === ft.border.width)
     },
     // ---- Esc / menu layering (Phase 2) ----
     function() { key(Qt.Key_Escape) },
@@ -242,12 +268,19 @@ ShellRoot {
     function() { key(Qt.Key_Escape) },
     function() { check("first Esc clears search, window stays", svc.searchQuery === "" && panel.opened); key(Qt.Key_Escape) },
     function() { check("second Esc closes", !panel.opened); panel.open() },
-    function() { click(button("\uf141")) },
-    function() { check("menu opens", panel.menuOpen && panel.menuKind === "more"); key(Qt.Key_Escape) },
+    function() { click(settingsButton()) },
+    function() {
+      check("gear menu opens", panel.menuOpen && panel.menuKind === "more")
+      check("gear menu has exactly Refresh library / Hide pre-orders / Log out, in order",
+        panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh library|Hide pre-orders|Log out / Clear Bandcamp session")
+      check("Hide pre-orders is checkable and reflects the persisted state",
+        panel.moreItems[1].checked === svc.hidePreorders && !!button("Hide pre-orders") && button("Hide pre-orders").selected === svc.hidePreorders)
+      key(Qt.Key_Escape)
+    },
     function() { check("Esc closes ONLY the menu", !panel.menuOpen && panel.opened); check("focus returns to search", searchField().activeFocus) },
-    function() { click(button("\uf141")) },
-    function() { check("menu reopened", panel.menuOpen); click(button("\uf141")) },
-    function() { check("clicking the menu button again closes it (toggle)", !panel.menuOpen && panel.opened); click(button("\uf141")) },
+    function() { click(settingsButton()) },
+    function() { check("menu reopened", panel.menuOpen); click(settingsButton()) },
+    function() { check("clicking the menu button again closes it (toggle)", !panel.menuOpen && panel.opened); click(settingsButton()) },
     function() { tc.mouseClick(stage, 150, 560) },
     function() { check("click outside the menu card closes it, window stays, nothing underneath was clicked", !panel.menuOpen && panel.opened && panel.selectedAlbumUid === "") },
 
@@ -257,40 +290,41 @@ ShellRoot {
       check("no Play-all control anywhere in the item tree (text/tooltip, visible or not)", hit.length === 0)
       check("Service has no playAll()", typeof svc.playAll === "undefined")
       check("exactly one Shuffle control in the window", shuffleButtons().length === 1)
+      check("the Shuffle control is in the footer transport", !!shuffleButton() && shuffleButton().objectName === "footerShuffle" && shuffleButton().iconText === "\uf074" && shuffleButton().text === "")
       check("no cycle-through-states left", typeof panel.cycleShuffle === "undefined" && typeof svc.shuffleMode === "undefined" && typeof svc.shuffleLabel === "undefined" && typeof svc.shuffleNames === "undefined")
     },
     function() {
       var labels = [], sel = []
-      for (var i = 0; i < 7; i++) { var b = shuffleButtons()[0]; labels.push(b.text); sel.push(b.selected); click(b) }
+      for (var i = 0; i < 7; i++) { var b = shuffleButton(); labels.push(b.tooltipText); sel.push(b.selected); click(b) }
       var distinct = {}
       for (var j = 0; j < labels.length; j++) distinct[labels[j]] = 1
-      check("Shuffle shows exactly two labels: Shuffle: Off / Shuffle: On", Object.keys(distinct).sort().join("|") === "Shuffle: Off|Shuffle: On")
-      check("Shuffle strictly alternates Off,On,Off,On,... starting Off", labels.join(",") === "Shuffle: Off,Shuffle: On,Shuffle: Off,Shuffle: On,Shuffle: Off,Shuffle: On,Shuffle: Off")
-      check("Shuffle is highlighted (selected) exactly when On", sel.join(",") === "false,true,false,true,false,true,false")
-      check("after an odd number of presses the toggle is On and the service agrees", shuffleButtons()[0].text === "Shuffle: On" && svc.isShuffled("library"))
-      click(shuffleButtons()[0])
-      check("one more press returns to Off", shuffleButtons()[0].text === "Shuffle: Off" && !svc.isShuffled("library"))
+      check("footer Shuffle shows exactly two states: Shuffle: Off / Shuffle: On", Object.keys(distinct).sort().join("|") === "Shuffle: Off|Shuffle: On")
+      check("footer Shuffle strictly alternates Off,On,Off,On,... starting Off", labels.join(",") === "Shuffle: Off,Shuffle: On,Shuffle: Off,Shuffle: On,Shuffle: Off,Shuffle: On,Shuffle: Off")
+      check("footer Shuffle is highlighted (selected/tinted) exactly when On", sel.join(",") === "false,true,false,true,false,true,false")
+      check("after an odd number of presses the toggle is On and the service agrees", shuffleButton().selected === true && svc.isShuffled("library"))
+      click(shuffleButton())
+      check("one more press returns to Off", shuffleButton().selected === false && !svc.isShuffled("library"))
     },
     function() {
       var albA = svc.collection[collIndex(host.croc)], albB = svc.collection[collIndex("La Dee La La")], pl = svc.playlists[0]
       var kA = "album:" + albA.id, kB = "album:" + albB.id, kP = "playlist:" + pl.id
       panel.pickAlbum(albA)
       check("selecting an album switches the context to that album", panel.contextKey === kA)
-      check("album context starts Off", shuffleButtons()[0].text === "Shuffle: Off")
-      click(shuffleButtons()[0])
-      check("toggling in the album context turns the album On", shuffleButtons()[0].text === "Shuffle: On" && svc.isShuffled(kA))
+      check("album context starts Off", shuffleButton().selected === false)
+      click(shuffleButton())
+      check("toggling in the album context turns the album On", shuffleButton().selected === true && svc.isShuffled(kA))
       panel.pickPlaylist(pl)
       check("selecting a playlist switches the context to that playlist", panel.contextKey === kP)
-      check("playlist context still Off after toggling the album (button and service)", shuffleButtons()[0].text === "Shuffle: Off" && !svc.isShuffled(kP))
+      check("playlist context still Off after toggling the album (button and service)", shuffleButton().selected === false && !svc.isShuffled(kP))
       check("whole-library context also untouched", !svc.isShuffled("library"))
-      click(shuffleButtons()[0])
+      click(shuffleButton())
       check("playlist now On, album still On (independent states)", svc.isShuffled(kP) && svc.isShuffled(kA))
       panel.pickAlbum(albA)
-      check("returning to the album shows its own remembered On", shuffleButtons()[0].text === "Shuffle: On")
-      click(shuffleButtons()[0])
+      check("returning to the album shows its own remembered On", shuffleButton().selected === true)
+      click(shuffleButton())
       check("turning the album Off leaves the playlist On", !svc.isShuffled(kA) && svc.isShuffled(kP))
       panel.pickAlbum(albB)
-      check("a different album has its own state (Off)", panel.contextKey === kB && shuffleButtons()[0].text === "Shuffle: Off")
+      check("a different album has its own state (Off)", panel.contextKey === kB && shuffleButton().selected === false)
       svc.setShuffle(kP, false)
       check("state reset for the next checks", !svc.isShuffled(kA) && !svc.isShuffled(kP) && !svc.isShuffled(kB))
       panel.pickAlbum(albB)
@@ -339,8 +373,8 @@ ShellRoot {
       click(row)
       check("click selects the album row", panel.selectedAlbumUid === "a:fx-dee" && panel.contextKey === "album:a:fx-dee")
       check("detail pane follows the selection", named(stage, "detailTitle").text === "La Dee La La")
-      click(shuffleButtons()[0])
-      check("Shuffle is On for the album context", shuffleButtons()[0].text === "Shuffle: On")
+      click(shuffleButton())
+      check("Shuffle is On for the album context", shuffleButton().selected === true)
     },
     function() { showRow("La Dee La La") },
     function() {
@@ -350,7 +384,7 @@ ShellRoot {
       check("clicking the SELECTED row again deselects it", panel.selectedAlbumUid === "" && panel.selectedAlbum === null)
       check("context returns to the whole library", panel.contextKey === "library")
       check("detail pane returns to the empty prompt", named(stage, "detailTitle").text === "Pick an album or playlist" && trackList().count === 0)
-      check("Shuffle control now shows the LIBRARY context's state (Off)", shuffleButtons()[0].text === "Shuffle: Off" && !svc.isShuffled("library"))
+      check("Shuffle control now shows the LIBRARY context's state (Off)", shuffleLabel() === "Shuffle: Off" && !svc.isShuffled("library"))
       check("the album's own Shuffle state is kept (still On)", svc.isShuffled("album:a:fx-dee"))
       tc.mouseMove(stage, 5, 5)
     },
@@ -361,7 +395,7 @@ ShellRoot {
     },
     function() {
       click(leftRow("La Dee La La"))
-      check("re-selecting restores the album context AND its remembered Shuffle On", panel.selectedAlbumUid === "a:fx-dee" && shuffleButtons()[0].text === "Shuffle: On")
+      check("re-selecting restores the album context AND its remembered Shuffle On", panel.selectedAlbumUid === "a:fx-dee" && shuffleLabel() === "Shuffle: On")
       svc.setShuffle("album:a:fx-dee", false)
       click(button("Playlists (2)"))
     },
@@ -454,8 +488,7 @@ ShellRoot {
       check("header title", named(stage, "detailTitle").text === host.fi && named(stage, "detailSub").text === "Shamek Farrah")
       check("header: 'PRE-ORDER · releases 27 Nov 2026'", named(stage, "detailPreorder").text === "PRE-ORDER · releases 27 Nov 2026")
       check("header: '0 of 7 tracks available'", named(stage, "detailAvail").text === "0 of 7 tracks available")
-      var pb = named(stage, "detailPlay")
-      check("play control reads 'Play available' and is disabled (nothing available)", pb.visible && pb.text === "Play available" && pb.enabled === false)
+      check("v3: no Play control in the detail pane header", named(stage, "detailPlay") === null)
       var rows = trackRows()
       check("7 track rows", rows.length === 7)
       var ops = rows.map(function(r) { return r.opacity }), durs = rows.map(function(r) { return named(r, "trackDuration").text })
@@ -472,9 +505,10 @@ ShellRoot {
       check("clicking an unreleased track shows ONLY the notice 'Not yet released'", svc.notice === "Not yet released" && named(stage, "noticePill").visible && named(stage, "noticeText").text === "Not yet released")
       check("...and plays nothing: no queue, no current track, not playing, no error", svc.queue.length === before.q && svc.queueIndex === before.idx && svc.currentTrack === null && svc.isPlaying === false && svc.playbackError === before.err && svc.queue.length === 0)
       for (var i = 1; i < 7; i++) click(rows[i])
-      check("clicking all 7 never plays anything (acceptance: FI never plays)", svc.queue.length === 0 && svc.currentTrack === null && svc.isPlaying === false)
-      click(named(stage, "detailPlay"))
-      check("the disabled play control does nothing either", svc.queue.length === 0 && svc.isPlaying === false)
+      check("single-clicking all 7 never plays anything (acceptance: FI never plays)", svc.queue.length === 0 && svc.currentTrack === null && svc.isPlaying === false)
+      for (var j = 0; j < 7; j++) doubleClick(rows[j])
+      check("double-clicking every unreleased track still plays nothing (no gesture starts audio)", svc.queue.length === 0 && svc.currentTrack === null && svc.isPlaying === false)
+      check("unreleased double-click keeps showing only 'Not yet released'", svc.notice === "Not yet released")
       click(footerPlay())
     },
     function() {
@@ -491,8 +525,7 @@ ShellRoot {
       check("changing the selection clears a stale notice", svc.notice === "" && !named(stage, "noticePill").visible)
       check("La Dee La La header: title + artist 'Shamek Farrah & Folks'", named(stage, "detailTitle").text === "La Dee La La" && named(stage, "detailSub").text === "Shamek Farrah & Folks")
       check("no pre-order line, no availability line when 4 of 4 stream", named(stage, "detailPreorder").text === "" && named(stage, "detailAvail").text === "")
-      var pb = named(stage, "detailPlay")
-      check("play control reads 'Play' and is enabled", pb.text === "Play" && pb.enabled === true)
+      check("v3: a fully released album has no Play button in the header either", named(stage, "detailPlay") === null)
       var rows = trackRows()
       check("4 rows, all full opacity, real durations", rows.length === 4 && rows.every(function(r) { return r.opacity === 1 }) && named(rows[0], "trackDuration").text === "9:18" && named(rows[3], "trackDuration").text === "9:58")
       check("every row has hover enabled and pointer cursor", rows.every(function(r) { var m = named(r, "trackMouse"); return m.hoverEnabled && m.cursorShape === Qt.PointingHandCursor }))
@@ -501,12 +534,15 @@ ShellRoot {
     function() {
       var rows = trackRows()
       check("hovering a playable row paints a hover fill", alpha(named(rows[1], "trackFill")) > 0)
+      var qBefore = svc.queue.length
       click(rows[2])
+      check("v3: single-click selects a track but never starts audio", panel.trackCursor === 2 && svc.queue.length === qBefore && svc.isPlaying === false)
+      doubleClick(rows[2])
       tc.mouseMove(stage, 5, 5)
     },
     function() {
       var rows = trackRows()
-      check("clicking track 3 queues the whole album starting at track 3", svc.queue.length === 4 && svc.queueIndex === 2 && svc.queue[2].title === "The White Lady")
+      check("double-clicking track 3 queues the whole album starting at track 3", svc.queue.length === 4 && svc.queueIndex === 2 && svc.queue[2].title === "The White Lady")
       check("playing row: highlight fill + accent bar + play marker", alpha(named(rows[2], "trackFill")) > 0.15 && named(rows[2], "trackBar").visible && named(rows[2], "playingIndicator").visible)
       check("other rows: no highlight, no marker", [0, 1, 3].every(function(i) { return alpha(named(rows[i], "trackFill")) < 0.15 && !named(rows[i], "trackBar").visible && !named(rows[i], "playingIndicator").visible }))
       check("the playing title is emphasised (bold)", named(rows[2], "trackTitle").font.bold === true && named(rows[0], "trackTitle").font.bold === false)
@@ -536,15 +572,14 @@ ShellRoot {
     function() { panel.pickAlbum(svc.collection[collIndex("Future Sounds")]) },
     function() {
       check("Future Sounds header: PRE-ORDER · releases 15 Jan 2027", named(stage, "detailPreorder").text === "PRE-ORDER · releases 15 Jan 2027")
-      check("Future Sounds: '1 of 3 tracks available'", named(stage, "detailAvail").text === "1 of 3 tracks available")
-      var pb = named(stage, "detailPlay")
-      check("'Play available' is enabled when at least one track streams", pb.text === "Play available" && pb.enabled === true)
+      check("Future Sounds: availability carries the old Play-available information", named(stage, "detailAvail").text === "1 of 3 tracks available · Play available")
+      check("v3: no separate Play button when at least one track streams", named(stage, "detailPlay") === null)
       var rows = trackRows()
       check("row 1 (released) normal, rows 2-3 greyed with '—'", rows[0].opacity === 1 && Math.abs(rows[1].opacity - 0.45) < 0.02 && Math.abs(rows[2].opacity - 0.45) < 0.02 && named(rows[0], "trackDuration").text === "3:21" && named(rows[2], "trackDuration").text === "—")
-      click(pb)
+      click(footerPlay())
     },
     function() {
-      check("Play available queues ONLY the streamable track", svc.queue.length === 1 && svc.queue[0].title === "Released Single")
+      check("footer Play queues ONLY the streamable track", svc.queue.length === 1 && svc.queue[0].title === "Released Single")
       svc.queue = []; svc.queueIndex = -1
       panel.pickAlbum(svc.collection[collIndex("Future Sounds")])
     },
@@ -556,7 +591,7 @@ ShellRoot {
       panel.pickAlbum(svc.collection[collIndex("Truncated Compilation")]); panel.pickAlbum(svc.collection[collIndex("Empty Album")])
     },
     function() {
-      check("empty album renders a graceful message, no padding rows", named(stage, "detailEmpty").text === "No tracks in this album" && trackRows().length === 0 && named(stage, "detailPlay").enabled === false)
+      check("empty album renders a graceful message, no padding rows", named(stage, "detailEmpty").text === "No tracks in this album" && trackRows().length === 0 && named(stage, "detailPlay") === null)
       panel.pickAlbum(svc.collection[collIndex("Empty Album")]); panel.pickAlbum(svc.collection[collIndex("Unloaded Album")])
     },
     function() {
@@ -565,6 +600,39 @@ ShellRoot {
       var bad = entityFree(allStrings(stage, []))
       check("no literal HTML entity anywhere in the rendered tree", bad.length === 0)
       check("'Shamek Farrah & Folks' is rendered with a real ampersand", allStrings(stage, []).some(function(t) { return t === "Shamek Farrah & Folks" }) || leftTitles().length > 0)
+    },
+
+    // ---- v3: search-result rows also need a double-click to start audio ----
+    function() { searchField().text = "The White Lady"; svc.search("The White Lady") },
+    function() {
+      var row = leftRow("The White Lady")
+      check("search returns the matching track row", !!row && row.visible)
+      var qBefore = svc.queue.length
+      click(row)
+      check("v3: single-clicking a search result never starts audio", svc.queue.length === qBefore && svc.currentTrack === null)
+      doubleClick(row)
+    },
+    function() {
+      check("v3: double-clicking a search result starts it with the search queue", svc.queue.length === 1 && svc.queue[0].title === "The White Lady" && !!svc.currentTrack && svc.currentTrack.title === "The White Lady")
+      svc.queue = []; svc.queueIndex = -1
+      svc.isPlaying = false; svc.isPaused = false
+    },
+    function() {
+      var names = ["rowTitle", "rowSub", "detailTitle", "detailSub", "detailPreorder", "detailAvail", "detailPartial", "leftEmpty", "detailEmpty", "footerTitle", "footerSub", "footerError", "noticeText", "trackTitle", "trackNum"]
+      var bad = []
+      for (var i = 0; i < names.length; i++) {
+        var it = named(stage, names[i])
+        if (!it) continue
+        var left = it.horizontalAlignment === Text.AlignLeft || it.horizontalAlignment === Text.AlignHCenter || it.horizontalAlignment === Qt.AlignLeft
+        var unmirrored = it.LayoutMirroring.enabled === false
+        if (!left || !unmirrored) bad.push(names[i])
+      }
+      for (var r = 0; r < trackRows().length; r++) {
+        var tt = named(trackRows()[r], "trackTitle")
+        if (tt && (tt.horizontalAlignment !== Text.AlignLeft || tt.LayoutMirroring.enabled !== false)) bad.push("trackTitle")
+      }
+      check("v3 RTL: every title/artist/track text is explicitly left-aligned with mirroring disabled" + (bad.length ? " (" + bad.join(",") + ")" : ""), bad.length === 0)
+      searchField().text = ""; svc.search("")
     },
 
     // ---- Phase 4: sorting and filtering ----
@@ -599,30 +667,38 @@ ShellRoot {
       var tl = leftTitles()
       check("pre-orders come first under Release date (newest release date on top)", tl[0] === "Future Sounds" && tl[1] === host.fi)
       check("sorting never changes the Albums (N) count", !!button("Albums (13)"))
-      click(button("Hide pre-orders"))
+      toggleHidePreorders()
     },
     function() {
-      check("Hide pre-orders removes both pre-orders, keeps the sort", svc.hidePreorders === true && titlesEqual(leftTitles(), noPre(expRelease)))
-      check("toggle is highlighted when On", button("Hide pre-orders").selected === true)
+      check("gear menu Hide pre-orders removes both pre-orders, keeps the sort", svc.hidePreorders === true && titlesEqual(leftTitles(), noPre(expRelease)))
       check("Albums (N) is live: 11 after hiding", !!button("Albums (11)"))
+      openSettings()
+      check("gear menu shows Hide pre-orders highlighted when On", button("Hide pre-orders").selected === true)
+      key(Qt.Key_Escape)
       click(sortButton())
     },
     function() { click(button("Recently added")) },
     function() {
       check("filter + sort combine (Recently added without pre-orders)", svc.sortMode === "added" && titlesEqual(leftTitles(), noPre(expAdded)))
-      click(button("Hide pre-orders"))
+      toggleHidePreorders()
     },
     function() {
-      check("toggling Hide pre-orders off restores them", svc.hidePreorders === false && button("Hide pre-orders").selected === false && titlesEqual(leftTitles(), expAdded) && !!button("Albums (13)"))
+      check("toggling Hide pre-orders off restores them", svc.hidePreorders === false && titlesEqual(leftTitles(), expAdded) && !!button("Albums (13)"))
+      openSettings()
+      check("gear menu Hide pre-orders is no longer highlighted", button("Hide pre-orders").selected === false)
+      key(Qt.Key_Escape)
       click(button("Playlists (2)"))
     },
     function() {
-      check("sort and hide controls are only offered on the Albums list", !button("Hide pre-orders") && !button("Sort: Recently added"))
+      check("Sort is only offered on the Albums list", !button("Sort: Recently added"))
+      openSettings()
+      check("Hide pre-orders stays available in the gear menu on the Playlists tab", !!button("Hide pre-orders"))
+      key(Qt.Key_Escape)
       click(button("Albums (13)"))
     },
     function() { click(sortButton()) },
     function() { click(button("Title A–Z")) },
-    function() { click(button("Hide pre-orders")) },
+    function() { toggleHidePreorders() },
     // (the persisted file is verified by run.sh, which reads it from disk)
 
     // ---- library context: footer Play, view switch, live counts (Phase 3) ----
@@ -642,7 +718,7 @@ ShellRoot {
         svc.context.type === "library" && svc.context.key === "library" && svc.queue.length === 12 && svc.queue[0].title === "h0" && svc.queueIndex === 0)
       svc.queue = []; svc.queueIndex = -1
       click(shuffleButtons()[0])
-      check("library Shuffle On via the toolbar", svc.isShuffled("library") && shuffleButtons()[0].text === "Shuffle: On")
+      check("library Shuffle On via the footer", svc.isShuffled("library") && shuffleLabel() === "Shuffle: On")
       var libDiffers = false
       for (var r = 0; r < 5 && !libDiffers; r++) { svc.queue = []; svc.queueIndex = -1; click(footerPlay()); libDiffers = svc.queue.map(function(t) { return t.title }).join() !== mk("h", 12).map(function(t) { return t.title }).join() }
       check("idle footer Play with library Shuffle On plays the library in a shuffled order", svc.queue.length === 12 && libDiffers)
@@ -670,7 +746,7 @@ ShellRoot {
     function() {
       // A known queue entry without touching the real player.
       svc.queue = [{
-        uid: "p5#0", title: host.longTrack, artist: "Long Title Artist", album: "Long",
+        uid: "p5#0", title: host.longTitle + " " + host.longTitle, artist: "Long Title Artist", album: "Long",
         duration: 200, streamable: true, subsonicId: "t:fx-none", bandcampId: ""
       }]
       svc.queueIndex = 0
@@ -692,17 +768,20 @@ ShellRoot {
         bordered[bs[i].bordered] = 1
       }
       log("footer buttons=" + bs.length + " heights=" + Object.keys(heights) + " icons=" + JSON.stringify(Object.keys(icons)))
-      check("footer transport has exactly 3 buttons (Prev, Play/Pause, Next)", bs.length === 3)
+      check("footer transport has exactly 4 buttons (Shuffle, Prev, Play/Pause, Next)", bs.length === 4)
       check("the Stop button is gone (no stop glyph in the window)", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uf04d" && it.visible }))
-      check("the three are exactly prev / play / next", Object.keys(icons).sort().join(",") === ["\uf048", "\uf04b", "\uf051"].sort().join(","))
-      check("all three share one height, width, icon size and border (Phase 2.1 style)",
+      check("the four are exactly shuffle / prev / play / next", Object.keys(icons).sort().join(",") === ["\uf074", "\uf048", "\uf04b", "\uf051"].sort().join(","))
+      check("all four share one height, width, icon size and border (Phase 2.1 style)",
         Object.keys(heights).length === 1 && Object.keys(heights)[0] == Style.spacing.controlHeight &&
         Object.keys(bordered).length === 1 && Object.keys(bordered)[0] === "true" &&
         bs.every(function(b) { return Math.abs(b.width - b.height) < 0.5 && b.iconSize === Style.space(16) }))
-      var play = named(stage, "footerPlay")
-      var cx = play.mapToItem(f, play.width / 2, 0).x
-      log("play centre=" + cx + " footer centre=" + (f.width / 2))
-      check("the transport row is centred in the footer", Math.abs(cx - f.width / 2) <= 1)
+      var tr = named(stage, "transportRow")
+      var right = tr.mapToItem(f, tr.width, 0).x
+      log("transport right=" + right + " footer right(margin " + Style.spacing.md + ")=" + (f.width - Style.spacing.md))
+      check("v3: the whole transport group is right-justified in the footer",
+        Math.abs(right - (f.width - Style.spacing.md)) <= 1)
+      check("Shuffle sits on the left edge of the right-justified transport group",
+        named(stage, "footerShuffle").mapToItem(tr, 0, 0).x === 0 && named(stage, "footerNext").mapToItem(tr, 0, 0).x > 0)
       svc.isPlaying = true
       svc.isPaused = false
     },
@@ -719,7 +798,7 @@ ShellRoot {
     function() {
       var t = named(stage, "footerTitle"), sub = named(stage, "footerSub")
       log("footer title lines=" + t.lineCount + " truncated=" + t.truncated + " | sub=" + JSON.stringify(sub.text))
-      check("now-playing title wraps to at most 2 lines, ellipsis only after line 2", t.text === host.longTrack && t.lineCount === 2 && t.truncated === true)
+      check("now-playing title wraps to at most 2 lines, ellipsis only after line 2", t.text === host.longTitle + " " + host.longTitle && t.lineCount === 2 && t.truncated === true)
       check("line 2 is 'Artist  ·  Album', smaller and dimmed", sub.text === "Long Title Artist  ·  Long" && sub.visible && sub.font.pixelSize < t.font.pixelSize && sub.color.hslLightness < t.color.hslLightness)
     },
     function() {
@@ -799,7 +878,7 @@ ShellRoot {
       svc.duration = 0
     },
 
-    // ---- Phase 6: bar text suffix, clicks, album art ----
+    // ---- Phase 6: bar text is always plain BC, clicks, cached art for MPRIS ----
     function() {
       svc.queue = []
       svc.queueIndex = -1
@@ -812,8 +891,7 @@ ShellRoot {
     function() {
       var b = barButton()
       check("bar text is exactly BC when stopped (no play/pause glyph instead of BC)", !!b && b.text === "BC")
-      check("separate art module (bar-art/ArtWidget.qml) loads", artWidgetLoader.status === Loader.Ready && !!named(artWidgetLoader.item, "artImage") && artWidgetLoader.item.implicitWidth === 24)
-      check("art module displays the local current-art.jpg (no URL)", String(named(artWidgetLoader.item, "artImage").source).indexOf("current-art.jpg") >= 0)
+      check("v3: the bar-art widget is gone (no art image in the plugin tree)", !find(panel, function(it) { return it.objectName === "artImage" }))
       check("stopped writes the bundled placeholder (byte-identical to assets/current-art-placeholder.jpg)", cmpArt.same === true)
       check("placeholder is a valid 128x128 image (never a broken image)", artProbe.status === Image.Ready && artProbe.implicitWidth === 128 && artProbe.implicitHeight === 128)
       svc.queue = [{ uid: "art1", title: "Art One", artist: "A", album: "X", duration: 100, streamable: true,
@@ -825,7 +903,7 @@ ShellRoot {
     },
     function() {
       var b = barButton()
-      check("playing suffix is 'BC ❚❚' (BC stays the text)", b.text === "BC \u275A\u275A")
+      check("v3: playing the bar stays plain BC (no play/pause suffix)", b.text === "BC")
       check("first cover was written and downscaled to <=128 px", artProbe.status === Image.Ready && artProbe.implicitWidth <= 128 && artProbe.implicitHeight <= 128)
       check("first cover keeps its 300x120 aspect (128x51)", artProbe.implicitWidth === 128 && artProbe.implicitHeight === 51)
       check("playing art is not the placeholder", svc.barArtIsPlaceholder === false)
@@ -834,7 +912,7 @@ ShellRoot {
     },
     function() {
       var b = barButton()
-      check("paused suffix is 'BC ▶' (still BC, not a bare glyph)", b.text === "BC \u25B6")
+      check("v3: pausing the bar stays plain BC (no play glyph)", b.text === "BC")
       check("pausing keeps the current cover (no placeholder while paused)", svc.barArtIsPlaceholder === false && artProbe.implicitWidth === 128 && artProbe.implicitHeight === 51)
       svc.isPaused = false
       svc.queue = [{ uid: "art2", title: "Art Two", artist: "A", album: "X", duration: 100, streamable: true,
@@ -846,13 +924,13 @@ ShellRoot {
       check("track change rewrote current-art.jpg", svc.artRevision > host.artRev1)
       check("second cover replaced the first and was downscaled (90x260 -> 44x128)", artProbe.status === Image.Ready && artProbe.implicitWidth === 44 && artProbe.implicitHeight === 128)
       check("track-change art is not the placeholder", svc.barArtIsPlaceholder === false)
-      check("playing suffix still 'BC ❚❚' after the track change", barButton().text === "BC \u275A\u275A")
+      check("bar text stays plain BC after the track change", barButton().text === "BC")
       svc.isPlaying = false
       svc.isPaused = false
     },
     function() {
       check("stopping restores the placeholder image (128x128)", artProbe.status === Image.Ready && artProbe.implicitWidth === 128 && artProbe.implicitHeight === 128)
-      check("stopped suffix returns to plain BC", barButton().text === "BC")
+      check("stopped bar is still plain BC", barButton().text === "BC")
       comparePlaceholder()
     },
     function() {
@@ -894,68 +972,53 @@ ShellRoot {
       svc.duration = 0
     },
 
-    // ---- Phase 7: external links row ----
+    // ---- Phase 7: the single Collection link in the search row ----
     function() {
-      var row = named(stage, "linksRow")
-      var labels = ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"]
-      var found = 0, oneRow = true, sameStyle = true, allEnabled = true, y0 = -1
-      for (var i = 0; i < labels.length; i++) {
-        var b = button(labels[i])
-        if (!b) continue
-        found++
-        var y = Math.round(b.mapToItem(row, 0, 0).y)
-        if (y0 < 0) y0 = y
-        else if (y !== y0) oneRow = false
-        if (Math.round(b.height) !== Style.spacing.controlHeight || b.bordered !== true) sameStyle = false
-        if (!b.enabled) allEnabled = false
-      }
-      check("links row has all six labelled buttons, all enabled", found === 6 && allEnabled)
-      check("links row is ONE row of uniform BcButtons (same y, height, border)", oneRow && sameStyle)
-      var sy = searchField().mapToItem(stage, 0, 0).y + searchField().height
-      var ry = row.mapToItem(stage, 0, 0).y
-      var ay = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0).y
-      check("links row sits beneath the search box and above the toolbar", ry >= sy && ry < ay)
-      check("Bandcamp / Discover / Editorials / Radio use the verified URLs",
-        panel.externalLinks[0].url === "https://bandcamp.com" &&
-        panel.externalLinks[1].url === "https://bandcamp.com/discover" &&
-        panel.externalLinks[2].url === "https://daily.bandcamp.com" &&
-        panel.externalLinks[3].url === "https://bandcamp.com/radio")
-      check("Your Feed / Your Collection are built from the library username (fixture-user)",
-        panel.externalLinks[4].url === "https://bandcamp.com/fixture-user/feed" &&
-        panel.externalLinks[5].url === "https://bandcamp.com/fixture-user")
+      var cb = collectionButton(), sf = searchField(), icon = named(stage, "searchIcon")
+      var gone = ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"]
+      check("v3: Collection is the only link button", !!cb && cb.text === "Collection" && gone.every(function(l) { return !button(l) }))
+      check("v3: the links row is gone", !named(stage, "linksRow"))
+      var cy = cb.mapToItem(stage, 0, 0).y, fy = sf.mapToItem(stage, 0, 0).y
+      var right = sf.mapToItem(stage, 0, 0).x + sf.width
+      check("Collection is inline in the search row, to the right of the field",
+        Math.abs(cy - fy) <= 2 && cb.mapToItem(stage, 0, 0).x >= right - 1)
+      check("the magnifier sits to the left of the search field", icon.mapToItem(stage, 0, 0).x < sf.mapToItem(stage, 0, 0).x)
+      check("Collection keeps the library-username URL and BcButton style (fixture-user)",
+        panel.collectionUrl === "https://bandcamp.com/fixture-user" && cb.tooltipText === "https://bandcamp.com/fixture-user" &&
+        cb.enabled === true && cb.height === Style.spacing.controlHeight && cb.bordered === true)
     },
-    function() { click(button("Bandcamp")) },
-    function() { check("Bandcamp opens https://bandcamp.com", svc.lastOpenedUrl === "https://bandcamp.com"); click(button("Discover")) },
-    function() { check("Discover opens https://bandcamp.com/discover", svc.lastOpenedUrl === "https://bandcamp.com/discover"); click(button("Editorials (Daily)")) },
-    function() { check("Editorials (Daily) opens https://daily.bandcamp.com", svc.lastOpenedUrl === "https://daily.bandcamp.com"); click(button("Radio")) },
-    function() { check("Radio opens https://bandcamp.com/radio", svc.lastOpenedUrl === "https://bandcamp.com/radio"); click(button("Your Feed")) },
-    function() { check("Your Feed opens https://bandcamp.com/fixture-user/feed", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user/feed"); click(button("Your Collection")) },
-    function() { check("Your Collection opens https://bandcamp.com/fixture-user", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user") },
+    function() { click(collectionButton()) },
+    // The offscreen tooltip can eat the next click; focus the search field to settle it.
+    function() { check("Collection opens https://bandcamp.com/fixture-user", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user"); click(searchField()) },
 
-    // ---- logout flow (Phase 2) ----
-    function() { click(button("\uf141")) },
+    // ---- logout flow (Phase 2), now reached through the gear menu ----
+    function() { openSettings() },
     function() { click(button("Log out / Clear Bandcamp session")) },
-    function() { check("menu item opens confirmation (does not log out yet)", panel.logoutConfirmOpen && !panel.menuOpen && svc.status !== "Cleared imported session"); key(Qt.Key_Escape) },
-    function() { check("Esc cancels confirmation, window stays, no logout", !panel.logoutConfirmOpen && panel.opened && svc.status !== "Cleared imported session"); click(button("\uf141")) },
+    function() { check("gear menu item opens confirmation (does not log out yet)", panel.logoutConfirmOpen && !panel.menuOpen && svc.status !== "Cleared imported session"); key(Qt.Key_Escape) },
+    function() { check("Esc cancels confirmation, window stays, no logout", !panel.logoutConfirmOpen && panel.opened && svc.status !== "Cleared imported session"); openSettings() },
+    function() { key(Qt.Key_Down); key(Qt.Key_Down) },
     function() { key(Qt.Key_Return) },
-    function() { check("Enter on open menu activates item", panel.logoutConfirmOpen); key(Qt.Key_Return) },
+    function() { check("Enter on the Log out gear-menu item opens the confirmation", panel.logoutConfirmOpen); key(Qt.Key_Return) },
     function() { check("Enter on confirmation = preselected Cancel: no logout", !panel.logoutConfirmOpen && svc.status !== "Cleared imported session") },
-    function() { click(button("\uf141")) },
+    function() { openSettings() },
     function() { click(button("Log out / Clear Bandcamp session")) },
     function() { key(Qt.Key_Right) },
     function() { key(Qt.Key_Return) },
-    function() { check("confirming runs clearCookies", !panel.logoutConfirmOpen && svc.status === "Cleared imported session"); check("window stays open after logout", panel.opened) },
+    function() { check("confirming runs clearCookies", !panel.logoutConfirmOpen && svc.status === "Cleared imported session"); check("window stays open after logout", panel.opened); click(searchField()) },
 
-    // ---- refresh (Phase 2) ----
-    function() { click(button("Refresh")) },
+    // ---- refresh (Phase 2), now reached through the gear menu ----
+    function() { refreshLibrary() },
     function() { },
     function() { },
     function() { },
     function() {
-      check("refreshing became true after click", !!seen)
-      check("at that moment: button disabled, spinning, dimmed", seen && seen.enabled === false && seen.spin === true && seen.op < 1)
-      var b = button("Refresh")
-      check("refresh finished: not refreshing, button re-enabled and still", !svc.refreshing && b && b.enabled === true && b.iconSpinning === false)
+      check("refreshing became true after the gear-menu click", !!seen)
+      check("at that moment: gear-menu item disabled, spinning, dimmed", seen && seen.enabled === false && seen.spin === true && seen.op < 1)
+      click(searchField())
+      openSettings()
+      var b = button("Refresh library")
+      check("refresh finished: not refreshing, gear-menu item re-enabled and still", !svc.refreshing && b && b.enabled === true && b.iconSpinning === false)
+      if (panel.menuOpen) key(Qt.Key_Escape)
       log("status after refresh: " + JSON.stringify(svc.status))
     },
 
@@ -1069,16 +1132,19 @@ ShellRoot {
     function() {
       prepLists()
       check("[relaunch] sort choice restored from disk (Title A–Z)", svc.sortMode === "title" && !!button("Sort: Title A–Z"))
-      check("[relaunch] Hide pre-orders restored (On, highlighted)", svc.hidePreorders === true && button("Hide pre-orders").selected === true)
+      check("[relaunch] Hide pre-orders restored (On)", svc.hidePreorders === true)
       check("[relaunch] list is Title A–Z without pre-orders", titlesEqual(leftTitles(), noPre(expTitle)))
       check("[relaunch] Albums (N) reflects the restored filter", !!button("Albums (11)"))
-      click(button("Sort: Title A–Z"))
+      openSettings()
+      check("[relaunch] gear menu shows Hide pre-orders highlighted", button("Hide pre-orders").selected === true)
+      key(Qt.Key_Escape)
     },
+    function() { click(button("Sort: Title A–Z")) },
     function() {
       check("[relaunch] sort menu marks the restored choice", panel.menuItems[2].icon === "\uf00c" && panel.menuItems[0].icon !== "\uf00c")
       key(Qt.Key_Escape)
     },
-    function() { click(button("Hide pre-orders")) },
+    function() { toggleHidePreorders() },
     function() {
       check("[relaunch] filter can be turned off again", svc.hidePreorders === false && titlesEqual(leftTitles(), expTitle))
     }
@@ -1092,10 +1158,10 @@ ShellRoot {
       var n = svc.collection.length
       log("real library: " + n + " albums, " + svc.playlists.length + " playlists")
       check("[real] library loaded (hundreds of albums, playlists present)", n > 500 && svc.playlists.length > 5)
-      check("[real] links build Feed/Collection from the real username",
+      check("[real] Collection is built from the real username and enabled",
         panel.bandcampUser !== "" &&
-        panel.externalLinks[4].url === "https://bandcamp.com/" + panel.bandcampUser + "/feed" &&
-        panel.externalLinks[5].url === "https://bandcamp.com/" + panel.bandcampUser)
+        panel.collectionUrl === "https://bandcamp.com/" + encodeURIComponent(panel.bandcampUser) &&
+        collectionButton().enabled === true && collectionButton().tooltipText === panel.collectionUrl)
       var strings = []
       for (var i = 0; i < svc.collection.length; i++) { var a = svc.collection[i]; strings.push(a.title, a.artist); for (var j = 0; j < a.tracks.length; j++) strings.push(a.tracks[j].title, a.tracks[j].artist, a.tracks[j].album) }
       for (var k = 0; k < svc.playlists.length; k++) { strings.push(svc.playlists[k].name); for (var m = 0; m < svc.playlists[k].tracks.length; m++) strings.push(svc.playlists[k].tracks[m].title, svc.playlists[k].tracks[m].artist) }
