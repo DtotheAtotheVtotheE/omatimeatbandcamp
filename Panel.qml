@@ -41,6 +41,15 @@ Panel {
   property var selectedAlbum: null
   property var selectedPlaylist: null
 
+  // The playback/shuffle context is whatever the detail pane is showing: search
+  // results, the selected playlist, the selected album, or (nothing selected) the
+  // whole library. Shuffle is remembered per context.
+  readonly property string contextKey: query !== "" ? "search"
+    : selectedPlaylist ? "playlist:" + selectedPlaylist.id
+    : selectedAlbum ? "album:" + selectedAlbum.id
+    : "library"
+  readonly property bool shuffleOn: service ? service.isShuffled(contextKey) : false
+
   // Overflow (⋯) menu and its confirmation. New menu entries are added to
   // `menuItems`; destructive ones must go through a ConfirmDialog like logout.
   property bool menuOpen: false
@@ -95,11 +104,22 @@ Panel {
   function playTrackNow(track, list) {
     if (!service) return
     var tracks = list || [track]
-    service.playContext("list", "Selection", tracks, tracks.indexOf(track))
+    service.playContext("list", detailTitle(), tracks, tracks.indexOf(track), contextKey)
   }
 
-  function cycleShuffle() {
-    if (service) service.setShuffle(((service.shuffleMode || 0) + 1) % 4)
+  // Footer Play with nothing loaded: play the current context from its start
+  // (shuffled if that context's Shuffle is On).
+  function playContextNow() {
+    if (!service) return
+    if (query !== "") {
+      if (searchTracks.length > 0) service.playContext("search", "Search results", searchTracks, undefined, "search")
+    } else if (selectedPlaylist) {
+      service.playPlaylist(selectedPlaylist)
+    } else if (selectedAlbum) {
+      service.playAlbum(selectedAlbum)
+    } else {
+      service.playLibrary()
+    }
   }
 
   function detailTracks() {
@@ -243,19 +263,14 @@ Panel {
             onClicked: if (root.service) root.service.activeTab = 1
           }
 
+          // One toggle with exactly two states, highlighted when On; applies to the
+          // current context only (see contextKey).
           BcButton {
-            text: "Play all"
+            text: "Shuffle: " + (root.shuffleOn ? "On" : "Off")
+            selected: root.shuffleOn
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onClicked: if (root.service) root.service.playAll()
-          }
-
-          BcButton {
-            text: root.service ? root.service.shuffleLabel : "Shuffle: Off"
-            selected: root.service && root.service.shuffleMode > 0
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onClicked: root.cycleShuffle()
+            onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
           }
         }
 
@@ -532,7 +547,11 @@ Panel {
               active: root.playing && !root.paused
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: if (root.service) root.service.togglePlay()
+              onClicked: {
+                if (!root.service) return
+                if (root.service.currentTrack) root.service.togglePlay()
+                else root.playContextNow()
+              }
             }
 
             BcButton {

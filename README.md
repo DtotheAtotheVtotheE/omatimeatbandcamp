@@ -44,7 +44,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 - Browse Albums (collection) and Playlists tabs
 - Global search across albums and playlist tracks
-- Shuffle modes: Off, Shuffle All, Shuffle Album, Shuffle Playlist
+- Shuffle: one On/Off toggle, remembered per context (each album, each playlist, search results, whole library)
 - Streams resolved from Bandcamp's player API (`/api/player/2/player_data_web`),
   played via a persistent idle mpv with optional cookie headers
 - Album tracklists are fetched lazily on selection and cached in memory

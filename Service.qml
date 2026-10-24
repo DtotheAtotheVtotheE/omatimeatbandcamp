@@ -83,6 +83,10 @@ Item {
   // ---- library ------------------------------------------------------------
   property var collection: []
   property var playlists: []
+  // Which list the window shows: 0 = Albums, 1 = Playlists. Must be declared here:
+  // Panel reads and assigns it, and an undeclared property silently drops the
+  // assignment (the Albums/Playlists switch did nothing before this).
+  property int activeTab: 0
   property var searchResults: ({ albums: [], tracks: [] })
   property string searchQuery: ""
   property string detectedUser: ""
@@ -225,15 +229,17 @@ Item {
   property var queue: []
   property int queueIndex: -1
   property var context: ({ type: "", name: "", tracks: [] })
-  property int shuffleMode: 0 // 0 off, 1 all, 2 album/context, 3 playlist
+  // Shuffle is a plain On/Off kept PER CONTEXT. A context is whatever the window is
+  // showing: "album:<id>", "playlist:<id>", "search" or "library" (nothing selected).
+  // Toggling one context never touches another, nor the queue of a different
+  // context that happens to be playing.
+  property var shuffleByContext: ({})
+  property string playingContextKey: ""
   property bool isPlaying: false
   property bool isPaused: false
   property string playbackError: ""
 
   readonly property var currentTrack: (queueIndex >= 0 && queueIndex < queue.length) ? queue[queueIndex] : null
-
-  readonly property var shuffleNames: ["Off", "All", "Album / context", "Playlist"]
-  readonly property string shuffleLabel: "Shuffle: " + (shuffleNames[shuffleMode] || "Off")
 
   readonly property string playIcon: isPlaying && !isPaused ? "\u23F8" : "\u25B6"
 
@@ -242,21 +248,63 @@ Item {
     return [t.artist || "", t.album || "", t.title || "", t.trackUrl || ""].join("|")
   }
 
-  function playContext(type, name, tracks, startIndex) {
-    context = { type: type, name: name, tracks: tracks.slice() }
-    queue = tracks.slice()
-    if (shuffleMode > 0) queue = shuffleFor(shuffleMode, tracks)
-    var idx = startIndex === undefined ? 0 : startIndex
-    if (shuffleMode > 0) idx = 0
-    queueIndex = idx >= 0 && idx < queue.length ? idx : 0
-    playCurrent()
+  function isShuffled(key) { return key !== "" && shuffleByContext[key] === true }
+
+  function toggleShuffle(key) { setShuffle(key, !isShuffled(key)) }
+
+  function setShuffle(key, on) {
+    var m = {}
+    for (var k in shuffleByContext) m[k] = shuffleByContext[k]
+    m[key] = !!on
+    shuffleByContext = m
+    // Only the context that is actually playing has a live queue to reorder.
+    if (key === playingContextKey) reorderPlayingQueue(!!on)
   }
 
-  function shuffleFor(mode, tracks) {
-    if (mode === 1) {
-      return Model.fisherYates(Model.flattenTracks(collection, playlists))
+  // Re-order the live queue for the playing context, keeping the current track playing.
+  function reorderPlayingQueue(on) {
+    var tracks = (context && context.tracks) ? context.tracks : []
+    if (tracks.length === 0) return
+    var cur = currentTrack
+    if (on) {
+      var rest = tracks.filter(function(t) { return t !== cur })
+      queue = cur ? [cur].concat(Model.fisherYates(rest)) : Model.fisherYates(tracks)
+      queueIndex = queue.length > 0 ? 0 : -1
+    } else {
+      queue = tracks.slice()
+      var idx = cur ? queue.indexOf(cur) : -1
+      if (idx < 0 && cur) {
+        for (var i = 0; i < queue.length; i++) {
+          if (trackSignature(queue[i]) === trackSignature(cur)) { idx = i; break }
+        }
+      }
+      queueIndex = idx >= 0 ? idx : (queue.length > 0 ? 0 : -1)
     }
-    return Model.fisherYates(tracks)
+  }
+
+  // Start playing `tracks` as the context identified by `key`. `startIndex` is the
+  // track the user clicked; leave it undefined to start from the beginning (or, with
+  // shuffle On, from a random track). With shuffle On the clicked track plays first
+  // and the rest of THIS context follows in random order.
+  function playContext(type, name, tracks, startIndex, key) {
+    var ctxKey = key || ""
+    context = { type: type, name: name, tracks: tracks.slice(), key: ctxKey }
+    playingContextKey = ctxKey
+    var hasStart = startIndex !== undefined && startIndex >= 0 && startIndex < tracks.length
+    if (isShuffled(ctxKey)) {
+      if (hasStart) {
+        var first = tracks[startIndex]
+        var rest = tracks.filter(function(t, i) { return i !== startIndex })
+        queue = [first].concat(Model.fisherYates(rest))
+      } else {
+        queue = Model.fisherYates(tracks)
+      }
+      queueIndex = queue.length > 0 ? 0 : -1
+    } else {
+      queue = tracks.slice()
+      queueIndex = hasStart ? startIndex : 0
+    }
+    playCurrent()
   }
 
   function playAlbum(alb, startTrack) {
@@ -265,8 +313,8 @@ Item {
       root.requestTracks(alb, function() { root.playAlbum(alb, startTrack) })
       return
     }
-    var idx = startTrack ? tracks.indexOf(startTrack) : 0
-    playContext("album", alb.title || "", tracks, idx)
+    var idx = startTrack ? tracks.indexOf(startTrack) : undefined
+    playContext("album", alb.title || "", tracks, idx, "album:" + alb.id)
   }
 
   function playPlaylist(pl, startTrack) {
@@ -275,14 +323,17 @@ Item {
       root.requestTracks(pl, function() { root.playPlaylist(pl, startTrack) })
       return
     }
-    var idx = startTrack ? tracks.indexOf(startTrack) : 0
-    playContext("playlist", pl.name || pl.title || "", tracks, idx)
+    var idx = startTrack ? tracks.indexOf(startTrack) : undefined
+    playContext("playlist", pl.name || pl.title || "", tracks, idx, "playlist:" + pl.id)
   }
 
-  function playAll() {
+  // The whole library as one context (what the window shows when nothing is selected).
+  // Tracks come from what has been loaded so far; collection items only carry tracks
+  // once their album has been opened.
+  function playLibrary() {
     var tracks = Model.flattenTracks(collection, playlists)
     if (tracks.length === 0) return
-    playContext("all", "All tracks", tracks, 0)
+    playContext("library", "Library", tracks, undefined, "library")
   }
 
   function playTrack(track) {
@@ -295,7 +346,8 @@ Item {
     }
     queue = [track]
     queueIndex = 0
-    context = { type: "single", name: track.album || "", tracks: [track] }
+    context = { type: "single", name: track.album || "", tracks: [track], key: "" }
+    playingContextKey = ""
     playCurrent()
   }
 
@@ -360,23 +412,6 @@ Item {
       queueIndex = queue.length - 1
     }
     playCurrent()
-  }
-
-  function setShuffle(mode) {
-    shuffleMode = mode
-    if (!context || !context.tracks) return
-    var hasCurrent = currentTrack
-    queue = shuffleFor(mode, context.tracks)
-    // Keep the current track if it survived the shuffle.
-    if (hasCurrent) {
-      var idx = -1
-      for (var i = 0; i < queue.length; i++) {
-        if (trackSignature(queue[i]) === trackSignature(hasCurrent)) { idx = i; break }
-      }
-      queueIndex = idx >= 0 ? idx : 0
-    } else {
-      queueIndex = queue.length > 0 ? 0 : -1
-    }
   }
 
   function search(q) {
@@ -496,7 +531,7 @@ Item {
     return JSON.stringify({
       playing: root.isPlaying,
       paused: root.isPaused,
-      shuffle: root.shuffleMode,
+      shuffle: root.isShuffled(root.playingContextKey) ? 1 : 0,
       title: t ? (t.title || "") : "",
       artist: t ? (t.artist || "") : "",
       album: t ? (t.album || "") : "",
