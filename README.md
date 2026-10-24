@@ -52,6 +52,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   (`~/.local/state/omatimeatbandcamp/ui.json`)
 - Shuffle: one On/Off toggle, remembered per context (each album, each playlist, search results, whole library);
   click the selected row again to deselect it and get back to the whole-library context
+- Footer: Prev / Play-Pause / Next (no Stop), a seekable progress bar with elapsed/total time, two-line now-playing
+  text, and a visible notice plus automatic skip when a stream fails
 - Refresh runs the backend sync in the background (cached library stays on screen); streams for Subsonic tracks
   are resolved by the backend (`backend play`), so stream URLs/credentials never appear in argv or logs
 

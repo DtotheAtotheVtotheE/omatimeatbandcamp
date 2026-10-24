@@ -189,7 +189,7 @@ ShellRoot {
       var hs = {}, ic = {}, bd = {}
       for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
       log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("11 buttons in the open window (Play all is gone; Sort + Hide pre-orders added)", bs.length === 11)
+      check("10 buttons in the open window (Play all and Stop are gone; Sort + Hide pre-orders added)", bs.length === 10)
       check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
       check("all buttons bordered (one border style)", Object.keys(bd).length === 1 && Object.keys(bd)[0] === "true")
@@ -624,6 +624,139 @@ ShellRoot {
       svc.collection = svc.collection.slice(0, 1)
       check("Albums (N) follows the data (live)", !!button("Albums (1)"))
       svc.queue = []; svc.queueIndex = -1
+    },
+
+    // ---- Phase 5: footer transport, progress/seek, error notice ----
+    function() {
+      // A known queue entry without touching the real player.
+      svc.queue = [{
+        uid: "p5#0", title: host.longTrack, artist: "Long Title Artist", album: "Long",
+        duration: 200, streamable: true, subsonicId: "t:fx-none", bandcampId: ""
+      }]
+      svc.queueIndex = 0
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.position = 0
+      svc.duration = 200
+      svc.pendingSeek = -1
+      tc.mouseMove(stage, 5, 5)
+    },
+    function() {
+      var f = named(stage, "footer")
+      var bs = allButtons(f, [])
+      var heights = {}, icons = {}, bordered = {}
+      for (var i = 0; i < bs.length; i++) {
+        heights[Math.round(bs[i].height)] = 1
+        icons[bs[i].iconText] = 1
+        bordered[bs[i].bordered] = 1
+      }
+      log("footer buttons=" + bs.length + " heights=" + Object.keys(heights) + " icons=" + JSON.stringify(Object.keys(icons)))
+      check("footer transport has exactly 3 buttons (Prev, Play/Pause, Next)", bs.length === 3)
+      check("the Stop button is gone (no stop glyph in the window)", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uf04d" && it.visible }))
+      check("the three are exactly prev / play / next", Object.keys(icons).sort().join(",") === ["\uf048", "\uf04b", "\uf051"].sort().join(","))
+      check("all three share one height, width, icon size and border (Phase 2.1 style)",
+        Object.keys(heights).length === 1 && Object.keys(heights)[0] == Style.spacing.controlHeight &&
+        Object.keys(bordered).length === 1 && Object.keys(bordered)[0] === "true" &&
+        bs.every(function(b) { return Math.abs(b.width - b.height) < 0.5 && b.iconSize === Style.space(16) }))
+      var play = named(stage, "footerPlay")
+      var cx = play.mapToItem(f, play.width / 2, 0).x
+      log("play centre=" + cx + " footer centre=" + (f.width / 2))
+      check("the transport row is centred in the footer", Math.abs(cx - f.width / 2) <= 1)
+      svc.isPlaying = true
+      svc.isPaused = false
+    },
+    function() {
+      var p = named(stage, "footerPlay")
+      check("while playing the same button shows Pause, says Pause and is highlighted", p.iconText === "\uf04c" && p.tooltipText === "Pause" && p.active === true)
+      svc.isPaused = true
+    },
+    function() {
+      var p = named(stage, "footerPlay")
+      check("while paused it flips back to Play", p.iconText === "\uf04b" && p.tooltipText === "Play" && p.active === false)
+      svc.isPaused = false
+    },
+    function() {
+      var t = named(stage, "footerTitle"), sub = named(stage, "footerSub")
+      log("footer title lines=" + t.lineCount + " truncated=" + t.truncated + " | sub=" + JSON.stringify(sub.text))
+      check("now-playing title wraps to at most 2 lines, ellipsis only after line 2", t.text === host.longTrack && t.lineCount === 2 && t.truncated === true)
+      check("line 2 is 'Artist  ·  Album', smaller and dimmed", sub.text === "Long Title Artist  ·  Long" && sub.visible && sub.font.pixelSize < t.font.pixelSize && sub.color.hslLightness < t.color.hslLightness)
+    },
+    function() {
+      svc.duration = 200
+      svc.position = 0
+      svc.applyPlaybackStatus({ running: true, position: 50, duration: 200, paused: false, idle: false })
+    },
+    function() {
+      check("player position feeds the footer", Math.abs(svc.position - 50) < 0.01)
+      check("elapsed and total labels", named(stage, "elapsedLabel").text === "0:50" && named(stage, "totalLabel").text === "3:20")
+      var fill = named(stage, "progressFill"), track = named(stage, "progressTrack")
+      log("progress fill=" + fill.width + " track=" + track.width + " ratio=" + (fill.width / track.width))
+      check("progress bar is determinate and 25% filled", Math.abs(fill.width / track.width - 0.25) < 0.02)
+    },
+    function() {
+      var area = named(stage, "seekArea")
+      tc.mouseClick(area, area.width * 0.5, area.height * 0.5)
+    },
+    function() {
+      check("clicking the middle of the bar seeks to half the track", Math.abs(svc.position - 100) < 2 && Math.abs(svc.pendingSeek - 100) < 2)
+      check("the bar and elapsed label move immediately", named(stage, "elapsedLabel").text === "1:40" && Math.abs(named(stage, "progressFill").width / named(stage, "progressTrack").width - 0.5) < 0.03)
+      var area = named(stage, "seekArea")
+      tc.mousePress(area, area.width * 0.2, area.height * 0.5, Qt.LeftButton)
+      tc.mouseMove(area, area.width * 0.8, area.height * 0.5, -1, Qt.LeftButton)
+    },
+    function() {
+      check("dragging previews the drop time before releasing", named(stage, "elapsedLabel").text === "2:40" && Math.abs(svc.position - 100) < 2)
+      var area = named(stage, "seekArea")
+      tc.mouseRelease(area, area.width * 0.8, area.height * 0.5, Qt.LeftButton)
+    },
+    function() {
+      check("releasing a drag seeks to the dropped position", Math.abs(svc.position - 160) < 3 && Math.abs(svc.pendingSeek - 160) < 3)
+    },
+    function() {
+      // Mid-stream failure: the stream goes idle 3 s into a 200 s track.
+      svc.queue = [
+        { uid: "e1", title: "Bad Stream", artist: "A", album: "X", duration: 200, streamable: true, subsonicId: "t:fx-bad1" },
+        { uid: "e2", title: "Good Next", artist: "A", album: "X", duration: 180, streamable: true, subsonicId: "t:fx-bad2" }
+      ]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.duration = 200
+      svc.position = 3
+      svc.failureStreak = 0
+      svc.playbackStartedAt = 0
+      svc.applyPlaybackStatus({ running: true, position: 3, duration: 200, paused: false, idle: true })
+      check("a stream that dies early shows 'Couldn't play <title> — skipped'", svc.playbackError === "Couldn't play Bad Stream — skipped")
+      check("...and the queue advances to the next track", svc.queueIndex === 1 && svc.currentTrack.title === "Good Next")
+      check("the footer shows the error in place of Artist · Album", named(stage, "footerError").visible && named(stage, "footerError").text === "Couldn't play Bad Stream — skipped" && !named(stage, "footerSub").visible)
+      check("the error is drawn in the urgent colour", named(stage, "footerError").color === Color.urgent)
+    },
+    function() {
+      // Natural end: position reaches duration, so it advances silently.
+      svc.isPlaying = true
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.duration = 180
+      svc.position = 0
+      svc.failureStreak = 0
+      svc.playbackStartedAt = 0
+      svc.queue = [
+        { uid: "n1", title: "First", artist: "A", album: "X", duration: 180, streamable: true, subsonicId: "t:fx-n1" },
+        { uid: "n2", title: "Second", artist: "A", album: "X", duration: 170, streamable: true, subsonicId: "t:fx-n2" }
+      ]
+      svc.queueIndex = 0
+      svc.applyPlaybackStatus({ running: true, position: 179.6, duration: 180, paused: false, idle: true })
+      check("a track that reaches its duration advances with NO error", svc.queueIndex === 1 && svc.playbackError === "")
+      check("the footer error line is hidden again", !named(stage, "footerError").visible)
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.position = 0
+      svc.duration = 0
     },
 
     // ---- logout flow (Phase 2) ----

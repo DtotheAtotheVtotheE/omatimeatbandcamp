@@ -18,12 +18,21 @@ Item {
   property var manifest: null
 
   readonly property string home: Quickshell.env("HOME")
-  // Resolve this file's own directory so the plugin works from any install
-  // location (local or store-provided id/path) rather than a hardcoded path.
+  // Directory holding the python helpers (backend/, mpvctl.py, cookies.py).
+  //
+  // Qt.resolvedUrl gives a real file:// URL in the shell, but Quickshell can also
+  // resolve imported files to its internal `qs:` URL scheme, which python cannot open.
+  // Fall back to the shell's documented third-party plugin location, and allow an
+  // explicit override for test harnesses and out-of-tree installs.
   readonly property string pluginDir: {
+    var override = Quickshell.env("OMATIME_PLUGIN_DIR")
+    if (override) return String(override)
     var u = String(Qt.resolvedUrl("Service.qml"))
-    if (u.indexOf("file://") === 0) u = u.substring(7)
-    return u.substring(0, u.lastIndexOf("/"))
+    if (u.indexOf("file://") === 0) {
+      u = decodeURIComponent(u.substring(7))
+      return u.substring(0, u.lastIndexOf("/"))
+    }
+    return home + "/.config/omarchy/plugins/com.github.dtotheatothevtothee.omatimeatbandcamp"
   }
   readonly property string cacheDir: home + "/.cache/omatimeatbandcamp"
   readonly property string shellConfigPath: home + "/.config/omarchy/shell.json"
@@ -294,6 +303,22 @@ Item {
   property bool isPlaying: false
   property bool isPaused: false
   property string playbackError: ""
+  // Progress + seek. `duration` starts from the library's own track duration, so the bar
+  // is determinate before mpv reports anything; mpv's value replaces it when it arrives.
+  property real position: 0
+  property real duration: 0
+  readonly property real progress: duration > 0 ? Math.max(0, Math.min(1, position / duration)) : 0
+  // Target of a seek mpv has not confirmed yet. Polled positions are ignored while it is
+  // set, otherwise the bar would jump back to the old spot for a tick or two.
+  property real pendingSeek: -1
+  property double pendingSeekAt: 0
+  // Consecutive automatic skips, so a dead server cannot spin through the whole queue.
+  property int failureStreak: 0
+  // Which load request mpvProc is currently serving (stale exits must be ignored).
+  property int playRequest: 0
+  // When the current load was requested. mpv stays idle until the load lands, so an
+  // "idle" status during this window is not the end of the track.
+  property double playbackStartedAt: 0
 
   readonly property var currentTrack: (queueIndex >= 0 && queueIndex < queue.length) ? queue[queueIndex] : null
 
@@ -422,6 +447,9 @@ Item {
   function playCurrent() {
     var t = currentTrack
     if (!t) return
+    position = 0
+    duration = Number(t.duration) || 0
+    pendingSeek = -1
     if (t.streamable === false) {
       playbackError = unavailableMessage(t)
       isPlaying = false
@@ -439,14 +467,100 @@ Item {
       isPlaying = false
       return
     }
+    playRequest += 1
+    mpvProc.req = playRequest
+    playbackStartedAt = Date.now()
     mpvProc.running = true
     isPlaying = true
     isPaused = false
   }
 
+  function fmtTime(sec) { return LibraryModel.fmtClock(sec) }
+
+  function pollPosition() {
+    if (posProc.running) return
+    posProc.command = ["python3", root.pluginDir + "/mpvctl.py", "status"]
+    posProc.running = true
+  }
+
+  // Parses one `mpvctl.py status` result. Kept as a function (not inline in the Process)
+  // so the QML harness can feed measured positions and end-of-stream states through the
+  // same path the player uses.
+  function applyPlaybackStatus(s) {
+    if (!s || s.running !== true) return
+    var p = (typeof s.position === "number" && isFinite(s.position)) ? s.position : -1
+    var d = (typeof s.duration === "number" && isFinite(s.duration) && s.duration > 0) ? s.duration : 0
+    if (d > 0) duration = d
+    if (p >= 0) {
+      if (pendingSeek >= 0) {
+        if (Math.abs(p - pendingSeek) < 1.5 || (Date.now() - pendingSeekAt) > 2500) {
+          pendingSeek = -1
+          position = p
+        }
+      } else {
+        position = p
+      }
+    }
+    // End of track (or a dead stream). Ignore mpv's idle state while the load is still
+    // landing: mpv reports idle until it has actually opened the stream. A stream that
+    // never produces a position at all is treated as failed after a longer grace period.
+    var elapsed = Date.now() - playbackStartedAt
+    if (isPlaying && (s.eof === true || s.idle === true) && elapsed > 2500) {
+      if (position > 0 || elapsed > 8000) onStreamEnded()
+    }
+  }
+
+  // Absolute seek. mpv seeks inside its network cache, so this works on a stream without
+  // downloading it first (verified against the real Subsonic stream; see V2-NOTES.md).
+  function seekTo(seconds) {
+    if (!currentTrack || duration <= 0) return
+    var target = Math.max(0, Math.min(duration, Number(seconds) || 0))
+    position = target
+    pendingSeek = target
+    pendingSeekAt = Date.now()
+    seekProc.command = ["python3", root.pluginDir + "/mpvctl.py", "seek", String(target)]
+    seekProc.running = true
+  }
+
+  // mpv reached idle while we thought we were playing: either the track ended, or the
+  // stream died early. A track that stopped well short of its duration is a failure.
+  function onStreamEnded() {
+    if (!isPlaying) return
+    isPlaying = false
+    isPaused = false
+    if (duration > 0 && position < duration - 2) {
+      skipCurrent()
+      return
+    }
+    pendingSeek = -1
+    if (queueIndex >= 0 && queueIndex < queue.length - 1) {
+      queueIndex += 1
+      playCurrent()
+    } else {
+      position = duration
+      playbackError = ""
+    }
+  }
+
+  // The visible failure path: name the track and move on. playCurrent() clears
+  // playbackError, so the message is set after any advance.
+  function skipCurrent() {
+    var title = currentTrack ? (currentTrack.title || "this track") : "this track"
+    position = 0
+    pendingSeek = -1
+    failureStreak += 1
+    var canAdvance = failureStreak <= 3 && queue.length > 1 && queueIndex >= 0 && queueIndex < queue.length - 1
+    if (canAdvance) {
+      queueIndex += 1
+      playCurrent()
+    }
+    playbackError = canAdvance ? "Couldn't play " + title + " — skipped" : "Couldn't play " + title
+  }
+
   function togglePlay() {
     if (!currentTrack) return
     if (!isPlaying) {
+      if (duration > 0 && position >= duration - 1) position = 0   // after the end: replay
       playCurrent()
       return
     }
@@ -467,6 +581,8 @@ Item {
     ctlProc.running = true
     isPlaying = false
     isPaused = false
+    position = 0
+    pendingSeek = -1
   }
 
   function next() {
@@ -520,27 +636,66 @@ Item {
   Process {
     id: mpvProc
     running: false
+    property int req: 0
     environment: ({ OMATIME_MPV_FLAGS: String(root.settings.mpvFlags || "") })
     stdout: StdioCollector { id: mpvOut; waitForEnd: true }
     stderr: StdioCollector { id: mpvErr; waitForEnd: true }
     onExited: function(code) {
-      var ok = false
-      try { ok = JSON.parse(mpvOut.text || "{}").ok === true } catch (e) {}
-      if (ok) {
+      if (mpvProc.req !== root.playRequest) return   // a newer track was requested meanwhile
+      var d = {}
+      try { d = JSON.parse(mpvOut.text || "{}") } catch (e) {}
+      if (d.ok === true) {
         root.playbackError = ""
         root.isPlaying = true
         root.isPaused = false
+        root.failureStreak = 0
+        return
+      }
+      var msg = String(d.error || "").trim()
+      if (msg === "") msg = (mpvErr.text || "").trim()
+      if (msg === "") msg = "exit " + code
+      root.isPlaying = false
+      root.isPaused = false
+      if (d.fatal === true) {
+        // Credentials/server/player setup: every track would fail the same way, so
+        // show it and do not burn through the queue.
+        root.playbackError = "Playback unavailable: " + msg
       } else {
-        var msg = ""
-        try { msg = JSON.parse(mpvOut.text || "{}").error || "" } catch (e) {}
-        if (msg === "") msg = (mpvErr.text || "").trim()
-        root.playbackError = "Playback failed: " + (msg || ("exit " + code))
-        root.isPlaying = false
-        root.isPaused = false
+        root.skipCurrent()
       }
     }
   }
   Process { id: ctlProc; running: false }
+
+  // Position polling: one lightweight mpvctl call per second while playing. Paused means
+  // the position cannot change on its own, so polling stops.
+  Timer {
+    id: positionTimer
+    interval: 1000
+    repeat: true
+    running: root.isPlaying && !root.isPaused
+    onTriggered: root.pollPosition()
+  }
+
+  Process {
+    id: posProc
+    running: false
+    stdout: StdioCollector { id: posOut; waitForEnd: true }
+    stderr: StdioCollector { id: posErr; waitForEnd: true }
+    onExited: function(code) {
+      var d = {}
+      try { d = JSON.parse(posOut.text || "{}") } catch (e) {}
+      root.applyPlaybackStatus(d)
+    }
+  }
+
+  Process {
+    id: seekProc
+    running: false
+    stdout: StdioCollector { id: seekOut; waitForEnd: true }
+    stderr: StdioCollector { id: seekErr; waitForEnd: true }
+    onExited: function(code) { root.pollPosition() }
+  }
 
   // ---- tracklists -----------------------------------------------------------
   // Library items carry their tracks (the sync fetches them in the background).

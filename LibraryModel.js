@@ -30,6 +30,18 @@ function fmtDate(ts) {
   return d.getUTCDate() + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear()
 }
 
+// Clock format for the footer progress bar: m:ss, or h:mm:ss past an hour.
+function fmtClock(sec) {
+  var n = Number(sec)
+  if (!isFinite(n) || n < 0) return "0:00"
+  var t = Math.floor(n + 0.5)
+  var h = Math.floor(t / 3600)
+  var m = Math.floor((t % 3600) / 60)
+  var r = t % 60
+  if (h > 0) return h + ":" + (m < 10 ? "0" : "") + m + ":" + (r < 10 ? "0" : "") + r
+  return m + ":" + (r < 10 ? "0" : "") + r
+}
+
 function fmtDuration(sec) {
   if (!sec) return ""
   var s = Math.round(sec)

@@ -34,6 +34,9 @@ Panel {
   readonly property bool playing: service ? service.isPlaying : false
   readonly property bool paused: service ? service.isPaused : false
   readonly property bool refreshing: service ? service.refreshing : false
+  readonly property real position: service ? service.position : 0
+  readonly property real duration: service ? service.duration : 0
+  readonly property string playbackError: service ? service.playbackError : ""
 
   readonly property string tooltip: currentTrack && currentTrack.title
     ? (currentTrack.title + (currentTrack.artist ? " — " + currentTrack.artist : ""))
@@ -177,6 +180,19 @@ Panel {
       service.playLibrary()
     }
   }
+
+  // Progress shown in the footer: the drag preview while dragging, the player otherwise.
+  function shownProgress() {
+    var r = seekMouse.preview >= 0 ? seekMouse.preview : (service ? service.progress : 0)
+    return Math.max(0, Math.min(1, r))
+  }
+
+  function shownSeconds() {
+    if (seekMouse.preview >= 0) return seekMouse.preview * root.duration
+    return root.position
+  }
+
+  function fmtTime(sec) { return LibraryModel.fmtClock(sec) }
 
   function detailTracks() {
     if (query !== "") return searchTracks
@@ -850,9 +866,14 @@ Panel {
       }
 
       // now playing ----------------------------------------------------------
+      // Two-line now-playing text, centred transport (identical BcButton style, no Stop
+      // button), and a seekable progress bar with elapsed/total labels. A failed stream
+      // replaces the Artist · Album line with a visible error notice.
       BorderSurface {
+        id: footer
+        objectName: "footer"
         width: parent.width
-        height: Style.space(64)
+        height: Style.space(84)
         radius: Style.cornerRadius
         color: Style.normalFillFor(root.foreground, Color.accent)
         borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
@@ -861,26 +882,33 @@ Panel {
           anchors.fill: parent
           anchors.leftMargin: Style.spacing.md
           anchors.rightMargin: Style.spacing.md
+          anchors.topMargin: Style.space(5)
+          anchors.bottomMargin: Style.space(5)
 
           Column {
+            id: nowPlaying
             anchors.left: parent.left
-            anchors.right: controls.left
-            anchors.rightMargin: Style.spacing.md
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.top: parent.top
+            width: Math.max(0, transportRow.x - Style.spacing.md)
             spacing: Style.space(2)
 
             Text {
+              objectName: "footerTitle"
               textFormat: Text.PlainText
               text: root.currentTrack ? (root.currentTrack.title || "") : "Nothing playing"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               font.bold: true
-              elide: Text.ElideRight
               width: parent.width
+              wrapMode: Text.Wrap
+              maximumLineCount: 2
+              elide: Text.ElideRight
             }
             Text {
+              objectName: "footerSub"
               textFormat: Text.PlainText
+              visible: root.playbackError === ""
               text: root.currentTrack
                 ? ((root.currentTrack.artist || "") + (root.currentTrack.album ? "  ·  " + root.currentTrack.album : ""))
                 : ""
@@ -891,8 +919,10 @@ Panel {
               width: parent.width
             }
             Text {
-              visible: root.service && root.service.playbackError !== ""
-              text: root.service ? root.service.playbackError : ""
+              objectName: "footerError"
+              textFormat: Text.PlainText
+              visible: root.playbackError !== ""
+              text: root.playbackError
               color: Color.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -902,16 +932,17 @@ Panel {
           }
 
           Row {
-            id: controls
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+            id: transportRow
+            objectName: "transportRow"
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
             spacing: Style.spacing.sm
 
             // Nerd Font glyphs (PUA range) so the icons stay monochrome and
             // inherit the theme — Unicode media symbols such as U+23F8 fall
             // back to colour-emoji presentation and paint their own background.
-            // Same BcButton as everywhere else; Phase 5 reworks this row.
             BcButton {
+              objectName: "footerPrev"
               iconText: "\uf048"
               tooltipText: "Previous"
               foreground: root.foreground
@@ -919,7 +950,11 @@ Panel {
               onClicked: if (root.service) root.service.prev()
             }
 
+            // One button: Play when idle/paused, Pause while playing. The Stop button is
+            // gone (mpv needs no stop to release a stream; loading replaces it).
             BcButton {
+              id: footerPlay
+              objectName: "footerPlay"
               iconText: root.playing && !root.paused ? "\uf04c" : "\uf04b"
               tooltipText: root.playing && !root.paused ? "Pause" : "Play"
               active: root.playing && !root.paused
@@ -933,19 +968,110 @@ Panel {
             }
 
             BcButton {
-              iconText: "\uf04d"
-              tooltipText: "Stop"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onClicked: if (root.service) root.service.stop()
-            }
-
-            BcButton {
+              objectName: "footerNext"
               iconText: "\uf051"
               tooltipText: "Next"
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.next()
+            }
+          }
+
+          Item {
+            id: progressRow
+            objectName: "progressRow"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: Style.space(20)
+
+            Text {
+              id: elapsedLabel
+              objectName: "elapsedLabel"
+              textFormat: Text.PlainText
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.fmtTime(root.shownSeconds())
+              color: Qt.darker(root.foreground, 1.3)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              id: totalLabel
+              objectName: "totalLabel"
+              textFormat: Text.PlainText
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.fmtTime(root.duration)
+              color: Qt.darker(root.foreground, 1.3)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Item {
+              id: seekArea
+              objectName: "seekArea"
+              anchors.left: elapsedLabel.right
+              anchors.right: totalLabel.left
+              anchors.leftMargin: Style.space(8)
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              height: parent.height
+
+              Rectangle {
+                id: progressTrack
+                objectName: "progressTrack"
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                height: Style.space(4)
+                radius: height / 2
+                color: Util.alpha(root.foreground, 0.25)
+              }
+
+              Rectangle {
+                id: progressFill
+                objectName: "progressFill"
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: progressTrack.width * root.shownProgress()
+                height: progressTrack.height
+                radius: progressTrack.radius
+                color: Color.accent
+              }
+
+              Rectangle {
+                id: seekHandle
+                objectName: "seekHandle"
+                visible: root.duration > 0
+                width: Style.space(10)
+                height: width
+                radius: width / 2
+                color: Color.accent
+                anchors.verticalCenter: parent.verticalCenter
+                x: Math.max(0, Math.min(progressTrack.width - width, progressTrack.width * root.shownProgress() - width / 2))
+              }
+
+              // Click to seek, drag to scrub: the fill follows the pointer while the
+              // button is down and the seek is sent on release.
+              MouseArea {
+                id: seekMouse
+                objectName: "seekMouse"
+                anchors.fill: parent
+                enabled: root.duration > 0
+                hoverEnabled: true
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                property real preview: -1
+                function ratioAt(x) { return width > 0 ? Math.max(0, Math.min(1, x / width)) : 0 }
+                onPressed: function(mouse) { preview = ratioAt(mouse.x) }
+                onPositionChanged: function(mouse) { if (pressed) preview = ratioAt(mouse.x) }
+                onReleased: function(mouse) {
+                  var r = ratioAt(mouse.x)
+                  preview = -1
+                  if (root.service) root.service.seekTo(r * root.duration)
+                }
+                onCanceled: preview = -1
+              }
             }
           }
         }

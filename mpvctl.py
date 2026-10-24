@@ -11,6 +11,7 @@ Usage:
   mpvctl.py pause
   mpvctl.py play
   mpvctl.py toggle
+  mpvctl.py seek <seconds>
   mpvctl.py stop
   mpvctl.py volume <0-150>
   mpvctl.py quit
@@ -127,11 +128,77 @@ def send_json(command):
     return {}
 
 
+def query(props, timeout=2.0):
+    """Read several mpv properties over ONE connection.
+
+    Returns {name: value or None}. Deliberately never requests `media-title` or
+    `path` from callers that could print them: for a Subsonic stream both hold
+    the URL, and the URL embeds the account's credentials.
+    """
+    if not socket_alive():
+        return {}
+    pending = {i: p for i, p in enumerate(props)}
+    try:
+        with connect(timeout) as s:
+            for i, p in pending.items():
+                s.sendall((json.dumps({"command": ["get_property", p], "request_id": i}) + "\n").encode())
+            out, buf, deadline = {}, b"", time.time() + timeout
+            while len(out) < len(pending) and time.time() < deadline:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    rid = obj.get("request_id")
+                    if rid in pending:
+                        out[rid] = None if obj.get("error") not in (None, "success") else obj.get("data")
+            return {name: out.get(i) for i, name in pending.items()}
+    except OSError:
+        return {}
+
+
+def do_status():
+    """Current position/duration/pause state as JSON. No titles, no URLs."""
+    if not socket_alive():
+        return {"running": False}
+    d = query(["time-pos", "duration", "pause", "idle-active", "eof-reached", "seekable"])
+    return {
+        "running": True,
+        "position": d.get("time-pos"),
+        "duration": d.get("duration"),
+        "paused": d.get("pause"),
+        "idle": d.get("idle-active"),
+        "eof": d.get("eof-reached"),
+        "seekable": d.get("seekable"),
+    }
+
+
+def do_seek(seconds):
+    """Seek to an absolute position. `absolute+exact` lands on the requested
+    second rather than the previous keyframe. mpv seeks inside its network cache
+    fine for Subsonic streams (verified live, see V2-NOTES.md)."""
+    if not socket_alive():
+        return {"ok": False, "error": "not running"}
+    try:
+        target = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "bad position"}
+    res = send_json(["seek", target, "absolute+exact"])
+    if res.get("error") not in (None, "success"):
+        return {"ok": False, "error": str(res.get("error"))}
+    return {"ok": True, "position": target}
+
+
 def do_load(url, cookie_path=None, title=None):
     if not url:
-        return json.dumps({"ok": False, "error": "no url"})
+        return json.dumps({"ok": False, "error": "no url", "kind": "environment"})
     if not ensure():
-        return json.dumps({"ok": False, "error": "mpv did not start"})
+        return json.dumps({"ok": False, "error": "mpv did not start", "kind": "environment"})
 
     headers = ["User-Agent: Mozilla/5.0"]
     cookie = cookie_header(cookie_path)
@@ -145,7 +212,7 @@ def do_load(url, cookie_path=None, title=None):
     # property first, then issue a plain three-argument loadfile.
     hdr = send_json(["set_property", "http-header-fields", headers])
     if hdr.get("error") not in (None, "success"):
-        return json.dumps({"ok": False, "error": "headers: " + str(hdr.get("error"))})
+        return json.dumps({"ok": False, "error": "headers: " + str(hdr.get("error")), "kind": "environment"})
 
     # Without a title mpv falls back to the URL as `media-title`, which for a Subsonic stream
     # embeds credentials and would surface in every client of the player (MPRIS, bars,
@@ -154,7 +221,7 @@ def do_load(url, cookie_path=None, title=None):
 
     res = send_json(["loadfile", url, "replace"])
     if res.get("error") != "success":
-        return json.dumps({"ok": False, "error": str(res.get("error") or "load failed")})
+        return json.dumps({"ok": False, "error": str(res.get("error") or "load failed"), "kind": "stream"})
 
     # Never read `media-title` back: it may be (or contain) the URL.
     return json.dumps({"ok": True, "title": title or ""})
@@ -205,12 +272,11 @@ def main():
         else:
             print("not running")
     elif action == "status":
-        if not socket_alive():
-            print(json.dumps({"running": False}))
-            return 0
-        raw = send(["get_property", "pause"])
-        raw2 = send(["get_property", "media-title"])
-        print(json.dumps({"running": True, "pause_raw": raw, "title_raw": raw2}))
+        print(json.dumps(do_status()))
+    elif action == "seek":
+        if len(sys.argv) < 3:
+            return 2
+        print(json.dumps(do_seek(sys.argv[2])))
     else:
         print(f"unknown action {action}")
         return 2

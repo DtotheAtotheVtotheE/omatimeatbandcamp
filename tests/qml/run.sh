@@ -34,7 +34,10 @@ passes=0
 
 launch() {  # launch <label> <home> <phase>
   local label=$1 home=$2 phase=$3 out
+  # Own mpv socket (never the user's real one) and a null audio sink: the harness must
+  # not query or play through the live player.
   out=$(HOME="$home" HARNESS_PHASE="$phase" OMARCHY_PATH="$omarchy" QT_QPA_PLATFORM=offscreen \
+    OMATIME_MPV_SOCK="$work/mpv-${phase}.sock" OMATIME_MPV_FLAGS="--ao=null" OMATIME_PLUGIN_DIR="$plugin" \
     timeout 240 quickshell -n -p "$work/shell" 2>&1 || true)
   echo "== $label"
   echo "$out" | grep -E "HARNESS|ERROR" | sed -E 's/\x1b\[[0-9;]*m//g; s/^.*HARNESS /  /'

@@ -40,16 +40,21 @@ def play(track_id, title=""):
         client = Client()
         url = client.stream_url(track_id)
     except SubsonicError as e:
-        print(json.dumps({"ok": False, "error": str(e)}))
+        # Not a stream failure: credentials/server are missing or wrong, so moving on
+        # to the next track would fail the same way. The UI shows this without skipping.
+        print(json.dumps({"ok": False, "error": str(e), "fatal": True}))
         return 1
     import mpvctl
     try:
         result = json.loads(mpvctl.do_load(url, None, title or "Bandcamp track"))
     except Exception as e:  # noqa: BLE001
-        result = {"ok": False, "error": str(e)}
+        result = {"ok": False, "error": str(e), "kind": "environment"}
     out = {"ok": result.get("ok") is True}
     if not out["ok"]:
         out["error"] = client.redact(str(result.get("error") or "playback failed"))
+        # kind=stream means mpv refused/failed the stream: the queue should skip it.
+        # environment means mpv or the player setup failed: skipping would only repeat it.
+        out["fatal"] = result.get("kind") != "stream"
     print(json.dumps(out))
     return 0 if out["ok"] else 1
 

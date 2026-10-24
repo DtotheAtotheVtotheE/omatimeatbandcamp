@@ -156,3 +156,78 @@ Tests run:
 
 Not verified by the harness: the real `KeyboardPanel` (click-outside/focus) and how it looks in the live shell. Run
 `omarchy restart shell` to load this phase.
+
+## Phase 5: footer transport and now playing
+
+Changed: `Panel.qml` (footer rebuilt), `Service.qml` (progress/seek state, polling, end-of-track and
+failure handling), `mpvctl.py` (`status`/`seek`, no title reads), `backend/__main__.py` (`fatal` flag),
+`LibraryModel.js` (`fmtClock`), `tests/test_phase5_playback.py`, `tests/qml/` (new checks + socket isolation),
+README.
+
+Done per spec: 1 three transport buttons (Prev, Play/Pause, Next), identical `BcButton` size/style, centred in
+the footer · 2 the middle button is Play when idle/paused and Pause while playing (icon, tooltip and active
+highlight all follow), **Stop removed** · 3 progress bar under the transport with elapsed/total labels,
+click-to-seek and drag-to-seek (preview follows the pointer; seek is sent on release) · 4 now-playing title wraps
+to max 2 lines with `Artist · Album` dimmed on line 2 (the Phase 4 single-line truncation is gone) · 5 a failed
+stream shows a visible urgent-coloured footer notice `Couldn't play <title> — skipped` and advances the queue.
+
+Where the existing code forced a decision:
+
+1. **Two classes of playback failure.** `backend play` now returns `fatal` for a *configuration* failure
+   (credentials file missing/wrong, server rejected the call, mpv did not start) and no `fatal` for a *stream*
+   failure (mpv rejected the file). A fatal failure shows `Playback unavailable: …` and does **not** advance:
+   every track would fail identically, so skipping would burn through the queue for nothing. A stream failure
+   advances as the spec asks. This also keeps the QML harness (fake HOME, no credentials) from auto-skipping
+   every fixture track. A 3-consecutive-skip cap stops a dead server spinning through a long queue; a
+   single-track context says `Couldn't play <title>` (nothing to skip to).
+2. **End-of-track detection is new.** mpv goes idle at EOF; the 1 s position poll treats `idle`/`eof` after a
+   2.5 s grace (mpv is idle until the load lands) as the end. A track that stops >2 s short of its library
+   duration is a failure; otherwise it advances silently. The last track stops instead of wrapping (manual Next
+   still wraps); a stream that never produces a position is failed after 8 s. Without this, nothing would advance
+   the queue at all, and Phase 5's failure requirement could not be met.
+3. **Seek works on the stream.** `mpvctl.py seek` uses `absolute+exact`; verified live on a throwaway silent mpv
+   against Subsonic: position 2.7 s → `seek 120` → 120.0 s, duration 558.3 s. So no "cannot seek" limitation to
+   note; the bar is determinate from the library duration even before mpv's first reply.
+4. **Stop stays available over IPC only** (`omatimeatbandcamp stop`). mpv needs no stop to release a stream
+   (loading another file replaces it, and idle drops the connection), so no long-press/right-click mapping was
+   added to the Pause button — there is no fourth button.
+5. **Footer error replaces the `Artist · Album` line** rather than adding a third line. The footer is 84 px
+   (was 64) so two title lines fit; the list height is unchanged and the popup still fits its 660 px cap (the
+   screenshots show no clipping). The error is always visible while set (not a timed toast) and clears when the
+   next track loads.
+6. **`pluginDir` was broken under Quickshell's `qs:` URL scheme.** `Qt.resolvedUrl("Service.qml")` can return
+   `qs:@/qs/plug/Service.qml`, which python cannot open: every `backend play` in the harness (and every
+   `backend sync`/`cookies.py` call there) had been failing silently with "can't open file …/qs:@/qs/plug/backend".
+   It now uses the `file://` path when that is a real file, else the documented third-party plugin directory
+   (`~/.config/omarchy/plugins/<id>`), with `OMATIME_PLUGIN_DIR` as an explicit override. The harness sets that
+   override. The live shell likely resolved `file://` all along, but this removes the ambiguity for playback,
+   Refresh and the cookie import.
+7. **Harness isolation.** `tests/qml/run.sh` now gives each launch its own `OMATIME_MPV_SOCK` and
+   `OMATIME_MPV_FLAGS=--ao=null`. The new end-of-track poller exposed that the harness had been querying the
+   *user's live idle mpv* on the default socket and reading "idle" as "track finished" (it skipped a fixture
+   queue). Tests no longer touch the real player.
+8. Position polling stops while paused (position cannot change), and a pending seek is displayed optimistically
+   until mpv reports a position within 1.5 s of the target (or 2.5 s pass), so the bar does not bounce back for
+   a tick after a seek. `applyPlaybackStatus()` is the single parse point, which is what the harness feeds.
+9. Not done (later phases): keyboard seek/list keys and MPRIS (Phase 8); the Waybar `BC` suffix (Phase 6).
+   `statusJson()` still exposes only title/artist/album — no URL — and mpv's `path` remains a URL for Phase 8 to
+   keep private.
+
+Tests run:
+
+- `python3 -m unittest discover -s tests -t .`: **76 tests, OK (5 live-only skipped)** — baseline was 66. The 10
+  new ones pin: `status` asks only for progress properties (never title/path/URL), seek is absolute+exact and
+  clamped, bad numbers never reach mpv, `do_load` distinguishes environment vs stream failure, missing
+  credentials are fatal, and a stream failure is skippable without leaking the URL.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests, OK**.
+- `tests/qml/run.sh`: **219 checks, OK** = phase 1 (fixture) 195 + relaunch 6 + real-data smoke 15 + 3 script-side
+  checks. Baseline was 197; the 22 new checks cover: exactly 3 footer buttons, no Stop glyph, identical style,
+  centred; Play↔Pause icon/tooltip/highlight; two-line footer title measured (`lineCount`, `truncated`) and the
+  `Artist · Album` line; measured progress fill at 25% with `0:50`/`3:20` labels; click-to-seek to 50%; drag
+  preview (`2:40` while dragging) then release at 80%; a mid-stream failure shows the exact notice, advances the
+  queue and draws in `Color.urgent`; a natural end advances with no error.
+- Live: real `backend play` + `mpvctl.py seek 120` on a throwaway `--ao=null` mpv — load `{"ok": true}`, position
+  2.7 s → 120.0 s, no URL in any output; only the user's original idle mpv remained afterwards.
+- `omarchy plugin validate .`: OK. `qmllint`: only the pre-existing `Service.qml environment:` type warning.
+
+Not verified by the harness: the real `KeyboardPanel` and live-shell look. Run `omarchy restart shell`.
