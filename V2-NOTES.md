@@ -30,7 +30,7 @@ Spec vs. existing QML (spec wins):
 Tests run:
 
 - `python3 -m unittest discover -s tests -t .`: 54 tests, OK (5 live-only skipped); with `OMATIME_LIVE=1` the 5 live fixture checks pass.
-- `tests/qml/run.sh` (new): 29 interaction checks + decoy-cookie deletion, all pass. It runs the real Panel/Service/BcButton
+- `tests/qml/run.sh` (new): 31 interaction checks + decoy-cookie deletion, all pass. It runs the real Panel/Service/BcButton
   inside a throwaway copy of the shell with a stubbed `KeyboardPanel` and a fake `$HOME`. It caught a real bug during
   development (Esc with the menu open closed the whole window because the search field's own Esc handler ran first).
 - `omarchy plugin validate .`: OK. `qmllint`: no errors beyond the shell's untyped-property noise.
