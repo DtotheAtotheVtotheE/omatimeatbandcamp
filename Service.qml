@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 import "LibraryModel.js" as LibraryModel
+import "UserQueue.js" as UserQueue
 
 // Shared state for the OmaTimeAtBandCamp bar widget and panel.
 //
@@ -333,6 +334,17 @@ Item {
   property var queue: []
   property int queueIndex: -1
   property var context: ({ type: "", name: "", tracks: [] })
+  // v3.4: a session-only user queue, separate from the context's own queue.
+  // Play Next puts a track at the front; Add to Queue appends. The immutable
+  // state lives in UserQueue.js (unit-tested under Node) so the semantics are
+  // shared with the tests. Pending tracks never enter `queue`, so the context's
+  // shuffle order is preserved underneath them.
+  property var userQueueState: UserQueue.emptyState()
+  readonly property var userQueue: userQueueState.pending
+  readonly property var currentUserTrack: userQueueState.current
+  readonly property int userResumeIndex: userQueueState.resumeIndex
+  readonly property var userQueueHistory: userQueueState.history
+  readonly property bool userQueueActive: userQueueState.current !== null
   // Shuffle is a plain On/Off kept PER CONTEXT. A context is whatever the window is
   // showing: "album:<id>", "playlist:<id>", "search" or "library" (nothing selected).
   // Toggling one context never touches another, nor the queue of a different
@@ -359,7 +371,8 @@ Item {
   // "idle" status during this window is not the end of the track.
   property double playbackStartedAt: 0
 
-  readonly property var currentTrack: (queueIndex >= 0 && queueIndex < queue.length) ? queue[queueIndex] : null
+  readonly property var currentTrack: currentUserTrack ? currentUserTrack
+    : ((queueIndex >= 0 && queueIndex < queue.length) ? queue[queueIndex] : null)
 
   readonly property string playIcon: isPlaying && !isPaused ? "\u23F8" : "\u25B6"
 
@@ -474,14 +487,34 @@ Item {
     var tracks = (context && context.tracks) ? context.tracks : []
     if (tracks.length === 0) return
     var cur = currentTrack
+    // v3.4: while a user-queue track plays, `currentTrack` is not in the context
+    // queue. Reorder the context underneath it and keep the resume point on the
+    // track after the interrupted context track; the queued order is untouched.
+    if (currentUserTrack) {
+      var interrupted = contextTrack()
+      if (on) {
+        var without = interrupted
+          ? tracks.filter(function(t) { return indexOfTrack([interrupted], t) < 0 })
+          : tracks.slice()
+        queue = (interrupted ? [interrupted] : []).concat(Model.fisherYates(without))
+      } else {
+        queue = tracks.slice()
+      }
+      var idx = interrupted ? indexOfTrack(queue, interrupted) : -1
+      queueIndex = idx >= 0 ? idx : (queue.length > 0 ? 0 : -1)
+      userQueueState = { pending: userQueueState.pending, current: userQueueState.current,
+        resumeIndex: UserQueue.resumeIndexAfter(queueIndex, queue.length),
+        history: userQueueState.history }
+      return
+    }
     if (on) {
       var rest = tracks.filter(function(t) { return indexOfTrack([cur], t) < 0 })
       queue = cur ? [cur].concat(Model.fisherYates(rest)) : Model.fisherYates(tracks)
       queueIndex = queue.length > 0 ? 0 : -1
     } else {
       queue = tracks.slice()
-      var idx = cur ? indexOfTrack(queue, cur) : -1
-      queueIndex = idx >= 0 ? idx : (queue.length > 0 ? 0 : -1)
+      var idx2 = cur ? indexOfTrack(queue, cur) : -1
+      queueIndex = idx2 >= 0 ? idx2 : (queue.length > 0 ? 0 : -1)
     }
   }
 
@@ -491,6 +524,105 @@ Item {
       if (list[i] === track || (track.uid && list[i].uid === track.uid)) return i
     }
     return -1
+  }
+
+  // ---- v3.4 session-only user queue ---------------------------------------
+  function contextTrack() {
+    return (queueIndex >= 0 && queueIndex < queue.length) ? queue[queueIndex] : null
+  }
+
+  // Play Next / Add to Queue for a single track. Unstreamable tracks are
+  // refused here as well as in the UI, so no path can queue one.
+  function playNextTrack(track) {
+    var r = UserQueue.enqueueFront(userQueueState, track)
+    userQueueState = r.state
+    if (r.added === 0) notify(unavailableMessage(track))
+    return r.added > 0
+  }
+
+  function addTrackToQueue(track) {
+    var r = UserQueue.enqueueTrack(userQueueState, track)
+    userQueueState = r.state
+    if (r.added === 0) notify(unavailableMessage(track))
+    return r.added > 0
+  }
+
+  // Album/playlist adds append the streamable tracks in order and report how
+  // many were added and how many were skipped (pre-order/unreleased tracks).
+  function addTracksToQueue(tracks) {
+    var r = UserQueue.enqueueTracks(userQueueState, tracks || [])
+    userQueueState = r.state
+    var msg = "Added " + r.added + (r.added === 1 ? " track" : " tracks") + " to queue"
+    if (r.skipped > 0) msg += " · " + r.skipped + " skipped (not streamable)"
+    notify(msg)
+    return { added: r.added, skipped: r.skipped }
+  }
+
+  function addItemToQueue(item) {
+    if (!item) return { added: 0, skipped: 0 }
+    return addTracksToQueue(tracksFor(item))
+  }
+
+  function clearUserQueue() {
+    userQueueState = UserQueue.clearPending(userQueueState)
+  }
+
+  function removeUserQueueAt(index) {
+    userQueueState = UserQueue.removeAt(userQueueState, index)
+  }
+
+  // Start pending[0] / pending[index]. The service's context queue/index stays
+  // untouched underneath; UserQueue saves the resume point and history.
+  function startUserQueueAt(index) {
+    var r = UserQueue.startAt(userQueueState, index, queueIndex, queue.length, contextTrack())
+    userQueueState = r.state
+    if (!r.changed) return false
+    playCurrent()
+    return true
+  }
+
+  function playUserQueueHead() {
+    return startUserQueueAt(0)
+  }
+
+  // The single queue-takeover advance used by every route (end of track, footer
+  // Next, MPRIS/media Next): a pending row plays next; otherwise the context
+  // resumes after the interrupted track. Returns false when no takeover is
+  // active, so callers can fall through to the unchanged context behaviour.
+  function advanceUserQueueIfNeeded() {
+    if (userQueue.length > 0) { playUserQueueHead(); return true }
+    if (currentUserTrack) { resumeContextAfterUserQueue(); return true }
+    return false
+  }
+
+  // The pending user queue is done. Return to the context at the saved point,
+  // or stop when the interrupted track was the last one in the context.
+  function resumeContextAfterUserQueue() {
+    var r = UserQueue.drain(userQueueState)
+    userQueueState = r.state
+    if (r.stopped) {
+      isPlaying = false
+      isPaused = false
+      position = duration
+      playbackError = ""
+      return false
+    }
+    queueIndex = r.contextIndex
+    playCurrent()
+    return true
+  }
+
+  // Called when a queued track fails to stream. Advance to the next pending
+  // track, else resume the context, without pretending the failed track was
+  // actually played.
+  function advanceUserQueueAfterFailure() {
+    var r = UserQueue.startAt(userQueueState, 0, queueIndex, queue.length, contextTrack(), false)
+    if (r.changed) {
+      userQueueState = r.state
+      playCurrent()
+      return true
+    }
+    return resumeContextAfterUserQueue()
   }
 
   function unavailableMessage(track) {
@@ -514,6 +646,14 @@ Item {
     if (playable.length === 0) {
       notify("Nothing available to play yet")
       return
+    }
+    // v3.4: starting a DIFFERENT context clears the user queue. Starting another
+    // track in the same context keeps the pending queue but leaves any queued
+    // track that was playing (the context track now becomes current).
+    if (UserQueue.isNewContext(playingContextKey, ctxKey)) {
+      userQueueState = UserQueue.emptyState()
+    } else {
+      userQueueState = UserQueue.releaseCurrent(userQueueState)
     }
     var startAt = clicked ? indexOfTrack(playable, clicked) : -1
     context = { type: type, name: name, tracks: playable.slice(), key: ctxKey }
@@ -560,10 +700,15 @@ Item {
     // Play a single track within its current context if it belongs to the queue.
     var idx = indexOfTrack(queue, track)
     if (idx >= 0) {
+      // Same context: keep the pending user queue, but this context track is
+      // now what is playing.
+      userQueueState = UserQueue.releaseCurrent(userQueueState)
       queueIndex = idx
       playCurrent()
       return
     }
+    // A one-track context is a new context, so the user queue clears.
+    userQueueState = UserQueue.emptyState()
     queue = [track]
     queueIndex = 0
     context = { type: "single", name: track.album || "", tracks: [track], key: "" }
@@ -669,6 +814,9 @@ Item {
       return
     }
     pendingSeek = -1
+    // v3.4: the user queue takes over at the end of a track. Once it is empty,
+    // the context resumes after the interrupted track, not on it.
+    if (advanceUserQueueIfNeeded()) return
     if (queueIndex >= 0 && queueIndex < queue.length - 1) {
       queueIndex += 1
       playCurrent()
@@ -685,10 +833,23 @@ Item {
     position = 0
     pendingSeek = -1
     failureStreak += 1
-    var canAdvance = failureStreak <= 3 && queue.length > 1 && queueIndex >= 0 && queueIndex < queue.length - 1
+    var canAdvance = failureStreak <= 3
+    if (currentUserTrack) {
+      canAdvance = canAdvance && (userQueue.length > 0 || userResumeIndex >= 0)
+    } else {
+      canAdvance = canAdvance && (userQueue.length > 0
+        || (queue.length > 1 && queueIndex >= 0 && queueIndex < queue.length - 1))
+    }
     if (canAdvance) {
-      queueIndex += 1
-      playCurrent()
+      if (currentUserTrack) {
+        if (userQueue.length > 0) advanceUserQueueAfterFailure()
+        else resumeContextAfterUserQueue()
+      } else if (userQueue.length > 0) {
+        playUserQueueHead()
+      } else {
+        queueIndex += 1
+        playCurrent()
+      }
     }
     playbackError = canAdvance ? "Couldn't play " + title + " — skipped" : "Couldn't play " + title
   }
@@ -722,6 +883,9 @@ Item {
   }
 
   function next() {
+    // v3.4: one code path for footer, MPRIS and the end of a track. A non-empty
+    // user queue always plays its head; otherwise the context advances as before.
+    if (advanceUserQueueIfNeeded()) return
     if (queue.length === 0) return
     if (queueIndex < queue.length - 1) {
       queueIndex += 1
@@ -732,6 +896,20 @@ Item {
   }
 
   function prev() {
+    // v3.4: during queue playback, Previous steps back through what actually
+    // played. From the first queued track it returns to the interrupted
+    // context track. Outside the queue this is exactly the old behaviour.
+    if (currentUserTrack) {
+      var back = UserQueue.previous(userQueueState)
+      if (!back.changed) return
+      userQueueState = back.state
+      if (!back.user) {
+        var idx = indexOfTrack(queue, back.track)
+        queueIndex = idx >= 0 ? idx : (queue.length > 0 ? 0 : -1)
+      }
+      playCurrent()
+      return
+    }
     if (queue.length === 0) return
     if (queueIndex > 0) {
       queueIndex -= 1
@@ -918,8 +1096,8 @@ Item {
       canPause: !!t,
       // The plugin's Next/Prev wrap at the ends, so MPRIS keeps them enabled
       // whenever there is a queue (media keys then behave like the footer).
-      canNext: queue.length > 0,
-      canPrevious: queue.length > 0
+      canNext: queue.length > 0 || userQueue.length > 0,
+      canPrevious: queue.length > 0 || userQueue.length > 0
     }
     mprisFile.setText(JSON.stringify(state) + "\n")
   }

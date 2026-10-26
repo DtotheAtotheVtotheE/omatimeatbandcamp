@@ -48,6 +48,9 @@ Panel {
   readonly property real position: service ? service.position : 0
   readonly property real duration: service ? service.duration : 0
   readonly property string playbackError: service ? service.playbackError : ""
+  // v3.4: the session-only user queue shown above the context content.
+  readonly property var userQueue: service ? service.userQueue : []
+  readonly property int upNextCount: userQueue ? userQueue.length : 0
 
   readonly property string tooltip: currentTrack && currentTrack.title
     ? (currentTrack.title + (currentTrack.artist ? " — " + currentTrack.artist : ""))
@@ -98,8 +101,19 @@ Panel {
   readonly property real detailCapHeight: Style.space(396)
   readonly property int detailMinTrackRows: 6
   readonly property real detailBaseTrackRowHeight: Style.space(30)
+  // v3.4: Up Next rows are content like any other. They are counted in the
+  // detail row height under the same floor/cap. The section shows up to six
+  // rows at once (the same six-row unit as the floor) and scrolls beyond that;
+  // the context's own track list keeps the remaining space.
+  readonly property real upNextRowHeight: Style.space(30)
+  readonly property int upNextMaxVisibleRows: detailMinTrackRows
+  readonly property real upNextListHeight: upNextCount === 0 ? 0
+    : Math.min(upNextCount, upNextMaxVisibleRows) * upNextRowHeight
+  readonly property real upNextSectionHeight: upNextCount === 0 ? 0
+    : controlHeight + Style.space(2) + upNextListHeight
   readonly property bool detailContextActive: query !== "" || !!selectedPlaylist || !!selectedAlbum
   readonly property real detailRowContentHeight: detailHeader.height + Style.spacing.sm
+    + (upNextCount > 0 ? upNextSectionHeight + Style.spacing.sm : 0)
     + (trackList ? trackList.contentHeight : 0)
   // v3.3: in the grouped search state the left list contains section headers as
   // well as items. The row must be tall enough for every rendered row, not just
@@ -123,6 +137,16 @@ Panel {
   readonly property bool menuOpen: menuKind !== ""
   property int menuIndex: 0
   property bool logoutConfirmOpen: false
+  // v3.4 row context menu. It is a separate overlay from the gear/sort menu so
+  // right-clicking a row never disturbs the toolbar menus.
+  property bool contextMenuOpen: false
+  property string contextMenuKind: ""       // "track", "item", "queue"
+  property var contextMenuTrack: null
+  property var contextMenuItem: null
+  property int contextMenuQueueIndex: -1
+  property var contextMenuEntries: []
+  property real contextMenuAnchorX: 0
+  property real contextMenuAnchorY: 0
   readonly property var moreItems: [
     { icon: "\u21BB", label: "Refresh library", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
     { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
@@ -199,6 +223,7 @@ Panel {
 
   function handleEscape() {
     if (logoutConfirmOpen) cancelLogout()
+    else if (contextMenuOpen) closeContextMenu()
     else if (menuOpen) closeMenu()
     else if (query !== "" || (searchField && searchField.text !== "")) { clearSearch(); focusSearch() }
     else close()
@@ -326,7 +351,7 @@ Panel {
   implicitHeight: showIcon ? barRow.implicitHeight : 0
 
   onOpenedChanged: {
-    if (!opened) { menuKind = ""; logoutConfirmOpen = false; focusPane = ""; listCursor = -1; trackCursor = -1 }
+    if (!opened) { menuKind = ""; logoutConfirmOpen = false; contextMenuOpen = false; focusPane = ""; listCursor = -1; trackCursor = -1 }
     else if (service && service.collection.length === 0) service.refresh()
   }
 
@@ -343,6 +368,73 @@ Panel {
   function closeMenu() {
     menuKind = ""
     searchField.forceActiveFocus()
+  }
+
+  // ---- v3.4 row context menu ----------------------------------------------
+  function openContextMenu(kind, entries, anchorItem, x, y) {
+    contextMenuKind = kind
+    contextMenuEntries = entries
+    contextMenuOpen = true
+    var p = anchorItem.mapToItem(contextMenuLayer, x, y)
+    contextMenuAnchorX = p.x
+    contextMenuAnchorY = p.y
+  }
+
+  function openTrackMenu(track, anchorItem, x, y) {
+    if (!service || !track) return
+    contextMenuTrack = track
+    contextMenuItem = null
+    contextMenuQueueIndex = -1
+    var playable = track.streamable !== false
+    openContextMenu("track", [
+      { label: "Play Next", action: "play-next", enabled: playable },
+      { label: "Add to Queue", action: "queue-track", enabled: playable }
+    ], anchorItem, x, y)
+  }
+
+  function openItemMenu(item, anchorItem, x, y) {
+    if (!service || !item) return
+    contextMenuTrack = null
+    contextMenuItem = item
+    contextMenuQueueIndex = -1
+    openContextMenu("item", [
+      { label: "Add to Queue", action: "queue-item", enabled: true }
+    ], anchorItem, x, y)
+  }
+
+  function openQueueMenu(index, anchorItem, x, y) {
+    if (!service) return
+    contextMenuTrack = null
+    contextMenuItem = null
+    contextMenuQueueIndex = index
+    openContextMenu("queue", [
+      { label: "Remove from queue", action: "queue-remove", enabled: true }
+    ], anchorItem, x, y)
+  }
+
+  function closeContextMenu() {
+    contextMenuOpen = false
+    contextMenuKind = ""
+    contextMenuEntries = []
+    contextMenuTrack = null
+    contextMenuItem = null
+    contextMenuQueueIndex = -1
+  }
+
+  function runContextAction(action) {
+    var track = contextMenuTrack
+    var item = contextMenuItem
+    var index = contextMenuQueueIndex
+    closeContextMenu()
+    if (!service) return
+    if (action === "play-next") service.playNextTrack(track)
+    else if (action === "queue-track") service.addTrackToQueue(track)
+    else if (action === "queue-item") service.addItemToQueue(item)
+    else if (action === "queue-remove") service.removeUserQueueAt(index)
+  }
+
+  function playQueueRow(index) {
+    if (service) service.startUserQueueAt(index)
   }
 
   function toggleMenu() {
@@ -624,6 +716,10 @@ Panel {
                 if (event.key === Qt.Key_Down) root.menuIndex = Math.min(root.menuItems.length - 1, root.menuIndex + 1)
                 else if (event.key === Qt.Key_Up) root.menuIndex = Math.max(0, root.menuIndex - 1)
                 else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
+                event.accepted = true
+              } else if (root.contextMenuOpen) {
+                // The row context menu is mouse-driven; keep keys from acting
+                // underneath it. Esc closes it through handleEscape().
                 event.accepted = true
               } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
                 // Down/Up leave text entry and move through the focused list.
@@ -931,19 +1027,27 @@ Panel {
                 anchors.fill: parent
                 enabled: !rowItem.isHeader
                 hoverEnabled: !rowItem.isHeader
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
                 cursorShape: rowItem.isHeader ? Qt.ArrowCursor : Qt.PointingHandCursor
-                onClicked: {
+                onClicked: function(ev) {
                   // v3: a single click only selects. Search rows wait for a
                   // double-click before acting: tracks play, album/playlist rows
-                  // navigate to their normal tab.
+                  // navigate to their normal tab. Right-click opens the v3.4
+                  // queue menu for the row without changing the selection.
                   var it = rowItem.item
                   if (!it || rowItem.isHeader) return
+                  if (ev.button === Qt.RightButton) {
+                    if (rowItem.isSearch && rowItem.rowKind === "track") root.openTrackMenu(it, mouse, ev.x, ev.y)
+                    else root.openItemMenu(it, mouse, ev.x, ev.y)
+                    return
+                  }
                   root.noteListClick(index)
                   if (rowItem.isSearch) return
                   if (rowItem.isPlaylist) root.pickPlaylist(it)
                   else root.pickAlbum(it)
                 }
-                onDoubleClicked: {
+                onDoubleClicked: function(ev) {
+                  if (ev.button !== Qt.LeftButton) return
                   var it = rowItem.item
                   if (!it || rowItem.isHeader || !rowItem.isSearch) return
                   root.noteListClick(index)
@@ -988,6 +1092,132 @@ Panel {
             anchors.fill: parent
             anchors.margins: Style.spacing.sm
             spacing: Style.spacing.sm
+
+            // v3.4: Up Next sits ABOVE the context's own header/content. It is
+            // the session-only user queue, in added order. Rows select nothing:
+            // double-click plays a row immediately (dropping it and everything
+            // ahead); right-click removes it. Clear only empties the queue.
+            Item {
+              id: upNextSection
+              objectName: "upNext"
+              visible: root.upNextCount > 0
+              width: parent.width
+              height: root.upNextSectionHeight
+
+              Column {
+                anchors.fill: parent
+                spacing: Style.space(2)
+
+                Item {
+                  id: upNextHeaderRow
+                  width: parent.width
+                  height: root.controlHeight
+
+                  Text {
+                    id: upNextHeader
+                    objectName: "upNextHeader"
+                    textFormat: Text.PlainText
+                    text: "Up Next (" + root.upNextCount + ")"
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  BcButton {
+                    id: upNextClear
+                    objectName: "upNextClear"
+                    text: "Clear"
+                    height: root.controlHeight
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    tooltipText: "Clear the queue"
+                    onClicked: if (root.service) root.service.clearUserQueue()
+                  }
+                }
+
+                ListView {
+                  id: upNextList
+                  objectName: "upNextList"
+                  width: parent.width
+                  height: root.upNextListHeight
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  model: root.userQueue
+                  delegate: Item {
+                    id: upNextRow
+                    width: ListView.view.width
+                    height: root.upNextRowHeight
+
+                    readonly property var track: modelData
+
+                    Rectangle {
+                      objectName: "upNextFill"
+                      anchors.fill: parent
+                      radius: Style.cornerRadius
+                      color: upNextMouse.containsMouse
+                        ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
+                    }
+
+                    Column {
+                      x: Style.space(8)
+                      width: parent.width - Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: 0
+
+                      Text {
+                        objectName: "upNextTitle"
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        elide: Text.ElideRight
+                        text: upNextRow.track ? (upNextRow.track.title || "") : ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+
+                      Text {
+                        objectName: "upNextSub"
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        elide: Text.ElideRight
+                        text: upNextRow.track
+                          ? (upNextRow.track.artist || "")
+                            + (upNextRow.track.album ? " · " + upNextRow.track.album : "")
+                          : ""
+                        color: Qt.darker(root.foreground, 1.5)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+
+                    MouseArea {
+                      id: upNextMouse
+                      objectName: "upNextMouse"
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      acceptedButtons: Qt.LeftButton | Qt.RightButton
+                      cursorShape: Qt.PointingHandCursor
+                      onDoubleClicked: root.playQueueRow(index)
+                      onClicked: function(mouse) {
+                        if (mouse.button === Qt.RightButton)
+                          root.openQueueMenu(index, upNextRow, mouse.x, mouse.y)
+                      }
+                    }
+                  }
+                }
+              }
+            }
 
             // Header: same two-line treatment as the rows (title wraps, artist or count
             // on its own dimmed line), plus pre-order state and track availability.
@@ -1079,7 +1309,8 @@ Panel {
 
             Item {
               width: parent.width
-              height: parent.height - detailHeader.height - parent.spacing
+              height: Math.max(0, parent.height - detailHeader.height - root.upNextSectionHeight
+                - (root.upNextCount > 0 ? 2 : 1) * parent.spacing)
 
               ListView {
                 id: trackList
@@ -1190,9 +1421,16 @@ Panel {
                     objectName: "trackMouse"
                     anchors.fill: parent
                     hoverEnabled: trackRow.playable
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: trackRow.playable ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: {
+                    onClicked: function(mouse) {
                       if (!trackRow.track) return
+                      if (mouse.button === Qt.RightButton) {
+                        // Unstreamable rows still open the menu, with both
+                        // queue actions disabled.
+                        root.openTrackMenu(trackRow.track, tMouse, mouse.x, mouse.y)
+                        return
+                      }
                       // Selection only. Audio starts on double-click (or Enter/footer).
                       root.noteTrackClick(index)
                       if (!trackRow.playable && root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
@@ -1556,6 +1794,64 @@ Panel {
           searchField.text = searchField.text + event.text
           searchField.cursorPosition = searchField.text.length
           event.accepted = true
+        }
+      }
+    }
+
+    // v3.4 row context menu (Play Next / Add to Queue / Remove from queue).
+    // Separate from the gear/sort card so right-click never moves the toolbar
+    // menu. Clamped inside the window; click-outside closes it.
+    Item {
+      id: contextMenuLayer
+      anchors.fill: parent
+      visible: root.contextMenuOpen
+      z: 60
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.closeContextMenu()
+      }
+
+      BorderSurface {
+        id: contextMenuCard
+        objectName: "contextMenu"
+        width: Style.space(240)
+        height: contextMenuColumn.implicitHeight + contentTopInset + contentBottomInset
+        radius: Style.cornerRadius
+        color: Color.popups.background
+        borderSpec: Border.flat(Color.popups.border, Style.normalBorderWidth)
+        padding: Style.space(6)
+        x: Math.max(0, Math.min(contextMenuLayer.width - width, root.contextMenuAnchorX))
+        y: Math.max(0, Math.min(contextMenuLayer.height - height, root.contextMenuAnchorY))
+
+        MouseArea { anchors.fill: parent; onClicked: {} }
+
+        Column {
+          id: contextMenuColumn
+          anchors.fill: parent
+          anchors.topMargin: contextMenuCard.contentTopInset
+          anchors.rightMargin: contextMenuCard.contentRightInset
+          anchors.bottomMargin: contextMenuCard.contentBottomInset
+          anchors.leftMargin: contextMenuCard.contentLeftInset
+          spacing: Style.spacing.sm
+
+          Repeater {
+            model: root.contextMenuEntries
+
+            BcButton {
+              required property int index
+              required property var modelData
+              objectName: "contextMenuButton"
+              width: contextMenuColumn.width
+              leftAlign: true
+              text: modelData.label
+              iconText: "\u2003"
+              enabled: modelData.enabled !== false
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.runContextAction(modelData.action)
+            }
+          }
         }
       }
     }

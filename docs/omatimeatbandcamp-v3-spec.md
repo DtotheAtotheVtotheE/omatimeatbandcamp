@@ -641,3 +641,189 @@ existing diagnostic: the log's 0 truncated row titles is now also asserted.
    panes end on the same line; long grouped lists should cap and scroll.
 7. Type nonsense (`zzzz`): both panes should say `No results`. Esc clears the
    query and restores the normal list.
+
+## v3.4 session-only user queue (owner-decided, 2026-10-26)
+
+Scope: a Spotify-style "Up Next" queue that sits on top of whatever context is
+playing. It starts empty on every shell launch, holds tracks in the order the
+user added them, and disappears with the session. Playback order, the existing
+per-context shuffle, the v3.2 content-driven height and every other view keep
+working as before.
+
+### Baseline (fresh session, before editing)
+
+- Unit: `Ran 88 tests ... OK (skipped=5)`
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK`
+- QML (`tests/qml/run.sh`): **388** checks = phase 1 358 + relaunch 7 +
+  real-data 17 + 6 script-side. All `FAILS=0`.
+
+The baseline matched the expected 88/5 unit, 5 live and 388 QML figures, so
+editing proceeded.
+
+### What changed
+
+- **`UserQueue.js`** is a new, mutable-free ES5 model with no Qt imports:
+  `{ pending, current, resumeIndex, history }`. The same file is imported by
+  `Service.qml` and run under Node by the unit tests. Every operation returns a
+  new state so QML bindings stay reactive.
+- **The user queue is separate from the context queue.** `Service.qml` keeps its
+  existing `queue` / `queueIndex` untouched underneath any queued track, so the
+  context's own order (including shuffle) is preserved for when the queue
+  drains. `userQueueState` drives the new `userQueue`, `currentUserTrack`,
+  `userResumeIndex` and `userQueueActive` properties.
+- **Adding.** Play Next inserts at the FRONT, Add to Queue appends at the END;
+  duplicates are allowed. Only streamable tracks can enter the queue: the UI
+  disables both actions on an unstreamable row and the service refuses the
+  track too. Album/playlist adds append their streamable tracks in album order,
+  skip unstreamable ones, and report `Added N tracks to queue` plus
+  `· M skipped (not streamable)` when anything was skipped.
+- **One advance path.** Footer Next, MPRIS Next, the media key and the
+  end-of-track handler all go through the same `advanceUserQueueIfNeeded()`
+  branch: a non-empty user queue always plays its head and removes it; otherwise
+  the context advances exactly as before. A failed stream uses the same rule
+  (`advanceUserQueueAfterFailure`) and does not pretend the failed track played.
+- **Order is added order.** Queued tracks play in the order they were added even
+  when the underlying context is shuffled. Shuffle continues to reorder only the
+  context, including while a queued track is playing.
+- **Drain.** The state remembers the context position after the track that was
+  playing when the queue took over. When the last queued track ends (or Next
+  goes past it), the context resumes at that position. The interrupted track is
+  never replayed. If it was the last track in the context, playback stops.
+- **Previous.** While a queued track plays, Previous steps through actual
+  history: the previous queued item, then the interrupted context track (which
+  becomes current again and the two queued items go back to the front of
+  pending, in order). Outside a queue takeover, Previous is byte-for-byte the
+  old context behaviour.
+- **Starting something new.** Starting playback in a different context (another
+  album, playlist, search result set, or a single track) clears the queue.
+  Selecting another track in the same context keeps the pending queue but
+  releases the queued `current`, so the context track is what plays.
+- **UI.** Track rows have a right-click menu with Play Next / Add to Queue (both
+  visibly disabled on unstreamable rows). Album and playlist rows have
+  Add to Queue. A non-empty queue shows `Up Next (n)` ABOVE the context's own
+  header and tracks: ordered rows with title and `artist · album`, a Clear
+  button, double-click to play a row immediately (dropping it and everything
+  ahead of it), and right-click → Remove from queue. The menu is a separate
+  overlay from the gear/Sort menu; Esc closes only the menu.
+- **Height (v3.2 model).** The Up Next section (header/Clear control row,
+  2 px gap, visible queue rows) counts as detail content. Up to six rows are
+  visible at the same 30 px unit as the six-row floor; longer queues scroll.
+  The existing floor (6 × 30 px) and 396 px cap still apply, and both panes
+  keep the one shared height with coincident bottom edges.
+- **MPRIS.** `canNext` / `canPrevious` now also consider the pending user queue.
+  The published key whitelist is unchanged.
+
+### Tests (raw counts)
+
+- Unit: `Ran 97 tests ... OK (skipped=5)` (88 existing + 9 new
+  `UserQueue` model cases). The model tests run the exact source under Node.
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK` (unchanged).
+- QML (`tests/qml/run.sh`): **426** checks = phase 1 395 + relaunch 8 +
+  real-data 17 + 6 script-side. All `FAILS=0`. Baseline 388 -> +38 checks
+  (37 phase 1, 1 relaunch).
+- `omarchy plugin validate .`: exit 0.
+- `/usr/lib/qt6/bin/qmllint Service.qml Panel.qml BcButton.qml`: exit 0, no
+  errors; only the pre-existing import/unqualified-access warnings and the
+  existing `Service.qml` `QVariantMap`/`QVariantHash` warning.
+- Credential files were not opened (paths/modes only). No stream URL, cover-art
+  URL or credential value was printed or committed. `--load-scripts=no` is
+  untouched and the MPRIS whitelist is untouched.
+
+### Harness checks updated (and why)
+
+No existing check was changed, loosened or removed. Every v3/v3.1/v3.2/v3.3
+check still runs with its old assertion.
+
+The new v3.4 steps start by calling `svc.loadLibrary()` and by clearing the
+selected album before `pickAlbum()`. That is test setup, not a product
+assertion: the preceding v3.2/v3.3 blocks deliberately replace
+`svc.collection` with two synthetic albums and leave the fixture album
+selected, so v3.4 has to put the fixture library and selection back to exercise
+real album and track rows.
+
+The Up Next height check measures its no-queue baseline in its own step, one
+tick after selecting the album, and asserts that baseline is itself a normal
+content-driven height (floor..cap) before comparing. The first draft measured
+in the selection tick and could read 0 while the detail pane was still being
+built, which would make the growth comparison meaningless; this is a new check
+added to keep the height assertion honest, not a weakened existing one.
+
+### New harness coverage
+
+- Right-clicking an album row opens exactly `Add to Queue` (enabled); adding a
+  four-track album queues its tracks in album order and reports
+  `Added 4 tracks to queue`.
+- Up Next becomes visible with `Up Next (4)`, four ordered rows carrying
+  title + `artist · album`, sits entirely above the context header, and has a
+  Clear button.
+- Clear empties the queue, hides Up Next and leaves playback untouched.
+- A streamable track row offers `Play Next | Add to Queue`; Add to Queue appends
+  it; Play Next on another row inserts at the front with a duplicate allowed;
+  Up Next follows the new order.
+- An unstreamable track row still opens its menu with both actions disabled,
+  and Esc closes it without queueing anything.
+- Adding an album with one streamable and two unreleased tracks queues only
+  `Released Single` and reports
+  `Added 1 track to queue · 2 skipped (not streamable)`.
+- From a context track, Next plays the queue head while the context
+  queue/index stay underneath; with context shuffle On, queued tracks still
+  play in added order; when the queue drains, the context resumes at the track
+  AFTER the interrupted one and does not replay it.
+- With two queued tracks played, Previous returns to the previous queued track,
+  then to the interrupted context track, with both queued tracks pending again.
+- Double-clicking a queue row plays it immediately and drops it and everything
+  ahead; right-click → Remove from queue drops only that row and keeps playback.
+- Up Next rows count in the content-driven height (baseline inside the normal
+  floor..cap, growth > 50 px, result under the cap), both panes stay equal, and
+  the detail content still fits.
+- Playing another track in the SAME context keeps the queue; playing a track in
+  a NEW context clears it.
+- Relaunch phase: the queue is empty again after a shell restart (session-only,
+  nothing persisted).
+
+### Deviations / owner-visible decisions
+
+- **Up Next shows six rows at once**, the same six-row unit as the height
+  floor, then scrolls. This keeps the context's own list visible below it.
+- **Clear drops pending rows only.** A queued track that is already playing
+  keeps playing; Clear never stops audio.
+- **Playing a queue row is a takeover**, so that row and every row ahead of it
+  are discarded permanently, matching the spec's "play immediately" wording.
+- **End of context stops.** If the interrupted context track was the last one,
+  draining the queue leaves the last queued track in the footer but stops
+  playback rather than replaying anything.
+- **History is scoped to the takeover.** As soon as the context resumes,
+  Previous is the old context Previous again; the queued items are gone.
+- **Single-track playback is a new context**, so it clears the queue even
+  though the track may come from the album that is on screen.
+- **Notice wording** is `Added N track(s) to queue`, with
+  `· M skipped (not streamable)` appended only when something was skipped.
+- **MPRIS** treats a pending queue as "can go next/previous"; the whitelisted
+  key set and status values are unchanged.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel and start an album. Right-click a
+   track row → Play Next: it becomes the first `Up Next (1)` row above the
+   album's tracks. Right-click another → Add to Queue: it lands at the end.
+2. Add the same track twice: both rows stay (duplicates are allowed).
+3. Right-click an unreleased/greyed track: the menu still opens but both
+   Play Next and Add to Queue are disabled.
+4. Right-click an album in the left list → Add to Queue: its streamable tracks
+   are appended in order; a partially released album reports both the added
+   and skipped counts in the notice.
+5. Press Next from a normal context track: the queue head plays, the context
+   list underneath does not change, and when the queue runs out the album
+   continues with the track AFTER the one that was playing (not a replay).
+6. With Shuffle On for the album, queue two tracks: they still play in the
+   order you added them.
+7. Play two queued tracks, then press Previous twice: you should step back to
+   the first queued track, then to the album track that was interrupted, with
+   the queued tracks shown again in Up Next.
+8. Double-click the second queued row: it plays at once and the rows above it
+   disappear. Right-click a remaining queue row → Remove from queue: only that
+   row goes; playback continues.
+9. Start another album (or a single track from elsewhere): the queue empties.
+   `omarchy restart shell` also starts you with no queue (session-only).
+10. Check the popup height with Up Next full: it grows by the queue rows, stops
+    at the cap and scrolls, and both panes still end on the same line.

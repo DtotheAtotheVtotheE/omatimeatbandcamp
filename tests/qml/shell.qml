@@ -31,6 +31,10 @@ ShellRoot {
   property real playingFooterHeight: 0
   property real capPopupHeight: 0
   property real capRowHeight: 0
+  // v3.4 user-queue probes.
+  property var queueProbe: null
+  property var probe: null
+  property real upHeightBefore: 0
 
   Plug.Service { id: svc }
 
@@ -266,6 +270,25 @@ ShellRoot {
   function pick(title) { panel.pickAlbum(svc.collection[collIndex(title)]) }
   function collIndex(title) { for (var i = 0; i < svc.collection.length; i++) if (svc.collection[i].title === title) return i; return -1 }
   function entityFree(strings) { return strings.filter(function(t) { return /&(amp|lt|gt|quot|#\d+|#x[0-9a-f]+);/i.test(t) }) }
+
+  // v3.4: clean slate for the user-queue checks (no playback, no pending rows).
+  function resetUserQueueChecks() {
+    svc.userQueueState = { pending: [], current: null, resumeIndex: -1, history: [] }
+    svc.queue = []
+    svc.queueIndex = -1
+    svc.context = { type: "", name: "", tracks: [] }
+    svc.playingContextKey = ""
+    svc.isPlaying = false
+    svc.isPaused = false
+    svc.position = 0
+    svc.duration = 0
+    svc.pendingSeek = -1
+    svc.playbackError = ""
+    svc.notice = ""
+  }
+  function queueTitles() {
+    return svc.userQueue.map(function(t) { return t.title })
+  }
 
   // ---- expected orders for the synthetic fixture -------------------------------------------
   readonly property var expAdded: ["Future Sounds", "La Dee La La", "First Impressions (Deluxe Edition)", "alpha", croc, "Same Year Early", "Zebra Crossing", "Émile's Song", longTitle, "Empty Album", "No Date Album", "Truncated Compilation", "Unloaded Album"]
@@ -1549,6 +1572,275 @@ ShellRoot {
       svc.playbackError = ""
     },
 
+    // ---- v3.4: session-only user queue + Up Next -------------------------
+    function() {
+      // The v3.2/v3.3 checks swap in small synthetic libraries. Put the fixture
+      // library back before exercising real album/track rows again.
+      svc.loadLibrary()
+      resetUserQueueChecks()
+      panel.selectedPlaylistUid = ""
+      panel.selectedAlbumUid = ""
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+      svc.activeTab = 0
+      searchField().text = ""
+      svc.search("")
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      showRow("La Dee La La")
+    },
+    function() {
+      rightClick(leftRow("La Dee La La"))
+    },
+    function() {
+      check("v3.4: right-clicking an album row opens Add to Queue",
+        panel.contextMenuOpen && panel.contextMenuKind === "item" &&
+        panel.contextMenuEntries.length === 1 && panel.contextMenuEntries[0].label === "Add to Queue" &&
+        !!button("Add to Queue") && button("Add to Queue").enabled === true)
+      click(button("Add to Queue"))
+    },
+    function() {
+      check("v3.4: Add to Queue on an album appends its streamable tracks in order",
+        svc.userQueue.length === 4 && queueTitles().join("|") ===
+        "La Dee La La Song|Waiting For Marvin|The White Lady|Along Came Ron Rahsaan")
+      check("v3.4: the album add reports how many tracks were queued",
+        svc.notice === "Added 4 tracks to queue")
+      var up = named(stage, "upNext"), list = named(stage, "upNextList")
+      var header = named(stage, "upNextHeader")
+      check("v3.4: Up Next appears with its count", up.visible === true && header.text === "Up Next (4)" && list.count === 4)
+      check("v3.4: Up Next rows are in added order, title + artist · album",
+        named(list.itemAtIndex(0), "upNextTitle").text === "La Dee La La Song" &&
+        named(list.itemAtIndex(0), "upNextSub").text === "Shamek Farrah & Folks · La Dee La La" &&
+        named(list.itemAtIndex(3), "upNextTitle").text === "Along Came Ron Rahsaan")
+      var upY = up.mapToItem(named(stage, "detailPane"), 0, 0).y
+      var headY = named(stage, "detailTitle").mapToItem(named(stage, "detailPane"), 0, 0).y
+      check("v3.4: Up Next sits ABOVE the context's own content", upY < headY && upY + up.height <= headY)
+      check("v3.4: Up Next has a Clear button", !!named(stage, "upNextClear") && named(stage, "upNextClear").text === "Clear")
+    },
+    function() {
+      click(named(stage, "upNextClear"))
+    },
+    function() {
+      check("v3.4: Clear empties the queue", svc.userQueue.length === 0)
+      check("v3.4: Up Next disappears when the queue is empty", named(stage, "upNext").visible === false)
+      check("v3.4: Clear did not touch playback", svc.currentTrack === null && svc.isPlaying === false)
+    },
+
+    // track-row menus: Play Next front / Add to Queue end / duplicates
+    function() {
+      resetUserQueueChecks()
+      // Deselect first: pickAlbum() toggles, and the album from the block above
+      // is still selected.
+      panel.selectedAlbumUid = ""
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      showRow("La Dee La La")
+      var rows = trackRows()
+      rightClick(rows[0])
+    },
+    function() {
+      check("v3.4: right-clicking a streamable track row offers Play Next and Add to Queue",
+        panel.contextMenuOpen && panel.contextMenuKind === "track" &&
+        panel.contextMenuEntries.map(function(e) { return e.label }).join("|") === "Play Next|Add to Queue" &&
+        button("Play Next").enabled === true && button("Add to Queue").enabled === true)
+      click(button("Add to Queue"))
+    },
+    function() {
+      check("v3.4: Add to Queue appends the right-clicked track", svc.userQueue.length === 1 && svc.userQueue[0].title === "La Dee La La Song")
+      showRow("La Dee La La")
+      rightClick(trackRows()[1])
+    },
+    function() {
+      click(button("Play Next"))
+    },
+    function() {
+      check("v3.4: Play Next inserts at the FRONT (duplicates are allowed)",
+        queueTitles().join("|") === "Waiting For Marvin|La Dee La La Song")
+      check("v3.4: Up Next follows the new order", named(stage, "upNextHeader").text === "Up Next (2)" &&
+        named(named(stage, "upNextList").itemAtIndex(0), "upNextTitle").text === "Waiting For Marvin")
+      svc.clearUserQueue()
+    },
+
+    // unstreamable rows disable both actions
+    function() {
+      resetUserQueueChecks()
+      panel.pickAlbum(svc.collection[collIndex(host.fi)])
+      rightClick(trackRows()[0])
+    },
+    function() {
+      check("v3.4: right-clicking an unstreamable track still opens the menu", panel.contextMenuKind === "track")
+      check("v3.4: Play Next and Add to Queue are both disabled on an unstreamable row",
+        button("Play Next").enabled === false && button("Add to Queue").enabled === false)
+      named(stage, "listKeyCatcher").forceActiveFocus()
+      key(Qt.Key_Escape)
+    },
+    function() {
+      check("v3.4: Esc closes the row menu without queueing anything", !panel.contextMenuOpen && svc.userQueue.length === 0)
+    },
+
+    // album add skip counts (Future Sounds: 1 streamable, 2 unreleased)
+    function() {
+      resetUserQueueChecks()
+      svc.activeTab = 0
+      showRow("Future Sounds")
+      rightClick(leftRow("Future Sounds"))
+    },
+    function() {
+      click(button("Add to Queue"))
+    },
+    function() {
+      check("v3.4: album add skips unstreamable tracks and reports both counts",
+        svc.userQueue.length === 1 && svc.userQueue[0].title === "Released Single" &&
+        svc.notice === "Added 1 track to queue · 2 skipped (not streamable)")
+      svc.clearUserQueue()
+    },
+
+    // Next from a context track plays the queue head; shuffle does not reorder it
+    function() {
+      resetUserQueueChecks()
+      var ctx = mk("uqctx", 4)
+      svc.setShuffle("album:uq", true)
+      svc.playContext("album", "Queue Context", ctx, 1, "album:uq")
+      host.queueProbe = svc.queue[svc.queueIndex + 1]
+      var q1 = mk("uq1", 1)[0], q2 = mk("uq2", 1)[0]
+      svc.playNextTrack(q1)
+      svc.addTrackToQueue(q2)
+      host.probe = { q1: q1, q2: q2 }
+      svc.next()
+    },
+    function() {
+      check("v3.4: Next from a context track plays the queue head", svc.currentTrack === host.probe.q1 &&
+        svc.userQueue.length === 1 && svc.userQueue[0] === host.probe.q2)
+      check("v3.4: the context queue/index stay underneath the queue", svc.queueIndex === 0 && svc.playingContextKey === "album:uq")
+      svc.next()
+    },
+    function() {
+      check("v3.4: with the context shuffled, queued tracks still play in added order",
+        svc.currentTrack === host.probe.q2 && svc.userQueue.length === 0 && svc.isShuffled("album:uq"))
+      svc.next()
+    },
+    function() {
+      check("v3.4: when the queue drains, the context resumes AFTER the interrupted track",
+        svc.currentTrack === host.queueProbe && svc.currentUserTrack === null &&
+        svc.queueIndex === 1 && svc.userQueue.length === 0)
+      check("v3.4: the interrupted track is not replayed", svc.currentTrack.uid !== mk("uqctx", 4)[1].uid)
+      svc.setShuffle("album:uq", false)
+    },
+
+    // Previous steps back through actual history
+    function() {
+      resetUserQueueChecks()
+      var ctx = mk("hctx", 4)
+      svc.playContext("album", "History", ctx, 1, "album:hist")
+      var p1 = mk("hp1", 1)[0], p2 = mk("hp2", 1)[0]
+      svc.playNextTrack(p1)
+      svc.addTrackToQueue(p2)
+      host.probe = { p1: p1, p2: p2, interrupted: svc.queue[svc.queueIndex] }
+      svc.next()
+      svc.next()
+    },
+    function() {
+      check("v3.4: two queued tracks played in order", svc.currentTrack === host.probe.p2 && svc.userQueue.length === 0)
+      svc.prev()
+    },
+    function() {
+      check("v3.4: Previous from a queued track goes to the previously played queued track",
+        svc.currentTrack === host.probe.p1 && queueTitles().join("|") === "hp20")
+      svc.prev()
+    },
+    function() {
+      check("v3.4: Previous from the first queued track goes to the interrupted context track",
+        svc.currentTrack === host.probe.interrupted && svc.currentUserTrack === null && svc.queueIndex === 1)
+      check("v3.4: both queued tracks are pending again after stepping back", queueTitles().join("|") === "hp10|hp20")
+      resetUserQueueChecks()
+    },
+
+    // queue-row double-click drops itself and everything ahead; right-click removes
+    function() {
+      resetUserQueueChecks()
+      svc.playContext("album", "Drop", mk("dctx", 4), 0, "album:drop")
+      var a = mk("dqa", 1)[0], b = mk("dqb", 1)[0], c = mk("dqc", 1)[0]
+      svc.addTrackToQueue(a); svc.addTrackToQueue(b); svc.addTrackToQueue(c)
+      host.probe = { a: a, b: b, c: c }
+    },
+    function() {
+      doubleClick(named(stage, "upNextList").itemAtIndex(1))
+    },
+    function() {
+      check("v3.4: double-clicking a queue row plays it immediately", svc.currentTrack === host.probe.b)
+      check("v3.4: ...dropping it and everything ahead of it", svc.userQueue.length === 1 && svc.userQueue[0] === host.probe.c &&
+        named(stage, "upNextHeader").text === "Up Next (1)")
+      rightClick(named(stage, "upNextList").itemAtIndex(0))
+    },
+    function() {
+      check("v3.4: right-clicking a queue row offers Remove from queue",
+        panel.contextMenuKind === "queue" && panel.contextMenuEntries.length === 1 &&
+        panel.contextMenuEntries[0].label === "Remove from queue")
+      click(button("Remove from queue"))
+    },
+    function() {
+      check("v3.4: Remove from queue drops only that row and keeps playback",
+        svc.userQueue.length === 0 && svc.currentTrack === host.probe.b)
+      resetUserQueueChecks()
+    },
+
+    // Up Next counts in the v3.2 content-driven height; panes stay equal
+    function() {
+      resetUserQueueChecks()
+      svc.activeTab = 0
+      panel.selectedAlbumUid = ""
+      panel.pickAlbum(svc.collection[collIndex(host.croc)])
+    },
+    function() {
+      // A full tick later, so the baseline is the settled height, not a
+      // half-built detail pane.
+      host.upHeightBefore = named(stage, "libraryRow").height
+    },
+    function() {
+      check("v3.4: the no-queue baseline is a normal content-driven height",
+        host.upHeightBefore >= 6 * Style.space(30) - 0.5 && host.upHeightBefore <= Style.space(396) + 0.5)
+      svc.addTrackToQueue(mk("uh1", 1)[0])
+      svc.addTrackToQueue(mk("uh2", 1)[0])
+    },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      log("v3.4 Up Next height: before=" + host.upHeightBefore + " after=" + lr.height +
+        " upNext=" + named(stage, "upNext").height + " panes=" + lp.height + "/" + dp.height)
+      check("v3.4: Up Next rows count in the content-driven height",
+        lr.height > host.upHeightBefore + 50 && lr.height <= Style.space(396) + 0.5)
+      check("v3.4: both panes stay exactly equal with Up Next visible",
+        Math.abs(lp.height - lr.height) < 0.5 && Math.abs(dp.height - lr.height) < 0.5 &&
+        Math.abs(lp.mapToItem(lr, 0, lp.height).y - dp.mapToItem(lr, 0, dp.height).y) < 0.5)
+      check("v3.4: the detail content still fits inside the pane",
+        named(stage, "upNext").mapToItem(dp, 0, 0).y >= 0 &&
+        named(stage, "upNext").mapToItem(dp, 0, 0).y + named(stage, "upNext").height <= dp.height)
+      svc.clearUserQueue()
+    },
+
+    // same context keeps the queue; a new context clears it
+    function() {
+      resetUserQueueChecks()
+      var a = mk("nca", 3), b = mk("ncb", 3)
+      svc.playContext("album", "A", a, 0, "album:na")
+      svc.playNextTrack(mk("ncq", 1)[0])
+      svc.playContext("album", "A", a, 1, "album:na")
+    },
+    function() {
+      check("v3.4: playing another track in the SAME context keeps the queue", svc.userQueue.length === 1)
+      svc.playContext("album", "B", mk("ncb", 3), 0, "album:nb")
+    },
+    function() {
+      check("v3.4: playing a track in a NEW context clears the queue", svc.userQueue.length === 0)
+      resetUserQueueChecks()
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      svc.activeTab = 0
+      searchField().text = ""
+      svc.search("")
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+    },
+
     function() {
       svc.queue = [{ uid: "v32#0", title: host.longTitle + " " + host.longTitle, artist: "Long Title Artist", album: "Long", duration: 200, streamable: true }]
       svc.queueIndex = 0
@@ -1678,6 +1970,7 @@ ShellRoot {
       prepLists()
       check("[relaunch] sort choice restored from disk (Title A–Z)", svc.sortMode === "title" && !!button("Sort: Title A–Z"))
       check("[relaunch] Hide pre-orders restored (On)", svc.hidePreorders === true)
+      check("[relaunch] session-only user queue starts empty on a fresh service", svc.userQueue.length === 0 && svc.currentUserTrack === null)
       check("[relaunch] list is Title A–Z without pre-orders", titlesEqual(leftTitles(), noPre(expTitle)))
       check("[relaunch] Albums (N) reflects the restored filter", !!button("Albums (11)"))
       openSettings()

@@ -69,6 +69,21 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   laptop's Play/Pause, Next and Previous keys work through Omarchy's existing
   `omarchy-shell media ...` bindings.
 
+## Queue
+
+- Right-click a track row for **Play Next** (front of the queue) or **Add to Queue** (end).
+  Duplicates are allowed; unstreamable/unreleased tracks cannot be queued and both actions are
+  disabled on them. Right-click an album or playlist row to append its streamable tracks.
+- A non-empty queue appears as **Up Next (n)** above the current album/playlist/search contents,
+  in the order you added it. Double-click a row to play it immediately (dropping it and the rows
+  ahead of it), right-click for **Remove from queue**, or use **Clear** to drop all pending rows.
+- The queue is **session-only**: it is never written to disk, so a shell restart starts empty. It
+  is also cleared when you start something in a different context (another album, playlist or
+  search result set, or a single track). Starting another track in the same context keeps it.
+- Queued tracks keep their added order even with Shuffle On (Shuffle reorders only the context).
+  When the queue drains, the context resumes with the track after the one that was interrupted.
+  Previous steps back through what actually played (queued track, then the interrupted track).
+
 ## Keyboard shortcuts
 
 ### Global transport (recommended)
@@ -165,6 +180,9 @@ These work only while the popup is open and focused:
   text, and a visible notice plus automatic skip when a stream fails. Track rows select on single-click
   and play on double-click; Enter and the footer also start playback. The detail header has no Play
   button (v3).
+- Session-only Up Next queue: right-click for Play Next / Add to Queue (tracks) or Add to Queue
+  (albums/playlists), shown above the context with Clear / Remove / play-now, and cleared by a shell
+  restart or a new context; see [Queue](#queue).
 - Refresh runs the backend sync in the background from the gear menu (cached library stays on screen);
   streams for Subsonic tracks are resolved by the backend (`backend play`), so stream URLs/credentials
   never appear in argv or logs
