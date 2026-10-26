@@ -52,7 +52,7 @@ launch() {  # launch <label> <home> <phase>
   # not query or play through the live player.
   out=$(HOME="$home" HARNESS_PHASE="$phase" OMARCHY_PATH="$omarchy" QT_QPA_PLATFORM=offscreen \
     OMATIME_MPV_SOCK="$work/mpv-${phase}.sock" OMATIME_MPV_FLAGS="--ao=null" OMATIME_PLUGIN_DIR="$plugin" \
-    OMATIME_MPRIS=0 \
+    OMATIME_MPRIS=0 HARNESS_TONE="$work/tone.wav" \
     OMATIME_ART_FIXTURE_DIR="$artdir" \
     OMATIME_OPEN_CMD="$work/open-recorder.sh" OMATIME_OPEN_LOG="$work/opened-${phase}.log" \
     timeout 240 quickshell -n -p "$work/shell" 2>&1 || true)
@@ -77,6 +77,17 @@ artdir="$work/art"
 mkdir -p "$artdir"
 convert -size 300x120 xc:'#c33' "$artdir/fx-a.jpg" 2>/dev/null
 convert -size 90x260 xc:'#3c3' "$artdir/fx-b.jpg" 2>/dev/null
+
+# First-track regression fixture: a real local audio file for the isolated mpv.
+# Generated with the stdlib (no ffmpeg dependency); --ao=null means it is silent.
+python3 - "$work/tone.wav" <<'PY'
+import math, struct, sys, wave
+rate, secs = 8000, 10
+with wave.open(sys.argv[1], "wb") as w:
+    w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+    w.writeframes(b"".join(struct.pack("<h", int(9000 * math.sin(2 * math.pi * 440 * n / rate)))
+                           for n in range(rate * secs)))
+PY
 
 launch "phase 1 (fixture library)" "$home" 1
 if [ -e "$home/.cache/omatimeatbandcamp/cookies.txt" ]; then

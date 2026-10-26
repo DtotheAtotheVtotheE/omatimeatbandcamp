@@ -92,6 +92,17 @@ ShellRoot {
     onExited: function(code) { cmpArt.same = code === 0 }
   }
 
+  // First-track regression: pause the harness's isolated mpv (as a previous
+  // session leaves it) before the Service loads a track. Never touches the
+  // user's player: run.sh gives this launch its own OMATIME_MPV_SOCK.
+  property int mpvPauseExit: -1
+  Process {
+    id: mpvPause
+    running: false
+    command: ["python3", svc.pluginDir + "/mpvctl.py", "pause"]
+    onExited: function(code) { host.mpvPauseExit = code }
+  }
+
   // Phase 8 metadata fence: read back exactly what Service.qml publishes to the
   // MPRIS daemon. The state file is the only thing the daemon reads; mpv's
   // credential-bearing `path` is never in it.
@@ -980,6 +991,45 @@ ShellRoot {
       svc.duration = 0
     },
 
+    // ---- Post-v3.2: pause-state reconciliation and poll resilience ----
+    function() {
+      // mpv owns `pause`; the service must adopt it. An inverted isPaused used
+      // to stop the 1 s poll while mpv was actually playing (footer stuck at 0:00).
+      svc.queue = [{ uid: "pz#0", title: "Paused Track", artist: "A", album: "X", duration: 200, streamable: true }]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 200
+      svc.pendingSeek = -1
+      svc.playbackStartedAt = Date.now()
+      svc.applyPlaybackStatus({ running: true, position: 0, duration: 200, paused: true, idle: false })
+      check("a paused mpv flips the service to paused (the icon cannot stay inverted)", svc.isPaused === true)
+      check("...and the footer shows Play, not Pause", footerPlay().iconText === "\uf04b")
+    },
+    function() {
+      svc.applyPlaybackStatus({ running: true, position: 1.5, duration: 200, paused: false, idle: false })
+      check("an unpaused mpv flips the service back and advances the position",
+        svc.isPaused === false && Math.abs(svc.position - 1.5) < 0.01)
+      check("...and the footer shows Pause again", footerPlay().iconText === "\uf04c")
+    },
+    function() {
+      // A transient status failure (socket not ready, a lost poll) must neither
+      // reset nor latch the display; the next good poll must advance again.
+      svc.position = 5
+      svc.applyPlaybackStatus({ running: false })
+      check("a transient poll failure keeps the last position (no reset to 0:00)", Math.abs(svc.position - 5) < 0.01)
+      svc.applyPlaybackStatus({ running: true, position: 6, duration: 200, paused: false, idle: false })
+      check("the next good poll advances again (no latch)", Math.abs(svc.position - 6) < 0.01)
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      svc.playbackStartedAt = 0
+    },
+
     // ---- Phase 6: bar text is always plain BC, clicks, cached art for MPRIS ----
     function() {
       svc.queue = []
@@ -1374,6 +1424,42 @@ ShellRoot {
       svc.queueIndex = -1
       svc.position = 0
       svc.duration = 0
+    },
+
+    // ---- Post-v3.2 regression: the first track of a session (real mpv) ----
+    function() {
+      // The owner's player was left paused; mpv keeps `pause` across loadfile,
+      // so a fresh session's first track loaded paused. The first click then
+      // unpaused mpv while flipping the service's flag the other way, which
+      // stopped the poll and froze the footer at 0:00. Play must clear the
+      // inherited pause, and the poll must advance with NO track change.
+      mpvPause.running = true
+      host.pauseUntil = Date.now() + 1200
+    },
+    function() {
+      var tone = Quickshell.env("HARNESS_TONE") || ""
+      check("harness: a local tone fixture exists for the first-track check", tone !== "")
+      check("harness: the isolated mpv is paused before the first track", mpvPauseExit === 0)
+      svc.queue = [{ uid: "first#0", title: "First Track", artist: "A", album: "X", duration: 10, streamable: true, streamUrl: "file://" + tone }]
+      svc.queueIndex = 0
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.position = 0
+      svc.duration = 10
+      svc.pendingSeek = -1
+      svc.playCurrent()
+      host.pauseUntil = Date.now() + 3200
+    },
+    function() {
+      check("first track after a fresh start plays (mpv's stale pause is cleared)", svc.isPlaying === true && svc.isPaused === false)
+      check("first track position advances with NO track change", svc.position > 0.5)
+      check("the footer elapsed label is no longer stuck at 0:00", named(stage, "elapsedLabel").text !== "0:00")
+      svc.stop()
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.position = 0
+      svc.duration = 0
     }
   ]
 
@@ -1490,9 +1576,14 @@ ShellRoot {
 
   readonly property var steps: phase === "2" ? steps2 : (phase === "real" ? stepsReal : steps1)
   property int si: 0
+  // Steps that need real time (a load, a poll) set this instead of calling
+  // TestCase.wait(): qWait from inside this runner aborts the QML engine.
+  property double pauseUntil: 0
   Timer {
     id: runner; interval: 450; repeat: true
     onTriggered: {
+      if (host.pauseUntil > Date.now()) return
+      host.pauseUntil = 0
       if (host.si < host.steps.length) {
         var i = host.si; host.si++
         try { host.steps[i]() } catch (e) { host.fails++; host.log("FAIL step " + i + " threw: " + e + " (last check before it: " + host.lastCheck + ")") }

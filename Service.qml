@@ -422,7 +422,13 @@ Item {
   }
 
   onCurrentTrackChanged: scheduleBarArt()
-  onIsPlayingChanged: scheduleBarArt()
+  onIsPlayingChanged: {
+    scheduleBarArt()
+    // The load grace (2.5 s) and the dead-stream rule (8 s) run from when
+    // playback starts, whichever path flipped isPlaying. playCurrent() sets this
+    // too; repeating it here keeps the clock honest for any other starter.
+    if (isPlaying) playbackStartedAt = Date.now()
+  }
   onIsPausedChanged: scheduleBarArt()
 
   Timer { id: artDebounce; interval: 80; onTriggered: root.updateBarArt() }
@@ -611,6 +617,15 @@ Item {
     var p = (typeof s.position === "number" && isFinite(s.position)) ? s.position : -1
     var d = (typeof s.duration === "number" && isFinite(s.duration) && s.duration > 0) ? s.duration : 0
     if (d > 0) duration = d
+    // mpv owns the pause state. Adopt it instead of assuming our optimistic
+    // toggle matched: if the two flags drift apart, an inverted isPaused used to
+    // stop the poll while mpv was actually playing, freezing the footer at 0:00.
+    // Skip while a control/load command is in flight (the optimistic value must
+    // not be briefly reverted) and while mpv is idle (no file: `pause` there
+    // says nothing about this track).
+    if (typeof s.paused === "boolean" && s.idle !== true && !ctlProc.running && !mpvProc.running && s.paused !== isPaused) {
+      isPaused = s.paused
+    }
     if (p >= 0) {
       if (pendingSeek >= 0) {
         if (Math.abs(p - pendingSeek) < 1.5 || (Date.now() - pendingSeekAt) > 2500) {
@@ -787,13 +802,16 @@ Item {
   }
   Process { id: ctlProc; running: false }
 
-  // Position polling: one lightweight mpvctl call per second while playing. Paused means
-  // the position cannot change on its own, so polling stops.
+  // Position polling: one lightweight mpvctl call per second while playing. It keeps
+  // running while paused: mpv (or another client) can change `pause` at any time, and
+  // stopping the poll on our own flag is what let an inverted pause state freeze the
+  // footer. The first second is polled at 250 ms so the clock starts moving as soon as
+  // mpv has a time-pos (measured cold start: ~1.04 s -> ~0.35 s to first position).
   Timer {
     id: positionTimer
-    interval: 1000
+    interval: (root.position < 1 && !root.isPaused) ? 250 : 1000
     repeat: true
-    running: root.isPlaying && !root.isPaused
+    running: root.isPlaying
     onTriggered: root.pollPosition()
   }
 

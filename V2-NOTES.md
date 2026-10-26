@@ -206,9 +206,12 @@ Where the existing code forced a decision:
    `OMATIME_MPV_FLAGS=--ao=null`. The new end-of-track poller exposed that the harness had been querying the
    *user's live idle mpv* on the default socket and reading "idle" as "track finished" (it skipped a fixture
    queue). Tests no longer touch the real player.
-8. Position polling stops while paused (position cannot change), and a pending seek is displayed optimistically
-   until mpv reports a position within 1.5 s of the target (or 2.5 s pass), so the bar does not bounce back for
-   a tick after a seek. `applyPlaybackStatus()` is the single parse point, which is what the harness feeds.
+8. Position polling runs while `isPlaying`, including while paused: mpv owns `pause`, and stopping the
+   poll on the plugin's own flag let an inverted pause state freeze the footer (fixed after v3.2; see the
+   v3 spec's post-v3.2 section). The poll runs at 250 ms until the first second is on the clock, then 1 s.
+   A pending seek is displayed optimistically until mpv reports a position within 1.5 s of the target (or
+   2.5 s pass), so the bar does not bounce back for a tick after a seek. `applyPlaybackStatus()` is the
+   single parse point, which is what the harness feeds.
 9. Not done (later phases): keyboard seek/list keys and MPRIS (Phase 8); the Waybar `BC` suffix (Phase 6).
    `statusJson()` still exposes only title/artist/album — no URL — and mpv's `path` remains a URL for Phase 8 to
    keep private.

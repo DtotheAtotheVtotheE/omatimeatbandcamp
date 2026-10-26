@@ -228,6 +228,13 @@ def do_load(url, cookie_path=None, title=None):
     if res.get("error") != "success":
         return json.dumps({"ok": False, "error": str(res.get("error") or "load failed"), "kind": "stream"})
 
+    # mpv keeps `pause` across loadfile, so a player left paused by an earlier
+    # session would load the first new track paused while the service believes it
+    # is playing. Every load from here is meant to play (Service.playCurrent()
+    # sets isPlaying=true/isPaused=false), so clear the inherited pause. Ignore
+    # the reply: the load itself already succeeded.
+    send_json(["set", "pause", "no"])
+
     # Never read `media-title` back: it may be (or contain) the URL.
     return json.dumps({"ok": True, "title": title or ""})
 

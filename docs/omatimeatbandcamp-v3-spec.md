@@ -411,3 +411,99 @@ idle/collapsed. The 4-track state is 354 px.
    must remain visible.
 6. Spot-check the gear menu, Collection, shuffle dot, RTL text, borders,
    keyboard navigation and playback are unchanged.
+
+## Post-v3.2 fix (2026-10-25): first-track footer freeze
+
+Owner report: on the first track of a session the footer elapsed time and
+progress stayed at 0:00 indefinitely while audio played normally; only an
+interaction (track change, buttons) revived it; pause/play reached mpv and the
+button state flipped correctly.
+
+### Root cause
+
+mpv keeps its `pause` property across `loadfile`. The owner's player had been
+left paused (verified live: `paused=true`, a track loaded), so the first track
+of the next session loaded paused. `Service.playCurrent()` assumed a new load
+starts playing (`isPlaying=true`, `isPaused=false`), and `applyPlaybackStatus()`
+ignored mpv's `paused` value. The first click on the footer button therefore
+unpaused mpv (audio started) while flipping the service's `isPaused` the other
+way; the 1 s position timer was gated on `isPlaying && !isPaused`, so it stopped
+polling exactly while mpv was playing. The position could then only change when
+something re-armed the poll (a track change calls `playCurrent()` and clears
+`isPaused`). Pause/play kept toggling both sides, so the icon looked correct.
+
+### Reproduction (harness-isolated mpv, own socket, `--ao=null`)
+
+Fresh Service, an isolated mpv left paused, one local track, no track change:
+
+```
+t=1..3  svc.position=0  isPlaying=true  isPaused=false   mpv: paused=true,  time-pos=0
+        (owner clicks the footer Play/Pause button)
+t=4..11 svc.position=0  isPlaying=true  isPaused=true    mpv: paused=false, time-pos 0.99 -> 7.99
+```
+
+Service position stayed 0 while mpv's `time-pos` advanced; after the fix the
+same probe reports `svc.position=0.74` at t=1 with `mpv paused=false`, no click.
+
+### Fix
+
+- `mpvctl.do_load()` sends `set pause no` after a successful `loadfile` (every
+  load from the plugin is meant to play; a rejected load never touches pause).
+- `applyPlaybackStatus()` adopts mpv's `paused` value (skipped while a control
+  or load command is in flight, and while mpv is idle where `pause` is
+  meaningless), so the two flags cannot stay inverted.
+- The position timer runs while `isPlaying` (including paused) and polls at
+  250 ms until the first second is on the clock, then 1 s.
+- `playbackStartedAt` is refreshed whenever `isPlaying` becomes true, so the
+  Phase 5 2.5 s load grace and 8 s dead-stream rule always run from the real
+  start (the existing Phase 5 tests still set it to 0 explicitly and pass).
+
+Phase 5 failure handling is unchanged: same 2.5 s grace, same 8 s rule, same
+`fatal`/stream taxonomy, same 3-skip cap. `--load-scripts=no` is untouched.
+
+### Startup-latency rider (measured before changing)
+
+Cold start per fixture tone, fresh Service + fresh isolated mpv, play command to
+first position advance (`mpv` = first `time-pos > 0`, `svc` = first service
+position > 0):
+
+| Track | mpv before | svc before | svc after |
+|---|---:|---:|---:|
+| 0 (8 kHz, 8 s) | 353 ms | 1063 ms | 346 ms |
+| 1 (11 kHz, 12 s) | 343 ms | 1041 ms | 341 ms |
+| 2 (16 kHz, 20 s) | 240 ms | 1041 ms | 343 ms |
+| 3 (22 kHz, 30 s) | 247 ms | 1144 ms | 341 ms |
+| 4 (44 kHz, 15 s) | 247 ms | 1044 ms | 340 ms |
+
+Audio start is mpv-bound (~240-350 ms, local files; real Subsonic streams are
+server-bound at ~1-2 s to first `time-pos`). The rest of the old delay was the
+1 s poll phase, not the server. The 250 ms fast-start poll removes ~0.7 s from
+the first position advance and ~0.7 s from the first visible `0:01`. No mpv
+cache/prefetch change was needed; none was made.
+
+### Tests (raw counts)
+
+- Unit: `Ran 88 tests ... OK (skipped=5)` (baseline 86; +2 `do_load` pause tests).
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK`.
+- QML (`tests/qml/run.sh`): **355** checks = phase 1 326 + relaunch 7 +
+  real-data 16 + 6 script-side. All `FAILS=0`. Baseline 344 -> +11.
+- New QML checks: paused mpv flips the service to paused and the footer to
+  Play; unpausing flips it back and advances the position; a transient poll
+  failure keeps the last position and the next good poll advances; the
+  first-track regression checks (tone fixture present, isolated mpv paused
+  beforehand, the first track plays, its position advances with no track change,
+  and the elapsed label leaves 0:00). The real-mpv step uses the harness's own
+  socket and `--ao=null`; it never touches the owner's player.
+- Harness support (no assertion changed): `run.sh` generates a 10 s tone with
+  the stdlib and exports `HARNESS_TONE`; the runner gained a `pauseUntil` wait
+  because `TestCase.wait()` from the runner aborts the QML engine (reproduced
+  and removed).
+- No existing check was changed or loosened.
+
+### Owner live check
+
+1. Leave a track paused, restart the shell, play any track: audio should start
+   without a second click and the footer should move within about a second.
+2. Pause and resume: the footer time should hold while paused and continue from
+   the same place; the icon should match the audio.
+3. Track changes, seek, end-of-track advance and the error notice are unchanged.

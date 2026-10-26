@@ -105,6 +105,36 @@ class LoadFailureKind(unittest.TestCase):
         self.assertFalse(d["ok"])
         self.assertEqual(d["kind"], "stream")
 
+    def test_a_successful_load_clears_an_inherited_pause(self):
+        """mpv keeps `pause` across loadfile: a player left paused would load the
+        first track of the next session paused while the service says it is
+        playing. A load that is meant to play must clear it."""
+        sent = []
+
+        def fake_send(command):
+            sent.append(command)
+            return {"error": "success"}
+
+        with mock.patch.object(mpvctl, "ensure", return_value=True), \
+                mock.patch.object(mpvctl, "send_json", fake_send):
+            d = json.loads(mpvctl.do_load("https://example.invalid/x", None, "T"))
+        self.assertTrue(d["ok"])
+        self.assertEqual(sent[2][0], "loadfile")
+        self.assertEqual(sent[-1], ["set", "pause", "no"])
+
+    def test_a_rejected_load_never_touches_pause(self):
+        sent = []
+
+        def fake_send(command):
+            sent.append(command)
+            return {"error": "success"} if command[0] != "loadfile" else {"error": "loading failed"}
+
+        with mock.patch.object(mpvctl, "ensure", return_value=True), \
+                mock.patch.object(mpvctl, "send_json", fake_send):
+            d = json.loads(mpvctl.do_load("https://example.invalid/x", None, "T"))
+        self.assertFalse(d["ok"])
+        self.assertNotIn(["set", "pause", "no"], sent)
+
 
 class PlayCommandClassification(unittest.TestCase):
     def test_missing_credentials_are_fatal(self):
