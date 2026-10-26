@@ -27,6 +27,10 @@ ShellRoot {
   // now-playing fixture: footer 84 px, popup content height 612 px. v3.1 must
   // stay under this and under the 660 px cap.
   readonly property real v3PopupHeight: 612
+  // v3.2 measurements shared between steps.
+  property real playingFooterHeight: 0
+  property real capPopupHeight: 0
+  property real capRowHeight: 0
 
   Plug.Service { id: svc }
 
@@ -204,7 +208,10 @@ ShellRoot {
     for (var i = 0; i < n; i++) { var r = leftList().itemAtIndex(i); out.push(r ? named(r, "rowTitle").text : "<no delegate " + i + ">") }
     return out
   }
-  function showRow(title) { var i = leftIndex(title); leftList().positionViewAtIndex(i, ListView.Visible) }
+  // Contain (not Visible) so a row whose edge is barely on screen is scrolled
+  // fully into the viewport before the harness clicks its centre. v3.2's
+  // content-driven row heights changed the scroll offsets enough to expose this.
+  function showRow(title) { var i = leftIndex(title); leftList().positionViewAtIndex(i, ListView.Contain) }
   function trackRows() {
     var out = [], n = trackList().count
     for (var i = 0; i < n; i++) out.push(trackList().itemAtIndex(i))
@@ -269,10 +276,12 @@ ShellRoot {
     function() {
       var sf = searchField(), cb = collectionButton(), gear = settingsButton(), row = named(stage, "searchRow")
       var s = sf.mapToItem(stage, 0, 0), c = cb.mapToItem(stage, 0, 0), g = gear.mapToItem(stage, 0, 0)
-      log("v3.1 search row width=" + row.width + " field=" + sf.width)
+      log("v3.2 popup content width=" + keyboardPanel().contentWidth + " row=" + row.width + " field=" + sf.width + " collection=" + cb.width + " gear=" + gear.width + " spacing=" + row.spacing)
+      check("v3.2: popup content width is the new ~835 px value (820-840 accepted)", keyboardPanel().contentWidth === Style.space(835) && keyboardPanel().contentWidth >= 820 && keyboardPanel().contentWidth <= 840)
       check("v3.1: search row order is field → Collection → gear, all vertically centred",
         s.x < c.x && c.x < g.x && Math.abs(c.y - s.y) <= 2 && Math.abs(g.y - s.y) <= 2)
-      check("v3.1: the search field is flexible and at least half the row", sf.width >= row.width * 0.5 - 1 && sf.width < row.width)
+      check("v3.2: search field takes all row width left after Collection, gear and the two gaps",
+        Math.abs(sf.width - (row.width - cb.width - gear.width - 2 * row.spacing)) <= 1 && sf.width > row.width * 0.5)
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -855,11 +864,20 @@ ShellRoot {
         Math.abs(right - (f.width - Style.spacing.md)) <= 1)
       check("Shuffle sits on the left edge of the right-justified transport group",
         named(stage, "footerShuffle").mapToItem(tr, 0, 0).x === 0 && named(stage, "footerNext").mapToItem(tr, 0, 0).x > 0)
+      // v3.2: switch to PLAYING now so the next step measures the full footer
+      // after layout has settled (the idle-collapse checks are later).
+      svc.isPlaying = true
+      svc.isPaused = false
+    },
+    function() {
+      var f = named(stage, "footer")
       var title = named(stage, "footerTitle"), sub = named(stage, "footerSub"), pr = named(stage, "progressRow"), kp = keyboardPanel()
       var subBottom = sub.mapToItem(f, 0, 0).y + sub.height
       var progressTop = pr.mapToItem(f, 0, 0).y
       var gap = progressTop - subBottom
       log("v3.1 footer height=" + f.height + " gap=" + gap + " popup=" + kp.contentHeight)
+      check("v3.2: playing keeps the progress row visible", pr.visible === true)
+      host.playingFooterHeight = f.height
       check("v3.1: footer blank band above the progress bar is roughly halved (v3: 6 px, now 2-4 px)", gap >= 2 && gap <= 4)
       check("v3.1: footer is shorter than the v3 84 px", f.height < 84 && f.height > 70)
       check("v3.1: nothing is clipped — title, artist and progress bar sit inside the footer and do not overlap",
@@ -868,8 +886,6 @@ ShellRoot {
       check("v3.1: total popup is shorter than the v3 build and still under the 660 px cap",
         kp.contentHeight < host.v3PopupHeight && kp.contentHeight <= 660 &&
         pr.mapToItem(kp, 0, 0).y + pr.height <= kp.height)
-      svc.isPlaying = true
-      svc.isPaused = false
     },
     function() {
       var p = named(stage, "footerPlay")
@@ -1212,6 +1228,152 @@ ShellRoot {
       var blob = JSON.stringify(d)
       check("mpris: no URL scheme, query string or credential word in any value",
         !/:\/\//.test(blob) && !/\?/.test(blob) && !/\b(u|t|s)=/.test(blob) && !/(token|password|credential|salt)/i.test(blob))
+    },
+
+    // ---- v3.2: narrower window, content-driven row height, idle footer ----
+    function() {
+      // A controlled library with a 4-track album, a 120-track album and a
+      // 4-track playlist. mk() gives each track a distinct title prefix so the
+      // search-result counts below are exact.
+      svc.collection = [
+        synth("a:small", "Small Album", "Small Artist", mk("smallt", 4)),
+        synth("a:big", "Big Album", "Big Artist", mk("bigt", 120))
+      ]
+      svc.playlists = [{ uid: "pl:small", id: "pl:small", name: "Small Playlist", tracks: mk("plt", 4), totalCount: 4 }]
+      svc.activeTab = 0
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.focusPane = ""
+      searchField().text = ""
+      svc.search("")
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.position = 0
+      svc.duration = 0
+      prepLists()
+    },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var kp = keyboardPanel()
+      host.capRowHeight = lr.height
+      host.capPopupHeight = kp.contentHeight
+      log("v3.2 nothing selected: row=" + lr.height + " popup=" + kp.contentHeight + " panes=" + lp.height + "/" + dp.height)
+      check("v3.2: nothing selected (library browsing) keeps the CAP row height", Math.abs(lr.height - Style.space(396)) < 0.5)
+      check("v3.2: list and detail panes are exactly the same height and end on the same line",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+    },
+    function() { panel.selectAlbum(svc.collection[collIndex("Small Album")]) },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var tl = trackList(), kp = keyboardPanel(), floorH = 6 * Style.space(30)
+      log("v3.2 4-track album: row=" + lr.height + " listContent=" + tl.contentHeight + " trackListH=" + tl.height + " popup=" + kp.contentHeight)
+      check("v3.2: a 4-track album sizes the row below the cap", lr.height < host.capRowHeight - 1 && lr.height <= Style.space(396))
+      check("v3.2: ...and never below the six-track-row floor", lr.height >= floorH - 0.5)
+      check("v3.2: the 4-track content fits without scrolling", tl.count === 4 && tl.contentHeight <= tl.height + 0.5)
+      check("v3.2: the 4-track popup is measurably shorter than the nothing-selected cap state", kp.contentHeight < host.capPopupHeight - 1)
+      check("v3.2: (small album) both panes share one height and bottom line",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+    },
+    function() { panel.selectAlbum(svc.collection[collIndex("Big Album")]) },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var tl = trackList(), kp = keyboardPanel()
+      log("v3.2 120-track album: row=" + lr.height + " listContent=" + tl.contentHeight + " trackListH=" + tl.height + " popup=" + kp.contentHeight)
+      check("v3.2: a 100+ track album reaches the CAP row height", Math.abs(lr.height - Style.space(396)) < 0.5)
+      check("v3.2: ...and its track list scrolls (content taller than the viewport)", tl.count === 120 && tl.contentHeight > tl.height + 1)
+      check("v3.2: (large album) both panes share one height and bottom line",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+    },
+    function() { panel.selectPlaylist(svc.playlists[0]) },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var tl = trackList(), kp = keyboardPanel(), floorH = 6 * Style.space(30)
+      log("v3.2 4-track playlist: row=" + lr.height + " popup=" + kp.contentHeight)
+      check("v3.2: a 4-track playlist sizes by content, below the cap and above the floor",
+        lr.height < host.capRowHeight - 1 && lr.height >= floorH - 0.5 && tl.count === 4)
+      check("v3.2: (playlist) both panes share one height and bottom line",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+    },
+    function() { searchField().text = "smallt"; svc.search("smallt") },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var floorH = 6 * Style.space(30)
+      log("v3.2 search 4: row=" + lr.height + " results=" + panel.detailTrackList.length)
+      check("v3.2: search results size by result count (4 results -> content height, below the cap)",
+        panel.detailTrackList.length === 4 && lr.height < host.capRowHeight - 1 && lr.height >= floorH - 0.5)
+      check("v3.2: (search results) both panes share one height and bottom line",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+    },
+    function() { searchField().text = "bigt"; svc.search("bigt") },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var tl = trackList()
+      log("v3.2 search 120: row=" + lr.height + " results=" + panel.detailTrackList.length + " listContent=" + tl.contentHeight + " trackListH=" + tl.height)
+      check("v3.2: 100+ search results reach the CAP and scroll",
+        panel.detailTrackList.length === 120 && Math.abs(lr.height - Style.space(396)) < 0.5 && tl.contentHeight > tl.height + 1)
+      check("v3.2: (large search results) both panes share one height and bottom line",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+      searchField().text = ""
+      svc.search("")
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+    },
+    function() {
+      // Idle footer: a loaded track that is neither playing nor paused. Use
+      // the same two-line long title as the Phase 5 footer fixture so the
+      // playing height is directly comparable.
+      svc.queue = [{ uid: "v32#0", title: host.longTitle + " " + host.longTitle, artist: "Long Title Artist", album: "Long", duration: 200, streamable: true }]
+      svc.queueIndex = 0
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.position = 50
+      svc.duration = 200
+    },
+    function() {
+      var f = named(stage, "footer"), pr = named(stage, "progressRow"), t = named(stage, "footerTitle"), tr = named(stage, "transportRow")
+      log("v3.2 idle footer: height=" + f.height + " playing=" + host.playingFooterHeight + " progressVisible=" + pr.visible)
+      check("v3.2: stopped/idle hides the progress row (bar + time labels)", pr.visible === false)
+      check("v3.2: idle footer is measurably shorter than the playing footer", f.height < host.playingFooterHeight - 1)
+      check("v3.2: idle footer still holds the now-playing line and the transport",
+        t.mapToItem(f, 0, 0).y >= 0 && t.mapToItem(f, 0, 0).y + t.height <= f.height &&
+        tr.mapToItem(f, 0, 0).y >= 0 && tr.mapToItem(f, 0, 0).y + tr.height <= f.height)
+      svc.isPlaying = true
+      svc.isPaused = false
+    },
+    function() {
+      var f = named(stage, "footer"), pr = named(stage, "progressRow")
+      check("v3.2: playing brings the progress row back", pr.visible === true)
+      check("v3.2: the playing footer returns to its full height", Math.abs(f.height - host.playingFooterHeight) < 1)
+      svc.isPlaying = false
+      svc.isPaused = true
+    },
+    function() {
+      check("v3.2: paused keeps the progress row (only stopped/idle collapses)", named(stage, "progressRow").visible === true)
+      svc.isPaused = false
+      svc.isPlaying = false
+      svc.playbackError = "Couldn't play Idle Track — skipped"
+    },
+    function() {
+      var f = named(stage, "footer"), pr = named(stage, "progressRow"), err = named(stage, "footerError"), sub = named(stage, "footerSub")
+      log("v3.2 idle error footer: height=" + f.height + " errorVisible=" + err.visible)
+      check("v3.2: an idle error is still shown in the footer", err.visible === true && err.text === "Couldn't play Idle Track — skipped" && sub.visible === false)
+      check("v3.2: the idle error text sits inside the footer (not collapsed away)", err.mapToItem(f, 0, 0).y >= 0 && err.mapToItem(f, 0, 0).y + err.height <= f.height)
+      check("v3.2: the error state does not force the progress row back", pr.visible === false)
+      svc.playbackError = ""
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.position = 0
+      svc.duration = 0
     }
   ]
 
@@ -1302,14 +1464,25 @@ ShellRoot {
         panel.pickAlbum(svc.collection[collIndex(host.croc)])
       }
       var rowsBad = []
+      var allTrunc = []
       var n = leftList().count
       for (var i = 0; i < Math.min(n, 700); i++) {
         var r = leftList().itemAtIndex(i)
         if (!r) continue
         var tt = named(r, "rowTitle")
         if (tt.truncated && tt.lineCount < 2) rowsBad.push(tt.text)
+        if (tt.truncated) allTrunc.push(tt.text)
       }
+      log("[real] truncated row titles (" + allTrunc.length + "): " + allTrunc.join(" || "))
       check("[real] across all albums no row is truncated on a single line", rowsBad.length === 0)
+      var detailTrunc = []
+      for (var di = 0; di < svc.collection.length; di++) {
+        panel.selectAlbum(svc.collection[di])
+        var dt = named(stage, "detailTitle")
+        if (dt && dt.truncated) detailTrunc.push(dt.text)
+      }
+      panel.selectedAlbumUid = ""
+      log("[real] truncated detail titles (" + detailTrunc.length + "): " + detailTrunc.join(" || "))
       var bad = entityFree(allStrings(stage, []))
       check("[real] no literal HTML entity anywhere in the rendered tree", bad.length === 0)
     }

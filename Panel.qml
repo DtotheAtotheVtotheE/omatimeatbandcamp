@@ -83,6 +83,22 @@ Panel {
   // cannot drift apart.
   readonly property int controlHeight: Style.spacing.controlHeight
 
+  // v3.2: the list/detail row is content-driven. Nothing selected keeps the
+  // old fixed browsing height (the cap); a selection or search result sizes
+  // itself by the detail header plus the track rows actually shown, with a
+  // floor of six 30 px track rows. Long lists still stop at the cap and scroll.
+  readonly property real detailCapHeight: Style.space(396)
+  readonly property int detailMinTrackRows: 6
+  readonly property real detailBaseTrackRowHeight: Style.space(30)
+  readonly property bool detailContextActive: query !== "" || !!selectedPlaylist || !!selectedAlbum
+  readonly property real detailRowContentHeight: detailHeader.height + Style.spacing.sm
+    + (trackList ? trackList.contentHeight : 0)
+  readonly property real libraryRowHeight: {
+    if (!detailContextActive) return detailCapHeight
+    var floorHeight = detailMinTrackRows * detailBaseTrackRowHeight
+    return Math.max(floorHeight, Math.min(detailCapHeight, detailRowContentHeight))
+  }
+
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
   // Refresh and the Hide pre-orders filter live here in v3, not in the toolbar.
@@ -415,7 +431,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: searchField
-    contentWidth: panel.fittedContentWidth(Style.space(920))
+    contentWidth: panel.fittedContentWidth(Style.space(835))
     contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, Style.space(660))
 
     Column {
@@ -466,9 +482,10 @@ Panel {
           TextField {
             id: searchField
             objectName: "searchField"
-            // Roughly half the row, flexible with the window and never below
-            // that; Collection and the gear follow it, in that order.
-            width: Math.round(searchRow.width * 0.5)
+            // v3.2: the field takes every pixel left after Collection and the
+            // gear (and the two Row gaps). No half-row rule.
+            width: Math.max(0, searchRow.width - collectionButton.width
+              - menuButton.width - 2 * searchRow.spacing)
             height: root.controlHeight
             // A little less vertical padding than the stock 30 px field: the
             // text still fits (asserted by the harness) at the shared 28 px.
@@ -625,17 +642,22 @@ Panel {
       }
 
       // library + detail -----------------------------------------------------
-      // 396 keeps the footer's seek area inside the 660 px popup cap. v3 moved
-      // the links into the search row, so the list can keep its measured height.
+      // v3.2: the row height is content-driven (see libraryRowHeight). Both
+      // panes are always exactly this tall, so their bottom edges coincide.
       Row {
+        id: libraryRow
+        objectName: "libraryRow"
         width: parent.width
-        height: Style.space(396)
+        height: root.libraryRowHeight
         spacing: Style.spacing.md
 
         BorderSurface {
           id: leftPane
           objectName: "leftPane"
-          width: parent.width * 0.38
+          // v3.2: keep list/detail proportions close to the old 38/62, while
+          // giving the narrower list enough width that no title truncates
+          // that fitted at the v3.1 width (verified against the real library).
+          width: parent.width * 0.422
           height: parent.height
           radius: Style.cornerRadius
           color: "transparent"
@@ -1115,8 +1137,13 @@ Panel {
         // the two-line case still has positive space (nothing is clipped).
         readonly property real footerGap: Math.max(0,
           (Style.space(54) - nowPlaying.implicitHeight) / 2)
-        height: Math.round(Style.space(5) + nowPlaying.implicitHeight + footerGap
-          + progressRow.height + Style.space(5))
+        // v3.2: stopped/idle hides the progress row and drops the gap that was
+        // measured from it. Playing/paused keep exactly the v3.1 layout. The
+        // error line lives in nowPlaying, so an idle error still renders even
+        // though the bar is gone.
+        readonly property bool showProgress: root.playing || root.paused
+        height: Math.round(Style.space(5) + Math.max(nowPlaying.implicitHeight, transportRow.height)
+          + (showProgress ? footerGap + progressRow.height : 0) + Style.space(5))
         radius: Style.cornerRadius
         color: Style.normalFillFor(root.foreground, Color.accent)
         // v3: the album list, detail pane and footer share one border colour.
@@ -1266,6 +1293,7 @@ Panel {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             height: Style.space(20)
+            visible: footer.showProgress
 
             Text {
               id: elapsedLabel

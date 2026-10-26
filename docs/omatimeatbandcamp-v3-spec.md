@@ -252,3 +252,162 @@ After v3.1:
    back (dot returns); turn it Off (dot disappears).
 7. Spot-check that menus, Collection, RTL album text, borders, keyboard
    navigation and playback behave exactly as before.
+
+## v3.2 shrink pass (owner-decided, 2026-10-25)
+
+Scope: a narrower popup, a content-driven list/detail row height, a flexible
+search field, and an idle footer that collapses its progress row. Control
+heights, the gear menu, Collection, the shuffle dot, RTL alignment, borders,
+keyboard handling and playback behaviour are unchanged.
+
+**Process note.** This section was appended by the completion run after the
+original v3.2 session was cut off by a usage limit. The code and harness changes
+were already in the working tree; the section is reconstructed from that diff
+and from a fresh full-suite run on 2026-10-25. The v3.2 baseline (317 QML
+checks) is the v3.1 figure recorded above and was **not re-run** in this
+completion session because the changes were already present. Every final figure
+below was reproduced in this run.
+
+### What changed
+
+- **Narrower popup.** `contentWidth` is
+  `fittedContentWidth(Style.space(835))` (was 920). Landed on **835 px**
+  (accepted range 820–840; not exactly 830). In the harness the search row is
+  803 px: field 673.125, Collection 93.875, gear 28, row spacing 4.
+- **List/detail proportions.** The left pane is 42.2% of the row (was 38%);
+  the detail pane takes the rest. This keeps the narrower list wide enough that
+  no real-library title that fitted at the v3.1 width starts truncating. (The
+  harness asserts equal heights, not the width ratio.)
+- **Content-driven row height.** New `detailCapHeight = Style.space(396)`,
+  `detailMinTrackRows = 6`, `detailBaseTrackRowHeight = Style.space(30)`,
+  `detailRowContentHeight = detailHeader.height + Style.spacing.sm +
+  trackList.contentHeight`, and `libraryRowHeight = detailContextActive ?
+  max(180, min(396, detailRowContentHeight)) : 396`. `detailContextActive` is a
+  non-empty query, a selected playlist or a selected album. Both panes bind to
+  `libraryRow.height`.
+- **Search field flexes.** `width = max(0, searchRow.width -
+  collectionButton.width - menuButton.width - 2 * searchRow.spacing)`; the
+  v3.1 half-row rule is gone.
+- **Idle footer collapses.** `footer.showProgress = root.playing ||
+  root.paused`; the progress row is visible only then. Footer height is
+  `5 + max(nowPlaying.implicitHeight, transportRow.height) +
+  (showProgress ? footerGap + progressRow.height : 0) + 5`. The error notice
+  lives in `nowPlaying`, so an idle error still renders with the bar hidden.
+- **Harness helper.** `showRow()` now scrolls with `ListView.Contain` instead
+  of `ListView.Visible`, so a row whose edge is barely on screen is fully
+  brought into view before the harness clicks its centre. Reason: v3.2's
+  content-driven heights changed scroll offsets. This changes no assertion.
+
+### Height measurements (QML harness, 2026-10-25)
+
+| State | Row height | Popup content height | Notes |
+|---|---:|---:|---|
+| Nothing selected (library browsing) | 396 | 570 | cap row; idle footer |
+| 4-track album | 180 | 354 | floor (6 × 30); track list content 120, viewport 136, no scroll |
+| 120-track album | 396 | 570 | cap; track list content 3600, viewport 352, scrolls |
+| 4-track playlist | 180 | 354 | floor |
+| Search, 4 results | 180 | — | floor |
+| Search, 120 results | 396 | — | cap; content 3600, viewport 352, scrolls |
+| Playing footer (two-line long title) | — | 609 | footer 81 px |
+| Idle footer (same title) | — | — | footer 58 px |
+| Idle footer with stream error | — | — | footer 58 px; error visible, progress hidden |
+
+Both panes measured exactly the row height in every tested state (nothing
+selected, small album, large album, playlist, 4 and 120 search results) and
+their bottom edges coincided. The v3.1 playing-state popup is 609 px (footer
+81); the nothing-selected v3.2 state is 570 px because the footer is
+idle/collapsed. The 4-track state is 354 px.
+
+### Tests (raw counts)
+
+- Unit: `Ran 86 tests ... OK (skipped=5)`
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK`
+- QML (`tests/qml/run.sh`): **344** checks = phase 1 315 + relaunch 7 +
+  real-data 16 + 6 script-side. All `FAILS=0`. Baseline 317 (recorded in the
+  v3.1 section) -> +27 QML checks, all in phase 1.
+- Real library: `[real] truncated row titles (0):` and `[real] truncated detail
+  titles (0):`; the existing single-line row assertion passed. The two
+  truncation logs are diagnostics, not assertions (see deviations).
+- `omarchy plugin validate .`: exit 0.
+- `/usr/lib/qt6/bin/qmllint Panel.qml Service.qml BcButton.qml`: exit 0, no
+  errors; warnings only (the pre-existing import/unqualified-access warnings
+  plus the existing Service.qml `QVariantMap`/`QVariantHash` warning).
+- Credential files were not opened; no stream URL, cover-art URL or credential
+  value was printed or committed.
+
+### Harness checks updated (and why)
+
+1. `v3.1: the search field is flexible and at least half the row` ->
+   `v3.2: search field takes all row width left after Collection, gear and the
+   two gaps` (exact width equation, plus still > half in the fixture). Reason:
+   requirement c removes the half-row rule.
+2. Footer measurement step: the v3.1 footer checks used to run before
+   `isPlaying` was set; v3.2 sets playing before the measurement, records
+   `playingFooterHeight`, and adds `v3.2: playing keeps the progress row
+   visible`. Reason: with idle collapse, measuring before the state change would
+   measure the collapsed footer and the v3.1 gap/height checks would be
+   meaningless. No threshold was loosened.
+3. `showRow()` helper changed from `ListView.Visible` to `ListView.Contain`
+   (helper, not an assertion). Reason: content-driven heights changed scroll
+   offsets; a row could be only partly visible when the harness clicked its
+   centre.
+4. Real-data: added diagnostic logs for all truncated row titles and for
+   truncated detail titles; the existing `across all albums no row is truncated
+   on a single line` assertion is unchanged. Reason: verify the narrower window
+   did not introduce truncation.
+
+### New harness coverage
+
+- Popup content width is 835 px (820–840 accepted).
+- Search field width equals row − Collection − gear − 2 × spacing.
+- Row height: cap for nothing selected; floor 180 and below cap for 4-track
+  album/playlist/4 search results; cap 396 for 120-track album/120 search
+  results; large lists scroll.
+- Both panes exactly equal the row height and share a bottom line in every
+  tested state.
+- Playing keeps the progress row and full footer height; idle hides it and
+  shrinks the footer; paused keeps it; idle error still renders inside the
+  footer and does not force the bar back.
+- Real library: logs 0 truncated row titles and 0 truncated detail titles; no
+  HTML entities.
+
+### Deviations / owner-visible decisions
+
+- **Width is 835 px**, not 830: inside the accepted 820–840 range.
+- **List pane is 42.2%**, not the old 38%, to protect titles at the narrower
+  width. The detail pane is correspondingly 57.8%. This is a deliberate change
+  from "roughly 38/62".
+- **The 4-track floor is 180 px**, so a 4-track album does not shrink all the
+  way to its content (detail header + 4 × 30 rows is below the six-row
+  minimum). This is the specified minimum, not a bug.
+- **Idle footer is 58 px** for the harness's two-line title, versus 81 px
+  playing; the collapsed state hides the whole progress row (bar and both time
+  labels), not just the bar.
+- **The v3.2 spec section was missing when this completion run started.** The
+  earlier session had left the code and harness changes uncommitted but had not
+  appended the section. This section is reconstructed from the diff and the
+  fresh run; the 317 baseline was not re-run here (marked unverified in this
+  run), while the 344 final count, 86/5 unit, 5 live, 0 truncation logs,
+  validate and qmllint results were reproduced.
+- **Truncation strength.** The harness asserts no row is truncated on a single
+  line; the 0-truncation logs for all row titles and all detail titles are
+  observations, not separate assertions. So "nothing truncates at all" is
+  verified by the log for this library snapshot, not by a dedicated check.
+- The v3.2 run did not change the `mpv --load-scripts=no` flag or the MPRIS
+  whitelist.
+
+### Owner live check
+
+1. `omarchy restart shell`, then open the panel from `BC`.
+2. Confirm the popup is narrower and the list/detail split still looks
+   balanced; scroll the album list and check long titles still wrap to two
+   lines without ellipsis.
+3. Select a short album/playlist: the popup should shrink to the six-row
+   floor; select a long album: it should stop at the old height and scroll.
+4. Search with a few results and with many; the row should size by result count
+   and cap at the old height.
+5. Stop playback: the progress bar and times disappear and the footer gets
+   shorter; play/pause: they return. Force a stream error while idle: the error
+   must remain visible.
+6. Spot-check the gear menu, Collection, shuffle dot, RTL text, borders,
+   keyboard navigation and playback are unchanged.
