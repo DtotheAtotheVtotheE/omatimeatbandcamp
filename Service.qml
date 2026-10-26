@@ -135,7 +135,7 @@ Item {
   // Panel reads and assigns it, and an undeclared property silently drops the
   // assignment (the Albums/Playlists switch did nothing before this).
   property int activeTab: 0
-  property var searchResults: ({ albums: [], tracks: [] })
+  property var searchResults: ({ albums: [], playlists: [], tracks: [] })
   property string searchQuery: ""
   property string detectedUser: ""
   property string status: ""
@@ -214,6 +214,7 @@ Item {
   function setSortMode(mode) {
     if (!LibraryModel.validSort(mode) || mode === sortMode) return
     sortMode = mode
+    if (searchQuery !== "") search(searchQuery)
     saveUi()
   }
 
@@ -742,7 +743,22 @@ Item {
 
   function search(q) {
     searchQuery = q
-    searchResults = Model.searchIndex(collection, playlists, q)
+    var r = Model.searchIndex(collection, playlists, q)
+    // v3.3: the Albums group follows the same order as the Albums list (the
+    // current Sort choice). Search stays global, so Hide pre-orders does not
+    // remove names from it. Track matching is exactly Model.searchIndex's
+    // existing behaviour.
+    var ql = String(q || "").toLowerCase()
+    if (ql !== "") {
+      var ordered = LibraryModel.sortAlbums(collection, sortMode, false)
+      var albums = []
+      for (var i = 0; i < ordered.length; i++) {
+        var a = ordered[i]
+        if (((a.title || "") + " " + (a.artist || "")).toLowerCase().indexOf(ql) >= 0) albums.push(a)
+      }
+      r.albums = albums
+    }
+    searchResults = r
   }
 
   function itemById(id) {

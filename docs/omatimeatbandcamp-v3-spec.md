@@ -507,3 +507,137 @@ cache/prefetch change was needed; none was made.
 2. Pause and resume: the footer time should hold while paused and continue from
    the same place; the icon should match the audio.
 3. Track changes, seek, end-of-track advance and the error notice are unchanged.
+
+## v3.3 grouped search results (owner-decided, 2026-10-26)
+
+Scope: search finds NAMES as well as tracks. A non-empty query now renders
+grouped results — Albums, then Playlists, then Tracks, each under a small header
+with its count, and only when that section has matches. Empty-query behaviour,
+track matching, playback, per-context shuffle, the v3.2 height model and every
+other view are unchanged.
+
+### Baseline (fresh session, before editing)
+
+- Unit: `Ran 88 tests ... OK (skipped=5)`
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK`
+- QML (`tests/qml/run.sh`): **363** checks = phase 1 334 + relaunch 7 +
+  real-data 16 + 6 script-side. All `FAILS=0`.
+
+The baseline matched the expected 88/5 unit, 5 live and 363 QML figures, so
+editing proceeded.
+
+### What changed
+
+- **`Model.searchIndex`** now also returns matching playlists (name, case-
+  insensitive substring). Its album and track matching loops are otherwise
+  unchanged: tracks still match title/artist/album and playlist name exactly as
+  before, so what a track match *is* did not change.
+- **`Service.search`** keeps the existing track results and orders the Albums
+  group with the current Albums sort (`sortMode`). Search remains global, so
+  Hide pre-orders does not remove album names from it. Playlists stay in normal
+  playlist order; Tracks stay in today's order.
+- **`Panel.qml`** builds a flattened `searchRows` model for a non-empty query:
+  an `Albums (N)` header + album rows, then `Playlists (N)` + playlist rows,
+  then `Tracks (N)` + track rows. Header rows are non-interactive and skipped
+  by Up/Down. Empty query still uses the normal Albums/Playlists list, with no
+  headers.
+- **Interaction.** Single-click selects (cursor) without starting audio or
+  navigating. Double-click / Enter on an album row clears search, switches to
+  the Albums tab, selects that album and shows its tracks; a playlist row does
+  the same on the Playlists tab. Neither starts playback. A track row plays
+  exactly as before, with the search TRACK results as the playback context for
+  Next/Previous. Group headers are never part of the playable queue.
+- **Height.** Search-context height now uses the taller of the right-hand track
+  content and the left grouped list (headers + items), under the existing
+  6 × 30 px floor and 396 px cap. The left pane's 2 px inner margin is included
+  so the last grouped row is fully visible. Both panes still bind to the one
+  row height and keep coincident bottom edges.
+- **Empty states.** A query matching nothing anywhere shows `No results` in
+  both panes. A query that finds an album/playlist but no tracks shows
+  `No matching tracks` on the right while the named result stays in the left
+  list.
+
+### Tests (raw counts)
+
+- Unit: `Ran 88 tests ... OK (skipped=5)` (unchanged; the change is JS/QML).
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK` (unchanged).
+- QML (`tests/qml/run.sh`): **388** checks = phase 1 358 + relaunch 7 +
+  real-data 17 + 6 script-side. All `FAILS=0`. Baseline 363 -> +25 checks
+  (24 phase 1, 1 real-data).
+- `omarchy plugin validate .`: exit 0.
+- `/usr/lib/qt6/bin/qmllint Panel.qml Service.qml BcButton.qml`: exit 0, no
+  errors; only the pre-existing import/unqualified-access warnings and the
+  existing `Service.qml` `QVariantMap`/`QVariantHash` warning.
+- Credential files were not opened (paths/modes only). No stream URL, cover-art
+  URL or credential value was printed or committed. `--load-scripts=no` is
+  untouched.
+
+### Harness checks updated (and why)
+
+No existing check was changed, loosened or removed. All existing v3/v3.1/v3.2
+checks still pass unchanged. One real-data assertion was **added** on top of the
+existing diagnostic: the log's 0 truncated row titles is now also asserted.
+
+### New harness coverage
+
+- An album-name query returns the album in `Albums (1)` and places it above
+  `Tracks (4)` (header -> album -> tracks header -> tracks); no empty
+  Playlists section.
+- A playlist-name query returns the playlist in `Playlists (1)` above
+  `Tracks (4)`.
+- A track-only query renders only `Tracks (4)` — no empty album/playlist
+  headers.
+- Activating an album row leaves search, lands on the Albums tab with that
+  album selected and its 4 tracks shown, and does not start playback.
+- Activating a playlist row does the same on the Playlists tab.
+- Down from search skips the section header and lands on the first track;
+  further Down never lands on a header; Enter activates the selected track.
+- Track activation uses exactly the search TRACK results as queue/context
+  (4 tracks, clicked track index, `search` context); Next stays in those
+  results and no header becomes playable.
+- A no-match query shows the `No results` state in both panes.
+- With groups shown, the row height fits the full left content (headers +
+  items), stays below the cap and above the floor, and both panes remain
+  exactly equal with the same bottom line.
+- Real-data smoke still reports `[real] truncated row titles (0)` and now
+  asserts 0 truncated row titles as well.
+
+### Deviations / owner-visible decisions
+
+- **Album group order** follows the current Sort choice (the Albums list's
+  normal order) but ignores Hide pre-orders, because search is global: a hidden
+  pre-order name can still be found. Tracks keep today's exact matching and
+  order.
+- **Section labels** are `Albums (N)`, `Playlists (N)`, `Tracks (N)` — the same
+  count style as the toolbar. Headers are caption-sized, bold and dimmed.
+- **Name activation is navigation, not playback.** An album/playlist row shows
+  its tracks; it does not start audio. Only a track row starts playback.
+- **Right pane remains the track-results pane.** A name-only match leaves it
+  empty with `No matching tracks`; it is not replaced by an album/playlist
+  detail pane. This keeps the existing search playback context and track list
+  intact.
+- **Height includes the grouped left list.** For the tested album query the row
+  is 247 px (left content 245 + 2 px inner margin), with the right track list
+  fitting inside it; both panes are 247 px and end on the same line.
+- No changes to shuffle/per-context state, track matching, playback, the
+  `--load-scripts=no` spawn flag, the MPRIS whitelist or any other view.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel, and type an album name (try
+   `Crocbrain`, `La Dee La La` or `First Impressions`): the album appears under
+   `Albums (N)` above the matching tracks.
+2. Type a playlist name (try `Postpunky?` or `Rock & Roll Faves`): it appears
+   under `Playlists (N)` above the tracks.
+3. Type a track-only phrase (try `The White Lady`): only `Tracks (N)` appears,
+   with no empty album/playlist headers.
+4. Double-click (or select and press Enter on) an album row: search clears, the
+   Albums tab opens with that album selected and its tracks shown; do the same
+   for a playlist row on the Playlists tab. Neither should start audio.
+5. Double-click / Enter a track row: it plays as before; Next/Previous should
+   stay inside the search track results, and Shuffle should still be the search
+   context's own state.
+6. With groups on screen, check the popup height fits all rows and the two
+   panes end on the same line; long grouped lists should cap and scroll.
+7. Type nonsense (`zzzz`): both panes should say `No results`. Esc clears the
+   query and restores the normal list.

@@ -33,6 +33,14 @@ Panel {
   readonly property var playlists: service ? service.playlists : []
   readonly property string query: service ? service.searchQuery : ""
   readonly property var searchTracks: service ? service.searchResults.tracks : []
+  readonly property var searchAlbums: service ? service.searchResults.albums : []
+  readonly property var searchPlaylists: service ? service.searchResults.playlists : []
+  // v3.3: grouped search rows. Empty query keeps the old library/playlist list
+  // (no section headers). A non-empty query renders Albums, then Playlists, then
+  // Tracks, each under a header and only when that section has matches. The
+  // header rows are part of the list model (so they scroll and count towards the
+  // content-driven height) but are skipped by keyboard navigation.
+  readonly property var searchRows: buildSearchRows()
   readonly property var currentTrack: service ? service.currentTrack : null
   readonly property bool playing: service ? service.isPlaying : false
   readonly property bool paused: service ? service.isPaused : false
@@ -93,10 +101,19 @@ Panel {
   readonly property bool detailContextActive: query !== "" || !!selectedPlaylist || !!selectedAlbum
   readonly property real detailRowContentHeight: detailHeader.height + Style.spacing.sm
     + (trackList ? trackList.contentHeight : 0)
+  // v3.3: in the grouped search state the left list contains section headers as
+  // well as items. The row must be tall enough for every rendered row, not just
+  // the right-hand track list, so use the taller of the two panes under the same
+  // floor/cap. The left pane's 1 px inner margins are included so the last row
+  // is fully visible rather than needing a 2 px scroll. The two panes still bind
+  // to the one row height.
+  readonly property real searchListContentHeight: query !== "" && listColumn
+    ? listColumn.contentHeight + Style.space(2) : 0
+  readonly property real libraryRowContentHeight: Math.max(detailRowContentHeight, searchListContentHeight)
   readonly property real libraryRowHeight: {
     if (!detailContextActive) return detailCapHeight
     var floorHeight = detailMinTrackRows * detailBaseTrackRowHeight
-    return Math.max(floorHeight, Math.min(detailCapHeight, detailRowContentHeight))
+    return Math.max(floorHeight, Math.min(detailCapHeight, libraryRowContentHeight))
   }
 
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
@@ -137,8 +154,37 @@ Panel {
   property int listCursor: -1
   property int trackCursor: -1
   readonly property var listRows: query !== ""
-    ? searchTracks
+    ? searchRows
     : (service && service.activeTab === 1 ? playlists : albums)
+
+  function buildSearchRows() {
+    var out = []
+    if (query === "") return out
+    if (searchAlbums.length > 0) {
+      out.push({ rowKind: "header", section: "albums", title: "Albums (" + searchAlbums.length + ")", count: searchAlbums.length })
+      for (var a = 0; a < searchAlbums.length; a++) {
+        var alb = searchAlbums[a]
+        out.push({ rowKind: "album", item: alb, uid: alb.uid, title: alb.title || "", name: alb.title || "" })
+      }
+    }
+    if (searchPlaylists.length > 0) {
+      out.push({ rowKind: "header", section: "playlists", title: "Playlists (" + searchPlaylists.length + ")", count: searchPlaylists.length })
+      for (var p = 0; p < searchPlaylists.length; p++) {
+        var pl = searchPlaylists[p]
+        out.push({ rowKind: "playlist", item: pl, uid: pl.uid, title: pl.name || pl.title || "Playlist", name: pl.name || pl.title || "Playlist" })
+      }
+    }
+    if (searchTracks.length > 0) {
+      out.push({ rowKind: "header", section: "tracks", title: "Tracks (" + searchTracks.length + ")", count: searchTracks.length })
+      for (var t = 0; t < searchTracks.length; t++) {
+        var tr = searchTracks[t]
+        out.push({ rowKind: "track", item: tr, uid: tr.uid, title: tr.title || "" })
+      }
+    }
+    return out
+  }
+
+  function isHeaderRow(row) { return !!row && row.rowKind === "header" }
 
   function focusSearch() {
     focusPane = ""
@@ -171,11 +217,18 @@ Panel {
     focusPane = "list"
     if (listCursor < 0 || listCursor >= rows.length) {
       var i = -1, uid = selectedPlaylistUid || selectedAlbumUid
-      for (var k = 0; k < rows.length; k++) if (rows[k].uid === uid) { i = k; break }
-      listCursor = i >= 0 ? i : (delta > 0 ? 0 : rows.length - 1)
+      for (var k = 0; k < rows.length; k++) if (!isHeaderRow(rows[k]) && rows[k].uid === uid) { i = k; break }
+      if (i < 0) {
+        i = delta > 0 ? 0 : rows.length - 1
+        while (i >= 0 && i < rows.length && isHeaderRow(rows[i])) i += delta
+      }
+      listCursor = i
     } else {
-      listCursor = clampCursor(listCursor + delta, rows.length)
+      var next = listCursor + delta
+      while (next >= 0 && next < rows.length && isHeaderRow(rows[next])) next += delta
+      if (next >= 0 && next < rows.length) listCursor = next
     }
+    if (listCursor < 0 || listCursor >= rows.length) return
     applyListCursor()
     listKeyCatcher.forceActiveFocus()
   }
@@ -214,7 +267,15 @@ Panel {
 
   function switchPane(direction) {
     if (direction > 0) focusTracks()
-    else if (detailTrackList.length > 0) { focusPane = "list"; listCursor = listCursor < 0 ? 0 : listCursor; applyListCursor(); listKeyCatcher.forceActiveFocus() }
+    else if (detailTrackList.length > 0) {
+      focusPane = "list"
+      if (listCursor < 0 || listCursor >= listRows.length || isHeaderRow(listRows[listCursor])) {
+        listCursor = -1
+        for (var i = 0; i < listRows.length; i++) if (!isHeaderRow(listRows[i])) { listCursor = i; break }
+      }
+      applyListCursor()
+      listKeyCatcher.forceActiveFocus()
+    }
   }
 
   function activateCursor() {
@@ -226,10 +287,36 @@ Panel {
       return
     }
     var row = listRows[listCursor]
-    if (!row) return
-    if (query !== "") { playTrackNow(row, searchTracks); return }
+    if (!row || isHeaderRow(row)) return
+    if (query !== "") {
+      if (row.rowKind === "album") { activateSearchAlbum(row.item); return }
+      if (row.rowKind === "playlist") { activateSearchPlaylist(row.item); return }
+      playTrackNow(row.item || row, searchTracks)
+      return
+    }
     if (service && service.activeTab === 1) { selectPlaylist(row); service.playPlaylist(row) }
     else { selectAlbum(row); service.playAlbum(row) }
+  }
+
+  // v3.3: activating a grouped album/playlist row is navigation, not playback.
+  // Leave search, switch to the matching tab, select the named thing and show its
+  // tracks — the same end state as clicking that row in the normal list.
+  function activateSearchAlbum(alb) {
+    if (!alb) return
+    clearSearch()
+    if (service) service.activeTab = 0
+    selectedPlaylistUid = ""
+    selectedAlbumUid = alb.uid
+    focusSearch()
+  }
+
+  function activateSearchPlaylist(pl) {
+    if (!pl) return
+    clearSearch()
+    if (service) service.activeTab = 1
+    selectedAlbumUid = ""
+    selectedPlaylistUid = pl.uid
+    focusSearch()
   }
 
   function noteListClick(index) { listCursor = index; focusPane = "list"; listKeyCatcher.forceActiveFocus() }
@@ -393,7 +480,12 @@ Panel {
   }
 
   function emptyLine() {
-    if (!detailItem || query !== "" || detailTotal > 0) return ""
+    if (query !== "") {
+      if (searchAlbums.length + searchPlaylists.length + searchTracks.length === 0) return "No results"
+      if (searchTracks.length === 0) return "No matching tracks"
+      return ""
+    }
+    if (!detailItem || detailTotal > 0) return ""
     if (detailIsAlbum && !selectedAlbum.tracksLoaded) return "Tracks are still loading — the library is syncing"
     return "No tracks in this " + (detailIsAlbum ? "album" : "playlist")
   }
@@ -675,24 +767,48 @@ Panel {
             boundsBehavior: Flickable.StopAtBounds
             model: root.listRows
 
-            // Two-line rows: title wraps to at most two lines (ellipsis only after the
-            // second), artist (or track count) on a smaller dimmed line below, and a
-            // PRE-ORDER pill with the release date when the album is a pre-order.
+            // v3.3: search rows are grouped by section. Header rows are small,
+            // non-interactive labels with the section count; item rows keep the
+            // existing two-line treatment. Empty-query rows are unchanged.
             delegate: Item {
               id: rowItem
               width: listColumn.width
-              height: rowCol.implicitHeight + Style.space(10)
+              height: rowItem.isHeader
+                ? sectionHeader.implicitHeight + Style.space(6)
+                : rowCol.implicitHeight + Style.space(10)
 
+              readonly property var raw: modelData
               readonly property bool isSearch: root.query !== ""
+              readonly property bool isHeader: isSearch && !!raw && raw.rowKind === "header"
               readonly property bool isPlaylist: !isSearch && root.service && root.service.activeTab === 1
-              readonly property var item: modelData
+              readonly property var item: (isSearch && raw && raw.item !== undefined) ? raw.item : raw
+              readonly property string rowKind: isSearch && raw ? (raw.rowKind || "track") : (isPlaylist ? "playlist" : "album")
               readonly property bool selected: !!item && !isSearch
                 && (isPlaylist ? root.selectedPlaylistUid === item.uid : root.selectedAlbumUid === item.uid)
               readonly property bool cursor: root.focusPane === "list" && index === root.listCursor
               readonly property bool preorder: !!item && !isSearch && !isPlaylist && item.isPreorder === true
 
+              Text {
+                id: sectionHeader
+                objectName: "sectionHeader"
+                visible: rowItem.isHeader
+                textFormat: Text.PlainText
+                x: Style.space(11)
+                width: parent.width - Style.space(19)
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignLeft
+                LayoutMirroring.enabled: false
+                elide: Text.ElideRight
+                text: rowItem.isHeader && rowItem.raw ? (rowItem.raw.title || "") : ""
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
               Rectangle {
                 objectName: "rowFill"
+                visible: !rowItem.isHeader
                 anchors.fill: parent
                 radius: Style.cornerRadius
                 color: rowItem.selected ? Util.alpha(Color.accent, 0.22)
@@ -715,6 +831,7 @@ Panel {
 
               Column {
                 id: rowCol
+                visible: !rowItem.isHeader
                 x: Style.space(11)
                 width: parent.width - Style.space(19)
                 anchors.verticalCenter: parent.verticalCenter
@@ -733,7 +850,9 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   font.bold: rowItem.selected
-                  text: rowItem.item ? (rowItem.isPlaylist ? (rowItem.item.name || rowItem.item.title || "Playlist") : (rowItem.item.title || "")) : ""
+                  text: rowItem.isHeader ? "" : (rowItem.item
+                    ? (rowItem.rowKind === "playlist" ? (rowItem.item.name || rowItem.item.title || "Playlist") : (rowItem.item.title || ""))
+                    : "")
                 }
 
                 Text {
@@ -749,9 +868,17 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   text: {
+                    if (rowItem.isHeader) return ""
                     var it = rowItem.item
                     if (!it) return ""
-                    if (rowItem.isSearch) return (it.artist || "") + (it.album ? "  ·  " + it.album : "")
+                    if (rowItem.isSearch) {
+                      if (rowItem.rowKind === "album") return it.artist || ""
+                      if (rowItem.rowKind === "playlist") {
+                        var n = it.totalCount !== undefined ? it.totalCount : (it.tracks ? it.tracks.length : 0)
+                        return n + (n === 1 ? " track" : " tracks")
+                      }
+                      return (it.artist || "") + (it.album ? "  ·  " + it.album : "")
+                    }
                     if (rowItem.isPlaylist) return it.totalCount + (it.totalCount === 1 ? " track" : " tracks")
                     return it.artist || ""
                   }
@@ -802,13 +929,15 @@ Panel {
               MouseArea {
                 id: mouse
                 anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
+                enabled: !rowItem.isHeader
+                hoverEnabled: !rowItem.isHeader
+                cursorShape: rowItem.isHeader ? Qt.ArrowCursor : Qt.PointingHandCursor
                 onClicked: {
-                  // v3: a single click only selects. Search results are tracks too,
-                  // so they also wait for a double-click before starting audio.
+                  // v3: a single click only selects. Search rows wait for a
+                  // double-click before acting: tracks play, album/playlist rows
+                  // navigate to their normal tab.
                   var it = rowItem.item
-                  if (!it) return
+                  if (!it || rowItem.isHeader) return
                   root.noteListClick(index)
                   if (rowItem.isSearch) return
                   if (rowItem.isPlaylist) root.pickPlaylist(it)
@@ -816,9 +945,11 @@ Panel {
                 }
                 onDoubleClicked: {
                   var it = rowItem.item
-                  if (!it || !rowItem.isSearch) return
+                  if (!it || rowItem.isHeader || !rowItem.isSearch) return
                   root.noteListClick(index)
-                  root.playTrackNow(it, root.searchTracks)
+                  if (rowItem.rowKind === "album") root.activateSearchAlbum(it)
+                  else if (rowItem.rowKind === "playlist") root.activateSearchPlaylist(it)
+                  else root.playTrackNow(it, root.searchTracks)
                 }
               }
             }
@@ -835,7 +966,7 @@ Panel {
             color: Qt.darker(root.foreground, 1.4)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
-            text: root.query !== "" ? "No tracks match your search"
+            text: root.query !== "" ? "No results"
               : (root.service && root.service.activeTab === 1 ? "No playlists yet"
                 : (root.service && root.service.hidePreorders && root.service.collection.length > 0 ? "Only pre-orders here — turn off Hide pre-orders"
                   : "No library yet — press Refresh"))

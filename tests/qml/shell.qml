@@ -219,6 +219,18 @@ ShellRoot {
     for (var i = 0; i < n; i++) { var r = leftList().itemAtIndex(i); out.push(r ? named(r, "rowTitle").text : "<no delegate " + i + ">") }
     return out
   }
+  // v3.3 grouped-search helpers: model rows carry rowKind ("header", "album",
+  // "playlist", "track") when the query is non-empty.
+  function searchKinds() {
+    var m = leftList().model, out = []
+    for (var i = 0; i < m.length; i++) out.push(m[i] && m[i].rowKind ? m[i].rowKind : "")
+    return out
+  }
+  function searchHeaders() {
+    var m = leftList().model, out = []
+    for (var i = 0; i < m.length; i++) if (m[i] && m[i].rowKind === "header") out.push(m[i].title)
+    return out
+  }
   // Contain (not Visible) so a row whose edge is barely on screen is scrolled
   // fully into the viewport before the harness clicks its centre. v3.2's
   // content-driven row heights changed the scroll offsets enough to expose this.
@@ -1377,10 +1389,167 @@ ShellRoot {
       panel.selectedAlbumUid = ""
       panel.selectedPlaylistUid = ""
     },
+
+    // ---- v3.3: grouped search results (names as well as tracks) ----
     function() {
-      // Idle footer: a loaded track that is neither playing nor paused. Use
-      // the same two-line long title as the Phase 5 footer fixture so the
-      // playing height is directly comparable.
+      var smallTracks = mk("smallt", 4)
+      for (var st = 0; st < smallTracks.length; st++) smallTracks[st].album = "Small Album"
+      svc.collection = [
+        synth("a:small", "Small Album", "Small Artist", smallTracks),
+        synth("a:big", "Big Album", "Big Artist", mk("bigt", 120))
+      ]
+      svc.playlists = [{ uid: "pl:small", id: "pl:small", name: "Small Playlist", tracks: mk("plt", 4), totalCount: 4 }]
+      svc.activeTab = 0
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+      searchField().text = ""
+      svc.search("")
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.playbackError = ""
+      svc.position = 0
+      svc.duration = 0
+      prepLists()
+      searchField().text = "Small Album"; svc.search("Small Album")
+    },
+    function() {
+      var aIdx = leftIndex("Small Album"), hIdx = leftIndex("Tracks (4)"), tIdx = leftIndex("smallt0")
+      log("v3.3 album query: headers=" + searchHeaders().join("|") + " kinds=" + searchKinds().join(",") + " album=" + aIdx + " trackHeader=" + hIdx + " firstTrack=" + tIdx)
+      check("v3.3: an album-name query returns the album in the Albums section",
+        svc.searchResults.albums.length === 1 && svc.searchResults.albums[0].title === "Small Album")
+      check("v3.3: the album section sits ABOVE any tracks (header -> album -> Tracks header -> tracks)",
+        aIdx >= 0 && hIdx > aIdx && tIdx > hIdx && searchKinds()[aIdx] === "album" && searchKinds()[hIdx] === "header")
+      check("v3.3: the album query shows exactly Albums and Tracks headers, each with its count",
+        searchHeaders().join("|") === "Albums (1)|Tracks (4)")
+      check("v3.3: no empty Playlists section is rendered", searchHeaders().indexOf("Playlists (0)") < 0)
+    },
+    function() {
+      showRow("Small Album")
+      doubleClick(leftRow("Small Album"))
+    },
+    function() {
+      var d = panel.detailTrackList
+      check("v3.3: activating an album row leaves search and switches to the Albums tab",
+        svc.searchQuery === "" && searchField().text === "" && svc.activeTab === 0)
+      check("v3.3: ...and lands on that album with its tracks shown",
+        panel.selectedAlbumUid === "a:small" && panel.selectedPlaylistUid === "" &&
+        panel.detailTitle() === "Small Album" && d.length === 4 && trackList().count === 4)
+      check("v3.3: album-row activation does not start playback", svc.queue.length === 0 && svc.currentTrack === null)
+      check("v3.3: leaving search removes the group headers", searchHeaders().length === 0)
+    },
+    function() {
+      searchField().text = "Small Playlist"; svc.search("Small Playlist")
+    },
+    function() {
+      var pIdx = leftIndex("Small Playlist"), hIdx = leftIndex("Tracks (4)"), tIdx = leftIndex("plt0")
+      log("v3.3 playlist query: headers=" + searchHeaders().join("|") + " playlist=" + pIdx + " trackHeader=" + hIdx + " firstTrack=" + tIdx)
+      check("v3.3: a playlist-name query returns the playlist in the Playlists section",
+        svc.searchResults.playlists.length === 1 && svc.searchResults.playlists[0].name === "Small Playlist")
+      check("v3.3: the playlist section sits ABOVE any tracks (header -> playlist -> Tracks header -> tracks)",
+        pIdx >= 0 && hIdx > pIdx && tIdx > hIdx && searchKinds()[pIdx] === "playlist" && searchKinds()[hIdx] === "header")
+      check("v3.3: the playlist query shows exactly Playlists and Tracks headers, each with its count",
+        searchHeaders().join("|") === "Playlists (1)|Tracks (4)")
+    },
+    function() {
+      showRow("Small Playlist")
+      doubleClick(leftRow("Small Playlist"))
+    },
+    function() {
+      check("v3.3: activating a playlist row leaves search, switches to Playlists and selects it",
+        svc.searchQuery === "" && svc.activeTab === 1 && panel.selectedPlaylistUid === "pl:small" &&
+        panel.selectedAlbumUid === "" && panel.detailTitle() === "Small Playlist" && panel.detailTrackList.length === 4)
+      svc.activeTab = 0
+      panel.selectedPlaylistUid = ""
+    },
+    function() {
+      searchField().text = "smallt"; svc.search("smallt")
+    },
+    function() {
+      log("v3.3 track-only query: headers=" + searchHeaders().join("|") + " kinds=" + searchKinds().join(","))
+      check("v3.3: a track-only query has no album or playlist matches",
+        svc.searchResults.albums.length === 0 && svc.searchResults.playlists.length === 0 && svc.searchResults.tracks.length === 4)
+      check("v3.3: a track-only query renders ONLY the Tracks section (no empty sections)",
+        searchHeaders().join("|") === "Tracks (4)" && searchKinds().join(",") === "header,track,track,track,track")
+    },
+    function() {
+      searchField().forceActiveFocus()
+      panel.focusPane = ""
+      panel.listCursor = -1
+      key(Qt.Key_Down)
+    },
+    function() {
+      check("v3.3: Down from search skips the section header and lands on the first track",
+        panel.focusPane === "list" && panel.listCursor === 1 && searchKinds()[1] === "track")
+      key(Qt.Key_Down)
+    },
+    function() {
+      check("v3.3: Down again moves between tracks, never onto a header",
+        panel.listCursor === 2 && searchKinds()[2] === "track" && svc.queue.length === 0)
+      key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.3: Enter on the selected track activates it with the search TRACK results as context",
+        svc.queue.length === 4 && svc.queueIndex === 1 && svc.currentTrack && svc.currentTrack.title === "smallt1" &&
+        svc.playingContextKey === "search" && svc.context.key === "search" &&
+        svc.queue.map(function(t) { return t.title }).join(",") === "smallt0,smallt1,smallt2,smallt3")
+      check("v3.3: track activation did not add group rows to the playable queue",
+        svc.queue.length === panel.searchTracks.length && svc.queue.every(function(t) { return /^smallt/.test(t.title) }))
+      svc.next()
+    },
+    function() {
+      check("v3.3: next from a search track stays inside the search track results",
+        svc.queueIndex === 2 && svc.currentTrack.title === "smallt2" && svc.playingContextKey === "search")
+    },
+    function() {
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      searchField().text = "zzzznomatch"; svc.search("zzzznomatch")
+    },
+    function() {
+      check("v3.3: a query matching nothing shows the simple No results state",
+        leftList().count === 0 && named(stage, "leftEmpty").visible && named(stage, "leftEmpty").text === "No results" &&
+        named(stage, "detailEmpty").text === "No results")
+      searchField().text = "Small Album"; svc.search("Small Album")
+    },
+    function() {
+      var lr = named(stage, "libraryRow"), lp = named(stage, "leftPane"), dp = named(stage, "detailPane")
+      var ll = leftList(), tl = trackList(), floorH = 6 * Style.space(30)
+      log("v3.3 grouped height: row=" + lr.height + " leftContent=" + ll.contentHeight + " leftH=" + ll.height + " rightContent=" + tl.contentHeight + " rightH=" + tl.height + " groups=" + ll.count + " tracks=" + tl.count)
+      check("v3.3: grouped height counts headers + items (left content fits the row)",
+        ll.count > panel.detailTrackList.length && ll.contentHeight <= ll.height + 0.5 && lr.height >= ll.contentHeight - 0.5)
+      check("v3.3: grouped search stays under the cap and above the floor",
+        lr.height < Style.space(396) - 0.5 && lr.height >= floorH - 0.5)
+      check("v3.3: both panes stay exactly equal in height with groups shown",
+        Math.abs(lp.height - dp.height) < 0.5 && Math.abs(lp.height - lr.height) < 0.5 &&
+        Math.abs((lp.mapToItem(lr, 0, lp.height).y) - (dp.mapToItem(lr, 0, dp.height).y)) < 0.5)
+      check("v3.3: the right track list also fits its rows", tl.contentHeight <= tl.height + 0.5)
+      searchField().text = ""
+      svc.search("")
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+      svc.activeTab = 0
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      svc.playbackError = ""
+    },
+
+    function() {
       svc.queue = [{ uid: "v32#0", title: host.longTitle + " " + host.longTitle, artist: "Long Title Artist", album: "Long", duration: 200, streamable: true }]
       svc.queueIndex = 0
       svc.isPlaying = false
@@ -1600,6 +1769,7 @@ ShellRoot {
       }
       log("[real] truncated row titles (" + allTrunc.length + "): " + allTrunc.join(" || "))
       check("[real] across all albums no row is truncated on a single line", rowsBad.length === 0)
+      check("[real] v3.3: the real-data smoke still reports 0 truncated row titles", allTrunc.length === 0)
       var detailTrunc = []
       for (var di = 0; di < svc.collection.length; di++) {
         panel.selectAlbum(svc.collection[di])
