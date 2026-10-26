@@ -1460,6 +1460,45 @@ ShellRoot {
       svc.queueIndex = -1
       svc.position = 0
       svc.duration = 0
+    },
+
+    // ---- Global keys: the toggle IPC verb and cold-start transport no-ops ----
+    function() {
+      // The plugin ships no binds. A user bind calls the plugin IPC, and this
+      // verb asks the shell's own panel lifecycle to summon or hide this
+      // plugin's popup (PluginShellApi.toggle, scoped to our own id).
+      var calls = []
+      var fake = {
+        pluginId: "com.github.dtotheatothevtothee.omatimeatbandcamp",
+        toggle: function(id, payload) { calls.push([String(id), String(payload)]); return true }
+      }
+      svc.shell = fake
+      check("toggle IPC asks the shell to toggle this plugin's panel", svc.togglePanel() === "ok")
+      check("...passing this plugin's id and no payload",
+        calls.length === 1 && calls[0][0] === "com.github.dtotheatothevtothee.omatimeatbandcamp" && calls[0][1] === "")
+      svc.shell = { pluginId: "com.github.dtotheatothevtothee.omatimeatbandcamp", toggle: function() { return false } }
+      check("a refused toggle reports unavailable", svc.togglePanel() === "unavailable")
+      svc.shell = { toggle: function() { return true } }
+      check("toggle without a scoped plugin id reports unavailable", svc.togglePanel() === "unavailable")
+      svc.shell = null
+      check("toggle without a shell API reports unavailable (no crash)", svc.togglePanel() === "unavailable")
+    },
+    function() {
+      // Cold state: nothing loaded this session. All three transport verbs are
+      // harmless no-ops, and Next must never start unrequested playback.
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      svc.playbackError = ""
+      svc.togglePlay()
+      check("cold start: play/pause does nothing (no track loaded)", svc.isPlaying === false && svc.isPaused === false && svc.currentTrack === null)
+      svc.next()
+      check("cold start: next never starts unrequested playback", svc.isPlaying === false && svc.currentTrack === null && svc.position === 0)
+      svc.prev()
+      check("cold start: previous never starts unrequested playback", svc.isPlaying === false && svc.currentTrack === null && svc.position === 0)
     }
   ]
 

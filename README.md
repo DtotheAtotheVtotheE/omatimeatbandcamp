@@ -43,8 +43,9 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 ## Usage
 
-- Left-click the bar item to open/close the panel (toggle from anywhere with
-  `omarchy-shell shell toggle com.github.dtotheatothevtothee.omatimeatbandcamp`).
+- Left-click the bar item to open/close the panel (from anywhere:
+  `omarchy-shell omatimeatbandcamp toggle`, which uses the shell's own panel
+  lifecycle).
 - Right-click the bar item to play/pause; middle-click goes to the next track.
 - The module text is always plain `BC`; there is no playback suffix and no separate
   album-art bar widget (v3).
@@ -54,8 +55,9 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - The gear menu holds Refresh library, Hide pre-orders (checkable, remembered) and
   Log out / Clear Bandcamp session (with confirmation).
 - Panel has tabs for Albums and Playlists, a search box, and a now-playing bar.
-- **Keyboard (panel-scoped only):** the shortcuts work only while the popup is open and focused;
-  no Hyprland binding or global shortcut is added.
+- **Keyboard (panel-scoped only):** these shortcuts work only while the popup is open and focused.
+  The plugin registers no global shortcut; optional user binds are in
+  [Keyboard shortcuts](#keyboard-shortcuts).
   - `↓` / `↑` from search enters the focused list and moves the cursor; `Enter` plays the
     selected album, playlist, search result or track.
   - `←` / `→` switch between the album/playlist list and the track list.
@@ -66,6 +68,68 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - **Media keys:** the plugin publishes MPRIS (`org.mpris.MediaPlayer2.omatimeatbandcamp`), so the
   laptop's Play/Pause, Next and Previous keys work through Omarchy's existing
   `omarchy-shell media ...` bindings.
+
+## Keyboard shortcuts
+
+### Global transport (recommended)
+
+The plugin **ships no keybindings** (store rule). Add these to your personal
+Hyprland bindings — on current Omarchy that is `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + ALT + B",     "OmaTimeAtBandCamp panel",     "omarchy-shell omatimeatbandcamp toggle")
+o.bind("SUPER + ALT + P",     "OmaTimeAtBandCamp play/pause", "omarchy-shell omatimeatbandcamp playPause")
+o.bind("SUPER + ALT + LEFT",  "OmaTimeAtBandCamp previous",   "omarchy-shell omatimeatbandcamp previous")
+o.bind("SUPER + ALT + RIGHT", "OmaTimeAtBandCamp next",       "omarchy-shell omatimeatbandcamp next")
+```
+
+Then reload the compositor (`hyprctl reload`). They work with the panel closed,
+from any app. With nothing loaded this session, play/pause, previous and next
+are harmless no-ops — Next never starts playback on its own.
+
+On an older `~/.config/hypr/hyprland.conf`, the same four lines are:
+
+```
+bind = SUPER ALT, B,     exec, omarchy-shell omatimeatbandcamp toggle
+bind = SUPER ALT, P,     exec, omarchy-shell omatimeatbandcamp playPause
+bind = SUPER ALT, LEFT,  exec, omarchy-shell omatimeatbandcamp previous
+bind = SUPER ALT, RIGHT, exec, omarchy-shell omatimeatbandcamp next
+```
+
+**Check before you paste:** on current Omarchy, `SUPER + ALT + LEFT` and
+`SUPER + ALT + RIGHT` already mean "Move window to group on left/right"
+(Omarchy's tiling defaults). Either unbind those two first (below) or use
+different keys. `SUPER + ALT + B` and `SUPER + ALT + P` were free on the machine
+this was written on, but always check your own setup first.
+
+### Make them yours
+
+- **Change a key** by editing only the first string of its line, e.g.
+  `"SUPER + ALT + B"` → `"SUPER + SHIFT + B"`. Leave the command (third
+  argument) alone.
+- **Check a combo is free:** press `SUPER + K` for Omarchy's keybindings list,
+  or run `omarchy menu keybindings --print` / `hyprctl binds`.
+- **Unbind before rebinding** a key that already exists, in the same personal
+  file:
+  ```lua
+  hl.unbind("SUPER + ALT + LEFT")
+  o.bind("SUPER + ALT + LEFT", "OmaTimeAtBandCamp previous", "omarchy-shell omatimeatbandcamp previous")
+  ```
+  The plugin never unbinds or overwrites anything for you.
+
+### Built-in panel keys (no setup)
+
+These work only while the popup is open and focused:
+
+- `↓` / `↑` from search enters the focused list and moves the cursor; `Enter`
+  plays the selected album, playlist, search result or track.
+- `←` / `→` switch between the album/playlist list and the track list.
+- `Space` toggles play/pause when a list is focused; while typing in search it
+  types a space.
+- `/` returns focus to search. Typing while a list is focused also returns to
+  search and keeps the character.
+- `Esc` backs out one layer: cancel confirmation, close menu, clear search,
+  close window.
 
 ## Features
 
@@ -111,6 +175,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 ## IPC
 
 - `omarchy-shell omatimeatbandcamp status`
+- `omarchy-shell omatimeatbandcamp toggle` (opens the panel if closed, closes it if open)
 - `omarchy-shell omatimeatbandcamp playPause|resume|pause|next|previous|stop|refresh`
 - `omarchy-shell omatimeatbandcamp restartPlayer` (resets to stopped and quits mpv; the next Play uses `--load-scripts=no`)
 - `omarchy-shell omatimeatbandcamp seek <seconds>`

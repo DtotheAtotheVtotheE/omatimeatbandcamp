@@ -943,6 +943,18 @@ Item {
     return "ok"
   }
 
+  // Open the popup if it is closed, close it if it is open. This uses the
+  // shell's own panel lifecycle through the capability-scoped PluginShellApi
+  // (the same path as clicking BC): the shell answers "is this plugin's panel
+  // open?" and summons or hides it. The plugin keeps no window state of its own
+  // and registers no shortcut; a user bind just calls this IPC verb.
+  function togglePanel() {
+    if (!shell || typeof shell.toggle !== "function") return "unavailable"
+    var id = (shell.pluginId !== undefined && shell.pluginId !== null) ? String(shell.pluginId) : ""
+    if (id === "") return "unavailable"
+    return shell.toggle(id, "") === true ? "ok" : "unavailable"
+  }
+
   IpcHandler {
     target: "omatimeatbandcamp"
 
@@ -955,6 +967,7 @@ Item {
     function previous(): string { root.prev(); return "ok" }
     function stop(): string { root.stop(); return "ok" }
     function restartPlayer(): string { return root.restartPlayer() }
+    function toggle(): string { return root.togglePanel() }
     function refresh(): string { root.refresh(); return "ok" }
     function play(id: string): string { return root.playById(id) }
     function clearCookies(): string { return root.clearCookies() }
