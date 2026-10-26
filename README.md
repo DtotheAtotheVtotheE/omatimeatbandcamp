@@ -73,34 +73,48 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 ### Global transport (recommended)
 
-The plugin **ships no keybindings** (store rule). Add these to your personal
+The plugin **ships no keybindings** (store rule). Add these two to your personal
 Hyprland bindings — on current Omarchy that is `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + ALT + B",     "OmaTimeAtBandCamp panel",     "omarchy-shell omatimeatbandcamp toggle")
-o.bind("SUPER + ALT + P",     "OmaTimeAtBandCamp play/pause", "omarchy-shell omatimeatbandcamp playPause")
-o.bind("SUPER + ALT + LEFT",  "OmaTimeAtBandCamp previous",   "omarchy-shell omatimeatbandcamp previous")
-o.bind("SUPER + ALT + RIGHT", "OmaTimeAtBandCamp next",       "omarchy-shell omatimeatbandcamp next")
+o.bind("SUPER + ALT + B", "OmaTimeAtBandCamp panel",
+       "omarchy-shell omatimeatbandcamp toggle")
+o.bind("SUPER + ALT + P", "OmaTimeAtBandCamp play/pause",
+       "omarchy-shell omatimeatbandcamp playPause")
 ```
 
-Then reload the compositor (`hyprctl reload`). They work with the panel closed,
-from any app. With nothing loaded this session, play/pause, previous and next
-are harmless no-ops — Next never starts playback on its own.
+They take effect when the file is saved (Hyprland reloads the Lua bindings);
+otherwise run `hyprctl reload`. They work with the panel closed, from any app.
+With nothing loaded this session, play/pause is a harmless no-op.
 
-On an older `~/.config/hypr/hyprland.conf`, the same four lines are:
+On an older `~/.config/hypr/hyprland.conf`:
 
 ```
-bind = SUPER ALT, B,     exec, omarchy-shell omatimeatbandcamp toggle
-bind = SUPER ALT, P,     exec, omarchy-shell omatimeatbandcamp playPause
+bind = SUPER ALT, B, exec, omarchy-shell omatimeatbandcamp toggle
+bind = SUPER ALT, P, exec, omarchy-shell omatimeatbandcamp playPause
+```
+
+**Check before you paste:** `SUPER + ALT + B` and `SUPER + ALT + P` were free on
+the machine this was written on, but always check your own setup first (below).
+
+#### Optional: previous / next
+
+If you also want global track skipping, add these. On current Omarchy
+`SUPER + ALT + LEFT` and `SUPER + ALT + RIGHT` already mean "Move window to
+group on left/right" (Omarchy's tiling defaults), so either unbind those two
+first (see below) or pick different keys.
+
+```lua
+o.bind("SUPER + ALT + LEFT",  "OmaTimeAtBandCamp previous", "omarchy-shell omatimeatbandcamp previous")
+o.bind("SUPER + ALT + RIGHT", "OmaTimeAtBandCamp next",     "omarchy-shell omatimeatbandcamp next")
+```
+
+Or in `~/.config/hypr/hyprland.conf`:
+
+```
 bind = SUPER ALT, LEFT,  exec, omarchy-shell omatimeatbandcamp previous
 bind = SUPER ALT, RIGHT, exec, omarchy-shell omatimeatbandcamp next
 ```
-
-**Check before you paste:** on current Omarchy, `SUPER + ALT + LEFT` and
-`SUPER + ALT + RIGHT` already mean "Move window to group on left/right"
-(Omarchy's tiling defaults). Either unbind those two first (below) or use
-different keys. `SUPER + ALT + B` and `SUPER + ALT + P` were free on the machine
-this was written on, but always check your own setup first.
 
 ### Make them yours
 
@@ -110,7 +124,8 @@ this was written on, but always check your own setup first.
 - **Check a combo is free:** press `SUPER + K` for Omarchy's keybindings list,
   or run `omarchy menu keybindings --print` / `hyprctl binds`.
 - **Unbind before rebinding** a key that already exists, in the same personal
-  file:
+  file (for example, if you add the optional previous bind on Omarchy's taken
+  arrow):
   ```lua
   hl.unbind("SUPER + ALT + LEFT")
   o.bind("SUPER + ALT + LEFT", "OmaTimeAtBandCamp previous", "omarchy-shell omatimeatbandcamp previous")
