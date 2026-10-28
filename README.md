@@ -50,13 +50,11 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - The module text is always plain `BC`; there is no playback suffix and no separate
   album-art bar widget (v3).
 - The search row has the flexible search field (with a click-to-clear ×, or a magnifier
-  when empty, inside its right end). The field ends at about 72% of the panel width. The
-  remaining column — from that edge to the panel's right inner edge, and from the top
-  border down to the panes — is one tall cat-and-flute settings button. While the library
-  is syncing, the status text appears in the Albums/Playlists/Sort row, right-aligned under
-  the search field.
+  when empty, inside its right end). The field ends where the cat-and-flute settings mark
+  begins: the mark fills the right end of the header from the top edge down past the search
+  row, so it is one tall target rather than a small icon button.
 - The settings menu (opened by the cat mark) holds Refresh, Hide pre-orders (checkable,
-  remembered; its check stays in the original slot and an eye-slash icon sits in the new
+  remembered; its check stays in the original slot and a theatre-masks icon sits in the new
   left icon slot), Keyboard shortcuts (a two-column quick reference in the body), Collection
   (built from the username in the library cache; `xdg-open`; disabled until the username is
   known) and Log out (with confirmation).

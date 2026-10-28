@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""v3.5.4 bold cat SVG asset checks.
+"""v3.5.3 cat SVG asset checks.
 
 The settings mark now ships as a visioncortex VTracer SVG trace of
 docs/cat-and-flute-reference.jpg. These tests read the SVG and CatMark.qml as
 text (stdlib only) and prove the properties the QML renderer relies on:
 
-* the shipped SVG is the reviewed bold VTracer output (3 filled paths, 508 x 346);
+* the shipped SVG is the reviewed VTracer output (5 filled paths, 508 x 346);
 * every path uses fill="currentColor", so no colour is baked into the asset;
 * CatMark.qml carries exactly the same path data and transforms, and binds the
   fill to the theme accent instead of a hard-coded colour;
@@ -36,11 +36,10 @@ def read_svg() -> tuple[str, list[tuple[str, str, str, str]]]:
 class CatSvgAssetTest(unittest.TestCase):
     def test_svg_is_the_shipped_vtracer_trace(self):
         self.assertTrue(SVG.is_file(), "assets/cat-flute.svg is missing")
-        self.assertEqual(SVG.stat().st_size, 15203)
         text, paths = read_svg()
         self.assertIn("visioncortex VTracer", text)
         self.assertRegex(text, r'<svg[^>]*width="508"[^>]*height="346"')
-        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(paths), 5)
         # The old raster asset must be gone, and nothing may still point at it.
         self.assertFalse((ROOT / "assets" / "cat-flute-mask.png").exists())
         for source in (QML, PANEL):
@@ -48,10 +47,10 @@ class CatSvgAssetTest(unittest.TestCase):
 
     def test_every_svg_path_is_current_color(self):
         text, paths = read_svg()
-        self.assertEqual(len(paths), 3)
+        self.assertEqual(len(paths), 5)
         self.assertTrue(all(fill == "currentColor" for _, fill, _, _ in paths))
         # Exactly one fill declaration per path and no baked hex/RGB colour.
-        self.assertEqual(text.count('fill="'), 3)
+        self.assertEqual(text.count('fill="'), 5)
         self.assertNotRegex(text, r'fill="(?:#|rgb)')
         self.assertNotIn("<image", text)
         self.assertNotIn("base64", text)
@@ -63,7 +62,7 @@ class CatSvgAssetTest(unittest.TestCase):
             r"\{\s*d:\s*'([^']*)',\s*tx:\s*([-0-9.]+),\s*ty:\s*([-0-9.]+)\s*\}",
             qml,
         )
-        self.assertEqual(len(entries), 3)
+        self.assertEqual(len(entries), 5)
         svg_data = [(d, tx, ty) for d, _, tx, ty in paths]
         qml_data = [(d, tx, ty) for d, tx, ty in entries]
         self.assertEqual(qml_data, svg_data)
