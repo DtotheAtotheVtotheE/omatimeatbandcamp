@@ -5,7 +5,7 @@ import "Model.js" as Model
 import "LibraryModel.js" as LibraryModel
 import "UserQueue.js" as UserQueue
 
-// Shared state for the OmaTimeAtBandCamp bar widget and panel.
+// Shared state for the OmaTimeAtBandcamp bar widget and panel.
 //
 // Settings live in the plugin's entry in ~/.config/omarchy/shell.json (written
 // by the standard settings form), falling back to the manifest defaults.

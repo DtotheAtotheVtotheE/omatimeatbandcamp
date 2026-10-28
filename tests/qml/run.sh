@@ -39,7 +39,8 @@ passes=0
 
 # Phase 7 (v3): intercept xdg-open. The plugin runs $OMATIME_OPEN_CMD instead of the
 # real browser opener, and this recorder appends the URL it was given to $OMATIME_OPEN_LOG.
-# Nothing in the harness can launch a browser. v3 keeps only the Collection link.
+# Nothing in the harness can launch a browser. v3 keeps only the Collection link,
+# now reached through the gear menu.
 cat > "$work/open-recorder.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$1" >> "$OMATIME_OPEN_LOG"
@@ -103,7 +104,7 @@ else
   echo "  FAIL phase 1's choices were not written to ui.json"; fail=1
 fi
 
-# Phase 7 (v3): the single Collection link must have invoked the opener with exactly
+# Phase 7 (v3/v3.5.1): the single Collection menu item must have invoked the opener with exactly
 # the verified URL. Exact match also proves no other URL was opened. The fixture
 # library's meta.user is "fixture-user".
 expected_links="https://bandcamp.com/fixture-user"
@@ -118,6 +119,14 @@ if [ ! -e "$plugin/bar-art" ] && ! grep -q "bar-art/ArtWidget" "$plugin/Panel.qm
   echo "  PASS bar-art widget removed from the plugin and no source references it"; passes=$((passes + 1))
 else
   echo "  FAIL bar-art widget or a source reference still exists"; fail=1
+fi
+
+# v3.5.1: naming sweep. Functional ids stay lowercase; only text/product names change.
+old_product_spelling="Band""Camp"
+if ! grep -rq "$old_product_spelling" --exclude-dir=.git --exclude-dir=__pycache__ "$plugin"; then
+  echo "  PASS no remaining old product spelling anywhere in the repo text"; passes=$((passes + 1))
+else
+  echo "  FAIL old product spelling still present:"; grep -rln "$old_product_spelling" --exclude-dir=.git --exclude-dir=__pycache__ "$plugin" | sed 's/^/    /'; fail=1
 fi
 
 # Phase 8: the keyboard is panel-scoped. No global shortcut type may appear in the

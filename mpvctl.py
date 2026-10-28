@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tiny mpv IPC controller for OmaTimeAtBandCamp.
+"""Tiny mpv IPC controller for OmaTimeAtBandcamp.
 
 Keeps one idle mpv instance alive with an IPC socket so track changes,
 pause/resume and volume are fast JSON commands rather than process spawns.

@@ -1,6 +1,6 @@
-# OmaTimeAtBandCamp — v3 UI Spec
+# OmaTimeAtBandcamp — v3 UI Spec
 
-For: OpenCode working in the existing OmaTimeAtBandCamp repo on branch `v2`.
+For: OpenCode working in the existing OmaTimeAtBandcamp repo on branch `v2`.
 Owner: David Sewall. Date: 2026-10-24.
 
 ## Context
@@ -138,7 +138,7 @@ whitelist are unchanged.
   and the four footer transport buttons all bind to it. The search field keeps
   the stock 30 px look by reducing its vertical padding to 4 px; the harness
   asserts its implicit text still fits at 28 px.
-- **Header.** The title row now contains only `OmaTimeAtBandCamp`; the title is
+- **Header.** The title row now contains only `OmaTimeAtBandcamp`; the title is
   `Style.font.subtitle + 2` (15 px, +2 over the v3 13 px). The gear moved to
   the search row and keeps the same `settingsButton` object, menu items,
   placement code and confirmation flow.
@@ -1490,3 +1490,176 @@ Part D:
    Scroll it, press `Esc`: the exact panes, selection, scroll and queue return,
    with focus back on the gear. Open it again and select the item again: it
    closes.
+
+
+## v3.5.1 live-look fixes (owner-requested, 2026-10-28)
+
+Branch `v2`. A live-look pass after v3.5: Collection moves into the gear menu, the
+product name is spelled `Bandcamp`, keyboard focus uses the theme accent, and the
+shortcuts reference fits without scrolling.
+
+### Baseline (fresh session, before editing)
+
+- `python3 -m unittest discover -s tests -t .`: **97 tests OK, 5 skipped**.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests OK**.
+- `tests/qml/run.sh`: **558 checks passed** (phase 1 520, relaunch 15, real-data
+  17, script-side 6), `FAILS=0` in every phase.
+- Values matched the expected baseline exactly, so editing proceeded.
+
+### Item 1 — Collection moves into the gear menu
+
+- The header search row now contains only the search field (with its in-field
+  clear/magnifier control) and the gear button. The old `link-collection`
+  button and its `collectionButton` object are gone.
+- Gear menu order is exactly **Refresh / Hide pre-orders / Keyboard shortcuts /
+  Collection / Log out**. The short owner labels replace the older "Refresh
+  library" and "Log out / Clear Bandcamp session" wording.
+- Collection runs the same code path as the removed header button:
+  `Service.openExternal(collectionUrl)`, with the same username-derived
+  `https://bandcamp.com/<user>` URL, same disabled-until-username behaviour and
+  the URL as its tooltip.
+- `focusTokens` loses the `link-collection` stop. The rest of the Part B chain is
+  unchanged: search → clear/magnifier → gear → Albums → Playlists → Sort →
+  direction → left list → Up Next + Clear (when queued) → track list → Shuffle →
+  Prev → Play/Pause → Next → search. The shortcuts view's Tab row text follows.
+- The gear menu itself keeps its existing Up/Down/Enter handling; menu items are
+  not separate Tab tokens.
+
+### Item 2 — Product spelling normalised to "Bandcamp"
+
+- Every text occurrence became `Bandcamp`, including the product name
+  `OmaTimeAtBandcamp`: plugin manifest name/displayName, README, both specs,
+  V2 notes, UI strings, code comments, the MPRIS Identity, the Subsonic client
+  name, and harness expectations.
+- No file, directory, plugin id, IPC target, D-Bus name, state key or other
+  lowercase functional identifier was renamed.
+- The GitHub repository description was updated with `gh repo edit` to
+  `OmaTimeAtBandcamp - Bandcamp collection/player plugin for Omarchy`.
+- Old-spelling occurrences changed, per file (30 total):
+
+| File | Old hits |
+|---|---:|
+| `manifest.json` | 2 |
+| `README.md` | 6 |
+| `docs/omatimeatbandcamp-v2-spec.md` | 5 |
+| `docs/omatimeatbandcamp-v3-spec.md` | 3 |
+| `Panel.qml` | 3 |
+| `BcButton.qml` | 1 |
+| `Service.qml` | 1 |
+| `backend/mpris.py` | 3 |
+| `backend/subsonic.py` | 1 |
+| `mpvctl.py` | 1 |
+| `spike/subsonic_client.py` | 1 |
+| `cookies.py` | 1 |
+| `tests/qml/shell.qml` | 1 |
+| `tests/test_phase8_mpris.py` | 1 |
+
+A repo-wide text grep for the old spelling now returns zero hits. The harness
+builds the search string at runtime so its own source does not reintroduce it.
+
+### Item 3 — Focus uses the theme accent
+
+- `BcButton` gains `focusColor: Color.accent` (the same `qs.Commons.Color`
+  source the panel already uses for foreground/background/pane accents) and
+  paints its focused border as `Border.flat(focusColor, Style.focusBorderWidth)`.
+  No hex value is introduced.
+- The search field's focused border is the same full-strength accent; its
+  unfocused and hover borders still come from the shell's normal token chain.
+- Focused rows in the album/playlist list, Up Next queue and track list carry an
+  accent ring (`border.color: Color.accent`) in addition to the existing cursor
+  tint. Unfocused rows keep a zero-width transparent border, so their painting is
+  byte-identical to v3.5.
+- Harness checks assert the focused button/field/row colour equals the theme
+  fixture's `Color.accent` and differs from the unfocused colour. Existing colour
+  and pane-border checks are unchanged.
+
+### Item 4 — Shortcuts view fits without scrolling
+
+- The flat shortcut list is grouped on the fly and reflowed into two equal
+  columns: **Navigation** then **Playback** on the left, **Queue** then
+  **Search & menus** on the right.
+- All 16 rows, their text and the existing `bodySmall`/`caption` font sizes are
+  unchanged. Only internal spacing is tighter: key column 108 px, description at
+  112 px, 2 px row padding and 6 px between groups.
+- The Flickable remains as a fallback, but the harness now asserts
+  `contentHeight <= height` under the harness theme. The panel's 180 px floor and
+  396 px cap are unchanged.
+
+### Tests (raw counts)
+
+Clean run on the final tree, with no file edited while the harness was running:
+
+- `python3 -m unittest discover -s tests -t .`: **97 tests OK, 5 skipped**.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests OK**.
+- `tests/qml/run.sh`: **560 checks passed** (phase 1 521, relaunch 15,
+  real-data 17, script-side 7), `FAILS=0` in every phase, exit 0.
+
+The baseline total was 558; the +2 is exactly the two added guards: one
+phase-1 assertion that the focused controls match the theme accent, and one
+script-side repo-text check for the old product spelling. No existing check was
+removed or weakened.
+
+> Count note: an earlier run reported 743 because `BcButton.qml` was edited
+> while Quickshell was watching the plugin, which hot-reloaded the shell and
+> restarted the step list mid-phase. The clean rerun above has one
+> `loaded phase=…` line per launch and no reload/step-throw lines.
+
+### Harness checks updated (and why)
+
+1. Product-name/title expectation is now `OmaTimeAtBandcamp`.
+2. Header composition: Collection is gone, the search row is field → gear only,
+   the search-field width formula loses one button and one gap, and the open
+   window has 10 buttons (was 11).
+3. Gear-menu exact contents are the five owner labels in order; the new
+   Collection item's URL/enabled style is checked inside the menu. The logout
+   keyboard path presses Down four times (was three).
+4. Phase 7 now opens Collection through the gear menu and still asserts exactly
+   the same opened URL.
+5. Header focus walk is six stops (was seven) and both full Part B chain
+   expectations lose `link-collection` (14→13 with no queue, 16→15 with one).
+6. The shortcuts-view keyboard path is Tab ×2 to the gear (was ×3).
+7. The shortcuts-view row-size check uses the reflowed 108/112 px columns, and
+   the old "scrolls internally" assertion becomes a no-scroll fit assertion
+   because that is the new owner requirement.
+8. Added focus-accent checks for a button, the search field and list/queue rows.
+9. Added a script-side repo-text check for the old product spelling, with the
+   pattern assembled at runtime.
+
+No check was weakened or deleted.
+
+### New harness coverage
+
+- Collection is absent from the header and present in the gear menu with the
+  exact fixture URL; opening it uses the recorded opener path.
+- Focused button, field and row borders equal `Color.accent`; an unfocused field
+  and an unfocused queue row differ.
+- The five gear entries are exact and in order.
+- The shortcuts groups are side by side in the requested order and the content
+  fits the view height without scrolling.
+- The repo text contains no old product spelling.
+
+### Deviations / owner-visible decisions
+
+- The gear labels are the owner's exact short wording (Refresh, Log out), not
+  the older longer labels.
+- Collection is a menu item, so it is intentionally not its own Tab stop; the
+  gear menu keeps Up/Down/Enter navigation.
+- Focus uses an added full-strength accent ring rather than changing the shell's
+  shared focus-fill token, so every unfocused colour stays exactly as it was.
+- The shortcuts key column is narrower to suit two columns; text and font sizes
+  are unchanged.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel. The header is search + gear only.
+2. Open the gear menu: Refresh / Hide pre-orders / Keyboard shortcuts /
+   Collection / Log out, in that order. Choose Collection: the same public
+   collection page opens as before.
+3. Press Tab from search through the whole chain: search → clear/magnifier →
+   gear → Albums → Playlists → Sort → direction → album/playlist list → Up Next
+   and Clear (only with a queue) → track list → Shuffle → Previous → Play/Pause
+   → Next → search. Shift+Tab reverses it.
+4. Check focus visibility against the real theme accent on the gear, Sort,
+   direction, footer controls, search field and a focused list/queue row.
+5. Open Keyboard shortcuts: the four groups are in two columns with no scrolling
+   needed; Esc restores the panes, selection, scroll and queue.

@@ -138,7 +138,7 @@ ShellRoot {
     target: svc
     function onRefreshingChanged() {
       if (!svc.refreshing) return
-      var b = host.menuItemByText("Refresh library")
+      var b = host.menuItemByText("Refresh")
       host.seen = { enabled: b ? b.enabled : panel.moreItems[0].enabled, spin: b ? b.iconSpinning : panel.moreItems[0].spinning, op: b ? b.opacity : 1 }
     }
   }
@@ -187,7 +187,6 @@ ShellRoot {
   function shuffleButton() { return shuffleButtons()[0] }
   function shuffleDot() { return named(named(stage, "footerShuffle"), "shuffleDot") }
   function settingsButton() { return named(stage, "settingsButton") }
-  function collectionButton() { return named(stage, "link-collection") }
   function searchAction() { return named(stage, "searchAction") }
   // The shell Button keeps its glyph Text internal; find it by the icon text so
   // font/size/position checks still measure the rendered glyph, not the button.
@@ -220,7 +219,7 @@ ShellRoot {
     if (!panel.menuOpen) click(settingsButton())
   }
   function toggleHidePreorders() { openSettings(); click(button("Hide pre-orders")) }
-  function refreshLibrary() { openSettings(); click(button("Refresh library")) }
+  function refreshLibrary() { openSettings(); click(button("Refresh")) }
   function shuffleLabel() { return shuffleButton() ? shuffleButton().tooltipText : "" }
   // The footer transport's play button.
   function footerPlay() {
@@ -356,7 +355,7 @@ ShellRoot {
       check("search field has focus on open", searchField().activeFocus)
       check("no close (X) button anywhere", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\u2715" }))
       check("no clear-session icon in header", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uF08B" && it.visible }))
-      check("header row contains ONLY the title (the gear is no longer in it)", !!named(stage, "headerTitle") && named(stage, "headerTitle").text === "OmaTimeAtBandCamp" && allButtons(named(stage, "headerRow"), []).length === 0)
+      check("header row contains ONLY the title (the gear is no longer in it)", !!named(stage, "headerTitle") && named(stage, "headerTitle").text === "OmaTimeAtBandcamp" && allButtons(named(stage, "headerRow"), []).length === 0)
       check("v3.1: title font is one step larger (+2 pt over the v3 subtitle size)", named(stage, "headerTitle").font.pixelSize === Style.font.subtitle + 2)
       check("gear (settings) button still exists, with its menu, and now lives in the search row",
         !!settingsButton() && settingsButton().iconText === "\uf013" && settingsButton().tooltipText === "Settings" &&
@@ -364,18 +363,22 @@ ShellRoot {
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
       check("v3.1: the old left-hand search icon is gone", !named(stage, "searchIcon"))
       check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
-      check("Collection is the only link button", !!collectionButton() && collectionButton().text === "Collection" && ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"].every(function(l) { return !button(l) }))
-      check("the old links row is gone", !named(stage, "linksRow"))
+      check("v3.5.1: Collection is no longer a header button and the old links row stays gone",
+        !named(stage, "link-collection") &&
+        ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"].every(function(l) { return !button(l) }) &&
+        !named(stage, "linksRow"))
     },
     function() {
-      var sf = searchField(), cb = collectionButton(), gear = settingsButton(), row = named(stage, "searchRow")
-      var s = sf.mapToItem(stage, 0, 0), c = cb.mapToItem(stage, 0, 0), g = gear.mapToItem(stage, 0, 0)
-      log("v3.2 popup content width=" + keyboardPanel().contentWidth + " row=" + row.width + " field=" + sf.width + " collection=" + cb.width + " gear=" + gear.width + " spacing=" + row.spacing)
+      var sf = searchField(), gear = settingsButton(), row = named(stage, "searchRow")
+      var s = sf.mapToItem(stage, 0, 0), g = gear.mapToItem(stage, 0, 0)
+      log("v3.5.1 popup content width=" + keyboardPanel().contentWidth + " row=" + row.width + " field=" + sf.width + " gear=" + gear.width + " spacing=" + row.spacing)
       check("v3.2: popup content width is the new ~835 px value (820-840 accepted)", keyboardPanel().contentWidth === Style.space(835) && keyboardPanel().contentWidth >= 820 && keyboardPanel().contentWidth <= 840)
-      check("v3.1: search row order is field → Collection → gear, all vertically centred",
-        s.x < c.x && c.x < g.x && Math.abs(c.y - s.y) <= 2 && Math.abs(g.y - s.y) <= 2)
-      check("v3.2: search field takes all row width left after Collection, gear and the two gaps",
-        Math.abs(sf.width - (row.width - cb.width - gear.width - 2 * row.spacing)) <= 1 && sf.width > row.width * 0.5)
+      check("v3.5.1: search row is field → gear only, both vertically centred",
+        allButtons(row, []).filter(function(b) { return b.objectName !== "searchAction" }).length === 1 &&
+        allButtons(row, []).filter(function(b) { return b.objectName !== "searchAction" })[0] === gear &&
+        s.x < g.x && Math.abs(g.y - s.y) <= 2)
+      check("v3.5.1: search field takes all row width left after the gear and the one gap",
+        Math.abs(sf.width - (row.width - gear.width - row.spacing)) <= 1 && sf.width > row.width * 0.75)
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -388,12 +391,12 @@ ShellRoot {
         searchField().text === "" && !!searchAction() && searchAction().iconText === "\uf002" &&
         searchAction().tooltipText === "" && searchAction().focusable === true &&
         isInside(searchAction(), sf) && !!m && m.text === "\uf002")
-      var controls = [sf, gear, cb, button("Albums (" + svc.albumsView.length + ")"), button("Playlists (" + svc.playlists.length + ")"), sortButton(),
+      var controls = [sf, gear, button("Albums (" + svc.albumsView.length + ")"), button("Playlists (" + svc.playlists.length + ")"), sortButton(),
         named(stage, "footerShuffle"), named(stage, "footerPrev"), named(stage, "footerPlay"), named(stage, "footerNext")]
       var ch = {}
       for (var i = 0; i < controls.length; i++) ch[Math.round(controls[i].height)] = 1
       log("v3.1 named control heights=" + Object.keys(ch))
-      check("v3.1: search field, gear, Collection, Albums (N), Playlists (N), Sort and the four footer transport buttons share ONE measured height",
+      check("v3.1: search field, gear, Albums (N), Playlists (N), Sort and the four footer transport buttons share ONE measured height",
         controls.every(function(x) { return !!x }) && Object.keys(ch).length === 1 && Object.keys(ch)[0] == Style.spacing.controlHeight)
     },
     function() {
@@ -418,7 +421,7 @@ ShellRoot {
       var hs = {}, ic = {}, bd = {}
       for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
       log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("11 buttons in the open window (gear, Collection, 3 toolbar, direction, 4 footer, plus the v3.3.1 in-field clear/magnifier; Play all, Stop, Refresh and Shuffle are gone from the toolbar)", bs.length === 11)
+      check("10 buttons in the open window (gear, 3 toolbar, direction, 4 footer, plus the v3.3.1 in-field clear/magnifier; Collection moved into the gear menu)", bs.length === 10)
       check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
       check("toolbar/footer/header buttons share one bordered style; the in-field clear action stays borderless by design",
@@ -441,8 +444,11 @@ ShellRoot {
     function() { click(settingsButton()) },
     function() {
       check("gear menu opens from its search-row position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "searchRow")))
-      check("gear menu has exactly Refresh library / Hide pre-orders / Keyboard shortcuts / Log out, in order",
-        panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh library|Hide pre-orders|Keyboard shortcuts|Log out / Clear Bandcamp session")
+      check("gear menu has exactly Refresh / Hide pre-orders / Keyboard shortcuts / Collection / Log out, in order",
+        panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh|Hide pre-orders|Keyboard shortcuts|Collection|Log out")
+      check("gear-menu Collection carries the username URL, enabled when known",
+        panel.moreItems[3].enabled === true && button("Collection") && button("Collection").tooltipText === "https://bandcamp.com/fixture-user" &&
+        button("Collection").height === Style.spacing.controlHeight && button("Collection").bordered === true)
       check("Hide pre-orders is checkable and reflects the persisted state",
         panel.moreItems[1].checked === svc.hidePreorders && !!button("Hide pre-orders") && button("Hide pre-orders").selected === svc.hidePreorders)
       key(Qt.Key_Escape)
@@ -1253,39 +1259,42 @@ ShellRoot {
       svc.duration = 0
     },
 
-    // ---- Phase 7: the single Collection link in the search row ----
+    // ---- Phase 7/v3.5.1: Collection moved from the header into the gear menu ----
     function() {
-      var cb = collectionButton(), sf = searchField(), m = searchMagnifier(), gear = settingsButton()
+      var sf = searchField(), m = searchMagnifier(), gear = settingsButton()
       var gone = ["Bandcamp", "Discover", "Editorials (Daily)", "Radio", "Your Feed", "Your Collection"]
-      check("v3: Collection is the only link button", !!cb && cb.text === "Collection" && gone.every(function(l) { return !button(l) }))
-      check("v3: the links row is gone", !named(stage, "linksRow"))
-      var cy = cb.mapToItem(stage, 0, 0).y, fy = sf.mapToItem(stage, 0, 0).y
+      check("v3.5.1: Collection is not in the header; the old links stay gone",
+        !named(stage, "link-collection") && gone.every(function(l) { return !button(l) }) && !named(stage, "linksRow"))
       var right = sf.mapToItem(stage, 0, 0).x + sf.width
-      check("Collection is inline in the search row, to the right of the field",
-        Math.abs(cy - fy) <= 2 && cb.mapToItem(stage, 0, 0).x >= right - 1)
-      check("v3.1: magnifier sits inside the field's right end, not to its left",
+      check("v3.5.1: the gear is the only control to the right of the field",
+        gear.mapToItem(stage, 0, 0).x >= right - 1 &&
+        allButtons(named(stage, "searchRow"), []).filter(function(b) { return b.objectName !== "searchAction" }).length === 1)
+      check("v3.5.1: magnifier sits inside the field's right end, not to its left",
         isInside(m, sf) && m.mapToItem(stage, 0, 0).x >= right - 40 && m.mapToItem(stage, 0, 0).x + m.width <= right)
-      check("v3.1: the gear is the last control in the search row, after Collection",
-        gear.mapToItem(stage, 0, 0).x >= cb.mapToItem(stage, 0, 0).x + cb.width - 1)
-      check("Collection keeps the library-username URL and BcButton style (fixture-user)",
-        panel.collectionUrl === "https://bandcamp.com/fixture-user" && cb.tooltipText === "https://bandcamp.com/fixture-user" &&
-        cb.enabled === true && cb.height === Style.spacing.controlHeight && cb.bordered === true)
+      check("v3.5.1: Collection keeps the library-username URL (fixture-user)",
+        panel.collectionUrl === "https://bandcamp.com/fixture-user" && panel.moreItems[3].label === "Collection" &&
+        panel.moreItems[3].enabled === true)
+      openSettings()
     },
-    function() { click(collectionButton()) },
+    function() {
+      check("v3.5.1: the gear menu contains the Collection item with the username URL",
+        panel.menuOpen && !!button("Collection") && button("Collection").tooltipText === "https://bandcamp.com/fixture-user")
+      click(button("Collection"))
+    },
     // The offscreen tooltip can eat the next click; focus the search field to settle it.
-    function() { check("Collection opens https://bandcamp.com/fixture-user", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user"); click(searchField()) },
+    function() { check("Collection menu item opens https://bandcamp.com/fixture-user", svc.lastOpenedUrl === "https://bandcamp.com/fixture-user"); click(searchField()) },
 
     // ---- logout flow (Phase 2), now reached through the gear menu ----
     function() { openSettings() },
-    function() { click(button("Log out / Clear Bandcamp session")) },
+    function() { click(button("Log out")) },
     function() { check("gear menu item opens confirmation (does not log out yet)", panel.logoutConfirmOpen && !panel.menuOpen && svc.status !== "Cleared imported session"); key(Qt.Key_Escape) },
     function() { check("Esc cancels confirmation, window stays, no logout", !panel.logoutConfirmOpen && panel.opened && svc.status !== "Cleared imported session"); openSettings() },
-    function() { key(Qt.Key_Down); key(Qt.Key_Down); key(Qt.Key_Down) },
+    function() { key(Qt.Key_Down); key(Qt.Key_Down); key(Qt.Key_Down); key(Qt.Key_Down) },
     function() { key(Qt.Key_Return) },
     function() { check("Enter on the Log out gear-menu item opens the confirmation", panel.logoutConfirmOpen); key(Qt.Key_Return) },
     function() { check("Enter on confirmation = preselected Cancel: no logout", !panel.logoutConfirmOpen && svc.status !== "Cleared imported session") },
     function() { openSettings() },
-    function() { click(button("Log out / Clear Bandcamp session")) },
+    function() { click(button("Log out")) },
     function() { key(Qt.Key_Right) },
     function() { key(Qt.Key_Return) },
     function() { check("confirming runs clearCookies", !panel.logoutConfirmOpen && svc.status === "Cleared imported session"); check("window stays open after logout", panel.opened); click(searchField()) },
@@ -1300,7 +1309,7 @@ ShellRoot {
       check("at that moment: gear-menu item disabled, spinning, dimmed", seen && seen.enabled === false && seen.spin === true && seen.op < 1)
       click(searchField())
       openSettings()
-      var b = button("Refresh library")
+      var b = button("Refresh")
       check("refresh finished: not refreshing, gear-menu item re-enabled and still", !svc.refreshing && b && b.enabled === true && b.iconSpinning === false)
       if (panel.menuOpen) key(Qt.Key_Escape)
       log("status after refresh: " + JSON.stringify(svc.status))
@@ -1496,7 +1505,7 @@ ShellRoot {
       searchField().forceActiveFocus()
       host.chain = []
       host.chainFocus = []
-      for (var i = 0; i < 7; i++) {
+      for (var i = 0; i < 6; i++) {
         key(Qt.Key_Tab)
         host.chain.push(panel.focusControlName())
         var f = panel.focusChainItems().filter(function(x) { return x.activeFocus })[0]
@@ -1504,21 +1513,35 @@ ShellRoot {
       }
     },
     function() {
-      check("v3.5: Tab walks search → clear/magnifier → Collection → gear → Albums → Playlists → Sort → direction",
-        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton")
+      check("v3.5.1: Tab walks search → clear/magnifier → gear → Albums → Playlists → Sort → direction",
+        host.chain.join("|") === "searchAction|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton")
       check("v3.5: every chain stop shows the shared focus state",
         host.chainFocus.every(function(x) { return x === true }))
       named(stage, "sortDirectionButton").forceActiveFocus()
       host.chain = []
-      for (var i = 0; i < 7; i++) {
+      for (var i = 0; i < 6; i++) {
         shiftKey(Qt.Key_Tab)
         host.chain.push(panel.focusControlName())
       }
     },
     function() {
-      check("v3.5: Shift+Tab reverses the same chain",
-        host.chain.join("|") === "sortButton|playlistsButton|albumsButton|settingsButton|link-collection|searchAction|searchField")
+      check("v3.5.1: Shift+Tab reverses the same chain",
+        host.chain.join("|") === "sortButton|playlistsButton|albumsButton|settingsButton|searchAction|searchField")
       searchField().forceActiveFocus()
+    },
+    // v3.5.1: focus indication comes from the same theme accent as the rest of the panel.
+    function() {
+      var gear = settingsButton(), field = searchField()
+      field.forceActiveFocus()
+      var fieldFocused = String(field.background.border.color)
+      gear.forceActiveFocus()
+      var fieldIdle = String(field.background.border.color)
+      var gearFocused = String(gear.border.color)
+      check("v3.5.1: a focused button's border is the theme accent colour",
+        String(gear.focusColor) === String(Color.accent) && gearFocused === String(Color.accent))
+      check("v3.5.1: the focused search field border is the theme accent and differs from its unfocused border",
+        fieldFocused === String(Color.accent) && fieldIdle !== fieldFocused)
+      field.forceActiveFocus()
     },
     // Click-to-clear × and its keyboard equivalent.
     function() {
@@ -1564,7 +1587,7 @@ ShellRoot {
     // Gear menu: the refresh glyph uses the same icon font as Log out.
     function() { openSettings() },
     function() {
-      var refresh = button("Refresh library"), logout = button("Log out / Clear Bandcamp session")
+      var refresh = button("Refresh"), logout = button("Log out")
       var hide = button("Hide pre-orders")
       var ri = iconGlyphOf(refresh), li = iconGlyphOf(logout)
       var card = named(stage, "menuCard")
@@ -2424,24 +2447,24 @@ ShellRoot {
       host.chain = []
     },
     function() {
-      for (var i = 0; i < 14; i++) { key(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
+      for (var i = 0; i < 13; i++) { key(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
     },
     function() {
       log("v3.5 Tab chain (no queue): " + host.chain.join("|"))
-      check("v3.5 B: the full Tab order with NO queue skips the queue frame entirely and wraps",
-        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton|leftList|trackList|footerShuffle|footerPrev|footerPlay|footerNext|searchField")
+      check("v3.5.1: the full Tab order with NO queue skips the queue frame entirely and wraps",
+        host.chain.join("|") === "searchAction|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton|leftList|trackList|footerShuffle|footerPrev|footerPlay|footerNext|searchField")
       svc.addTrackToQueue(svc.collection[collIndex("La Dee La La")].tracks[0])
       svc.addTrackToQueue(svc.collection[collIndex("La Dee La La")].tracks[1])
       searchField().forceActiveFocus()
       host.chain = []
     },
     function() {
-      for (var i = 0; i < 16; i++) { key(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
+      for (var i = 0; i < 15; i++) { key(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
     },
     function() {
       log("v3.5 Tab chain (queue): " + host.chain.join("|"))
-      check("v3.5 B: with a queue the chain adds Up Next and Clear between the left list and the track list",
-        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton|leftList|upNextList|upNextClear|trackList|footerShuffle|footerPrev|footerPlay|footerNext|searchField")
+      check("v3.5.1: with a queue the chain adds Up Next and Clear between the left list and the track list",
+        host.chain.join("|") === "searchAction|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton|leftList|upNextList|upNextClear|trackList|footerShuffle|footerPrev|footerPlay|footerNext|searchField")
       panel.focusPane = ""
       panel.listCursor = -1
       named(stage, "sortDirectionButton").forceActiveFocus()
@@ -2452,20 +2475,24 @@ ShellRoot {
       for (var i = 0; i < rows.length; i++) if (rows[i].uid === panel.selectedAlbumUid) { idx = i; break }
       check("v3.5 B: entering the left list focuses the selected/current row with a visible cursor",
         panel.focusPane === "list" && idx >= 0 && panel.listCursor === idx &&
-        alpha(named(leftList().itemAtIndex(idx), "rowFill")) > 0.1)
+        alpha(named(leftList().itemAtIndex(idx), "rowFill")) > 0.1 &&
+        String(named(leftList().itemAtIndex(idx), "rowFill").border.color) === String(Color.accent))
       key(Qt.Key_Tab)
     },
     function() {
       check("v3.5 B: Tab from the left list enters Up Next at row 0, visibly focused",
         panel.focusPane === "queue" && panel.queueCursor === 0 &&
-        alpha(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill")) > 0.1)
+        alpha(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill")) > 0.1 &&
+        String(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill").border.color) === String(Color.accent))
       key(Qt.Key_Down)
     },
     function() {
       check("v3.5 B: arrows move within Up Next and move the visible cursor",
         panel.queueCursor === 1 &&
         alpha(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill")) < 0.15 &&
-        alpha(named(named(stage, "upNextList").itemAtIndex(1), "upNextFill")) > 0.1)
+        alpha(named(named(stage, "upNextList").itemAtIndex(1), "upNextFill")) > 0.1 &&
+        String(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill").border.color) !== String(Color.accent) &&
+        String(named(named(stage, "upNextList").itemAtIndex(1), "upNextFill").border.color) === String(Color.accent))
       key(Qt.Key_Tab)
     },
     function() {
@@ -2476,7 +2503,8 @@ ShellRoot {
     function() {
       check("v3.5 B: Tab from Clear enters the track list at the current row",
         panel.focusPane === "tracks" && panel.trackCursor === 0 &&
-        alpha(named(trackList().itemAtIndex(0), "trackFill")) > 0.1)
+        alpha(named(trackList().itemAtIndex(0), "trackFill")) > 0.1 &&
+        String(named(trackList().itemAtIndex(0), "trackFill").border.color) === String(Color.accent))
       key(Qt.Key_Tab)
     },
     function() {
@@ -2501,12 +2529,12 @@ ShellRoot {
     function() {
       searchField().forceActiveFocus()
       host.chain = []
-      for (var i = 0; i < 16; i++) { shiftKey(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
+      for (var i = 0; i < 15; i++) { shiftKey(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
     },
     function() {
       log("v3.5 reverse chain: " + host.chain.join("|"))
-      check("v3.5 B: Shift+Tab reverses the full chain across every boundary, queue included",
-        host.chain.join("|") === "footerNext|footerPlay|footerPrev|footerShuffle|trackList|upNextClear|upNextList|leftList|sortDirectionButton|sortButton|playlistsButton|albumsButton|settingsButton|link-collection|searchAction|searchField")
+      check("v3.5.1: Shift+Tab reverses the full chain across every boundary, queue included",
+        host.chain.join("|") === "footerNext|footerPlay|footerPrev|footerShuffle|trackList|upNextClear|upNextList|leftList|sortDirectionButton|sortButton|playlistsButton|albumsButton|settingsButton|searchAction|searchField")
     },
     function() {
       panel.enterQueueRegion()
@@ -2756,16 +2784,19 @@ ShellRoot {
         panel.helpOpen && hv.visible === true && Math.abs(hv.mapToItem(stage, 0, 0).y - host.probe.libraryRowY) < 0.5 &&
         Math.abs(hv.width - named(stage, "libraryRow").width) < 0.5)
       check("v3.5 D: opening moves focus into the view", hv.activeFocus && panel.focusControlName() === "shortcutsView")
-      check("v3.5 D: the four groups appear in order",
-        groups.map(function(g) { return g.text }).join("|") === "Navigation|Playback|Queue|Search & menus")
+      check("v3.5 D: the four groups appear in order in two side-by-side columns",
+        groups.map(function(g) { return g.text }).join("|") === "Navigation|Playback|Queue|Search & menus" &&
+        groups[0].mapToItem(hv, 0, 0).x < groups[2].mapToItem(hv, 0, 0).x &&
+        Math.abs(groups[0].mapToItem(hv, 0, 0).x - groups[1].mapToItem(hv, 0, 0).x) < 0.5 &&
+        Math.abs(groups[2].mapToItem(hv, 0, 0).x - groups[3].mapToItem(hv, 0, 0).x) < 0.5)
       check("v3.5 D: rows use the existing two-column sizes and colours",
         keys.length === 16 && keys.length === descs.length &&
-        keys[0].width === Style.space(170) && descs[0].x === Style.space(182) &&
+        keys[0].width === Style.space(108) && descs[0].x === Style.space(112) &&
         keys[0].font.pixelSize === Style.font.bodySmall && descs[0].font.pixelSize === Style.font.caption &&
         String(keys[0].color) === String(named(stage, "searchField").color))
-      check("v3.5 D: the view stays inside the established floor/cap and scrolls internally",
+      check("v3.5.1 D: the reflowed view fits its height (internal scroll is only a fallback)",
         hv.height >= 6 * Style.space(30) - 0.5 && hv.height <= Style.space(396) + 0.5 &&
-        named(stage, "shortcutsFlickable").contentHeight > hv.height)
+        named(stage, "shortcutsFlickable").contentHeight <= named(stage, "shortcutsFlickable").height + 0.5)
     },
     function() {
       var all = panel.helpRows.map(function(r) { return (r.key || "") + " " + (r.text || "") }).join(" | ")
@@ -2798,7 +2829,7 @@ ShellRoot {
     function() {
       // Reachable entirely from the keyboard: Tab to the gear, Enter, Down ×2, Enter.
       searchField().forceActiveFocus()
-      key(Qt.Key_Tab); key(Qt.Key_Tab); key(Qt.Key_Tab)
+      key(Qt.Key_Tab); key(Qt.Key_Tab)
     },
     function() {
       check("v3.5 D: the keyboard path reaches the gear", settingsButton().activeFocus)
@@ -3012,10 +3043,11 @@ ShellRoot {
       var n = svc.collection.length
       log("real library: " + n + " albums, " + svc.playlists.length + " playlists")
       check("[real] library loaded (hundreds of albums, playlists present)", n > 500 && svc.playlists.length > 5)
-      check("[real] Collection is built from the real username and enabled",
+      check("[real] Collection is built from the real username and enabled in the gear menu",
         panel.bandcampUser !== "" &&
         panel.collectionUrl === "https://bandcamp.com/" + encodeURIComponent(panel.bandcampUser) &&
-        collectionButton().enabled === true && collectionButton().tooltipText === panel.collectionUrl)
+        panel.moreItems[3].label === "Collection" && panel.moreItems[3].enabled === true &&
+        panel.moreItems[3].tooltip === panel.collectionUrl)
       var strings = []
       for (var i = 0; i < svc.collection.length; i++) { var a = svc.collection[i]; strings.push(a.title, a.artist); for (var j = 0; j < a.tracks.length; j++) strings.push(a.tracks[j].title, a.tracks[j].artist, a.tracks[j].album) }
       for (var k = 0; k < svc.playlists.length; k++) { strings.push(svc.playlists[k].name); for (var m = 0; m < svc.playlists[k].tracks.length; m++) strings.push(svc.playlists[k].tracks[m].title, svc.playlists[k].tracks[m].artist) }

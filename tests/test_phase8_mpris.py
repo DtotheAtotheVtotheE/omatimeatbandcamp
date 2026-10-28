@@ -181,7 +181,7 @@ class MprisBridgeTest(unittest.TestCase):
         self.assertFalse("FAKESALT" in blob, "metadata leaked a credential value")
 
         root = self.props.GetAll(IFACE_ROOT)
-        self.assertEqual(str(root["Identity"]), "OmaTimeAtBandCamp")
+        self.assertEqual(str(root["Identity"]), "OmaTimeAtBandcamp")
         self.assertEqual(bool(root["HasTrackList"]), False)
         self.assertEqual(bool(root["CanQuit"]), False)
 

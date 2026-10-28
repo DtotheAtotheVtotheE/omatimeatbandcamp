@@ -4,7 +4,7 @@ import qs.Commons
 import qs.Ui
 import "LibraryModel.js" as LibraryModel
 
-// OmaTimeAtBandCamp popup.
+// OmaTimeAtBandcamp popup.
 //
 // This file is the plugin's only entry point (kinds: service + bar-widget): it
 // draws the bar icon and the popup anchored beneath it. Library data and
@@ -54,7 +54,7 @@ Panel {
 
   readonly property string tooltip: currentTrack && currentTrack.title
     ? (currentTrack.title + (currentTrack.artist ? " — " + currentTrack.artist : ""))
-    : "OmaTimeAtBandCamp"
+    : "OmaTimeAtBandcamp"
 
   // Selection is kept as a uid and resolved against the live library, so it survives
   // a background sync replacing the library objects. Clicking the selected row again
@@ -89,7 +89,7 @@ Panel {
   readonly property var paneBorderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
 
   // v3.1: one control height for every named control (search field, gear,
-  // Collection, Albums/Playlists/Sort and the four footer transport buttons).
+  // Albums/Playlists/Sort and the four footer transport buttons).
   // The token is BcButton's existing height, so the buttons and the field
   // cannot drift apart.
   readonly property int controlHeight: Style.spacing.controlHeight
@@ -134,10 +134,11 @@ Panel {
     var floorHeight = detailMinTrackRows * detailBaseTrackRowHeight
     return Math.max(floorHeight, Math.min(detailCapHeight, libraryRowContentHeight))
   }
-  // v3.5 Part D: the shortcuts view occupies the same body slot as the two
-  // panes, under the same floor/cap. Longer content scrolls inside it.
+  // v3.5.1: the shortcuts view occupies the same body slot as the two panes,
+  // under the same floor/cap. The four groups are reflowed into two balanced
+  // columns; the internal scroll remains only as a fallback.
   readonly property real helpViewHeight: Math.max(detailMinTrackRows * detailBaseTrackRowHeight,
-    Math.min(detailCapHeight, helpColumn ? helpColumn.implicitHeight + 2 * Style.spacing.sm : 0))
+    Math.min(detailCapHeight, helpColumns ? helpColumns.implicitHeight + 2 * Style.spacing.sm : 0))
 
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
@@ -159,10 +160,12 @@ Panel {
   property real contextMenuAnchorX: 0
   property real contextMenuAnchorY: 0
   readonly property var moreItems: [
-    { icon: "\uf021", label: "Refresh library", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
+    { icon: "\uf021", label: "Refresh", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
     { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
     { icon: "\uf11c", label: "Keyboard shortcuts", action: "help" },
-    { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
+    { icon: "\uf07b", label: "Collection", action: "collection", enabled: root.collectionUrl !== "",
+      tooltip: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet" },
+    { icon: "\uf08b", label: "Log out", action: "logout" }
   ]
   // v3.3.1 follow-up: Albums keep the full sort set; Playlists get exactly two
   // choices. The two tabs own independent, persisted choices.
@@ -191,7 +194,7 @@ Panel {
   // listed. Text only — the renderer uses existing type sizes and colours.
   readonly property var helpRows: [
     { group: true, title: "Navigation" },
-    { key: "Tab / Shift+Tab", text: "Move through the panel: search, clear, Collection, gear, Albums, Playlists, Sort, sort direction, lists, queue, track list, transport." },
+    { key: "Tab / Shift+Tab", text: "Move through the panel: search, clear, gear, Albums, Playlists, Sort, sort direction, lists, queue, track list, transport." },
     { key: "↑ / ↓", text: "Move within the focused list, queue or menu." },
     { key: "← / →", text: "Switch between the album/playlist list and the track list." },
     { group: true, title: "Playback" },
@@ -211,10 +214,27 @@ Panel {
     { key: "Enter", text: "Activate the highlighted menu item." },
     { key: "Esc", text: "Close a menu without acting, close this view, or step back one layer." }
   ]
+  // v3.5.1 Part D: group the flat list above for the two-column reflow. Left
+  // column is Navigation then Playback; right column is Queue then Search & menus.
+  readonly property var helpGroups: {
+    var out = [], current = null
+    for (var i = 0; i < helpRows.length; i++) {
+      var row = helpRows[i]
+      if (row.group === true) {
+        current = { title: row.title || "", rows: [] }
+        out.push(current)
+      } else if (current) {
+        current.rows.push(row)
+      }
+    }
+    return out
+  }
+  readonly property var helpLeftGroups: helpGroups.slice(0, 2)
+  readonly property var helpRightGroups: helpGroups.slice(2)
 
-  // v3: one Collection link remains. Its URL is built from the username the
-  // backend recorded in the library, so it stays disabled until it is known.
-  // Verified live on 2026-10-23 (V2-NOTES Phase 7).
+  // v3.5.1: Collection now lives in the gear menu. Its URL is built from the
+  // username the backend recorded in the library, so the item stays disabled
+  // until it is known. Verified live on 2026-10-23 (V2-NOTES Phase 7).
   readonly property string bandcampUser: service ? String(service.detectedUser || "") : ""
   readonly property string collectionUrl: bandcampUser === ""
     ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser)
@@ -272,7 +292,7 @@ Panel {
 
   // v3.5: the complete Tab chain, in the owner-ordered regions. Entries whose
   // region does not exist right now (the queue frame) are skipped entirely.
-  readonly property var focusTokens: ["searchField", "searchAction", "link-collection",
+  readonly property var focusTokens: ["searchField", "searchAction",
     "settingsButton", "albumsButton", "playlistsButton", "sortButton", "sortDirectionButton",
     "leftList", "upNextList", "upNextClear", "trackList",
     "footerShuffle", "footerPrev", "footerPlay", "footerNext"]
@@ -283,7 +303,6 @@ Panel {
       var t = focusTokens[i]
       if (helpOpen && (t === "leftList" || t === "upNextList" || t === "upNextClear" || t === "trackList")) continue
       if ((t === "upNextList" || t === "upNextClear") && upNextCount === 0) continue
-      if (t === "link-collection" && !collectionButton.enabled) continue
       out.push(t)
     }
     return out
@@ -292,7 +311,6 @@ Panel {
   function itemForToken(t) {
     if (t === "searchField") return searchField
     if (t === "searchAction") return searchAction
-    if (t === "link-collection") return collectionButton
     if (t === "settingsButton") return menuButton
     if (t === "albumsButton") return albumsButton
     if (t === "playlistsButton") return playlistsButton
@@ -808,6 +826,9 @@ Panel {
       searchField.forceActiveFocus()
     } else if (action === "help") {
       toggleHelp()
+    } else if (action === "collection") {
+      if (service && collectionUrl !== "") service.openExternal(collectionUrl)
+      searchField.forceActiveFocus()
     } else if (action.indexOf("sort:") === 0) {
       if (service) {
         if (root.playlistsTab) service.setPlaylistSortMode(action.substring(5))
@@ -988,7 +1009,7 @@ Panel {
         Text {
           objectName: "headerTitle"
           textFormat: Text.PlainText
-          text: "OmaTimeAtBandCamp"
+          text: "OmaTimeAtBandcamp"
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.subtitle + 2
@@ -999,8 +1020,9 @@ Panel {
       }
 
       // search ---------------------------------------------------------------
-      // v3.1, left to right: the flexible search field (the magnifier now sits
-      // inside its right end), Collection, then the gear/settings button.
+      // v3.5.1: the flexible search field (the magnifier sits inside its right
+      // end) and the gear/settings button only. Collection now lives in the
+      // gear menu.
       Item {
         width: parent.width
         height: root.controlHeight
@@ -1017,10 +1039,9 @@ Panel {
           TextField {
             id: searchField
             objectName: "searchField"
-            // v3.2: the field takes every pixel left after Collection and the
-            // gear (and the two Row gaps). No half-row rule.
-            width: Math.max(0, searchRow.width - collectionButton.width
-              - menuButton.width - 2 * searchRow.spacing)
+            // v3.5.1: the field takes every pixel left after the gear and the
+            // one Row gap. No half-row rule.
+            width: Math.max(0, searchRow.width - menuButton.width - searchRow.spacing)
             height: root.controlHeight
             // A little less vertical padding than the stock 30 px field: the
             // text still fits (asserted by the harness) at the shared 28 px.
@@ -1031,6 +1052,16 @@ Panel {
             placeholderText: "Search albums, playlists, tracks…"
             foreground: root.foreground
             font.family: root.fontFamily
+            // v3.5.1: the focused border is the theme accent at full strength
+            // (the same Color.accent the rest of the panel uses). Unfocused and
+            // hover states are the shell's existing tokens unchanged.
+            background: BorderSurface {
+              color: Style.controlFill(searchField.activeFocus, searchField.hovered, root.foreground, Color.accent)
+              borderSpec: searchField.activeFocus
+                ? Border.flat(Color.accent, Style.focusBorderWidth)
+                : Border.controlSpec(searchField.hovered ? "hover-cursor" : "normal", root.foreground, Color.accent)
+              radius: Style.cornerRadius
+            }
             onTextChanged: {
               if (root.service) root.service.search(text)
               root.listCursor = -1
@@ -1112,24 +1143,8 @@ Panel {
             }
           }
 
-          BcButton {
-            id: collectionButton
-            objectName: "link-collection"
-            text: "Collection"
-            height: root.controlHeight
-            enabled: root.collectionUrl !== ""
-            focusable: true
-            tooltipText: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: if (root.service) root.service.openExternal(root.collectionUrl)
-            Keys.onPressed: function(event) { root.handleTabKey(event) }
-            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
-          }
-
           // v3.1: the gear/settings button now lives in the search row. Its menu
-          // entries and behaviour are unchanged.
+          // entries and behaviour are unchanged; v3.5.1 adds Collection to it.
           BcButton {
             id: menuButton
             objectName: "settingsButton"
@@ -1325,6 +1340,9 @@ Panel {
                 color: rowItem.selected ? Util.alpha(Color.accent, 0.22)
                   : (rowItem.cursor ? Util.alpha(Color.accent, 0.12)
                     : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"))
+                // v3.5.1: a focused row carries the theme accent ring.
+                border.color: rowItem.cursor ? Color.accent : "transparent"
+                border.width: rowItem.cursor ? Style.focusBorderWidth : 0
               }
 
               Rectangle {
@@ -1594,6 +1612,9 @@ Panel {
                       radius: Style.cornerRadius
                       color: upNextRow.cursor ? Util.alpha(Color.accent, 0.12)
                         : (upNextMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                      // v3.5.1: a focused row carries the theme accent ring.
+                      border.color: upNextRow.cursor ? Color.accent : "transparent"
+                      border.width: upNextRow.cursor ? Style.focusBorderWidth : 0
                     }
 
                     Column {
@@ -1773,6 +1794,9 @@ Panel {
                     color: trackRow.current ? Util.alpha(Color.accent, 0.22)
                       : (trackRow.cursor ? Util.alpha(Color.accent, 0.12)
                         : (trackRow.playable && tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"))
+                    // v3.5.1: a focused row carries the theme accent ring.
+                    border.color: trackRow.cursor ? Color.accent : "transparent"
+                    border.width: trackRow.cursor ? Style.focusBorderWidth : 0
                   }
 
                   Rectangle {
@@ -1941,66 +1965,145 @@ Panel {
           anchors.fill: parent
           anchors.margins: Style.spacing.sm
           contentWidth: width
-          contentHeight: helpColumn.implicitHeight
+          contentHeight: helpColumns.implicitHeight
           clip: true
           boundsBehavior: Flickable.StopAtBounds
 
-          Column {
-            id: helpColumn
+          // v3.5.1: two side-by-side columns. Left: Navigation then Playback.
+          // Right: Queue then Search & menus. Same rows, text and type sizes.
+          Row {
+            id: helpColumns
             width: helpFlickable.width
-            spacing: Style.space(4)
+            spacing: Style.spacing.md
 
-            Repeater {
-              model: root.helpRows
+            Column {
+              id: helpLeftColumn
+              width: (helpColumns.width - helpColumns.spacing) / 2
+              spacing: Style.space(6)
 
-              Item {
-                required property var modelData
-                width: helpColumn.width
-                height: modelData.group ? groupText.implicitHeight + Style.space(8)
-                  : Math.max(keyText.implicitHeight, descText.implicitHeight) + Style.space(4)
+              Repeater {
+                model: root.helpLeftGroups
 
-                Text {
-                  id: groupText
-                  objectName: "shortcutsGroup"
-                  visible: modelData.group === true
-                  textFormat: Text.PlainText
-                  text: modelData.group === true ? (modelData.title || "") : ""
-                  color: Color.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
+                Column {
+                  required property var modelData
+                  width: helpLeftColumn.width
+                  spacing: Style.space(1)
+
+                  Text {
+                    objectName: "shortcutsGroup"
+                    textFormat: Text.PlainText
+                    text: modelData.title || ""
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  Repeater {
+                    model: modelData.rows
+
+                    Item {
+                      required property var modelData
+                      width: helpLeftColumn.width
+                      height: Math.max(keyText.implicitHeight, descText.implicitHeight) + Style.space(2)
+
+                      Text {
+                        id: keyText
+                        objectName: "shortcutsKey"
+                        width: Style.space(108)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.key || ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: true
+                      }
+
+                      Text {
+                        id: descText
+                        objectName: "shortcutsDesc"
+                        x: Style.space(112)
+                        width: Math.max(0, parent.width - x)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.text || ""
+                        color: Qt.darker(root.foreground, 1.35)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
                 }
+              }
+            }
 
-                Text {
-                  id: keyText
-                  objectName: "shortcutsKey"
-                  visible: modelData.group !== true
-                  width: Style.space(170)
-                  textFormat: Text.PlainText
-                  horizontalAlignment: Text.AlignLeft
-                  LayoutMirroring.enabled: false
-                  wrapMode: Text.Wrap
-                  text: modelData.group === true ? "" : (modelData.key || "")
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
-                }
+            Column {
+              id: helpRightColumn
+              width: (helpColumns.width - helpColumns.spacing) / 2
+              spacing: Style.space(6)
 
-                Text {
-                  id: descText
-                  objectName: "shortcutsDesc"
-                  visible: modelData.group !== true
-                  x: Style.space(182)
-                  width: Math.max(0, parent.width - x)
-                  textFormat: Text.PlainText
-                  horizontalAlignment: Text.AlignLeft
-                  LayoutMirroring.enabled: false
-                  wrapMode: Text.Wrap
-                  text: modelData.group === true ? "" : (modelData.text || "")
-                  color: Qt.darker(root.foreground, 1.35)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+              Repeater {
+                model: root.helpRightGroups
+
+                Column {
+                  required property var modelData
+                  width: helpRightColumn.width
+                  spacing: Style.space(1)
+
+                  Text {
+                    objectName: "shortcutsGroup"
+                    textFormat: Text.PlainText
+                    text: modelData.title || ""
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  Repeater {
+                    model: modelData.rows
+
+                    Item {
+                      required property var modelData
+                      width: helpRightColumn.width
+                      height: Math.max(keyText.implicitHeight, descText.implicitHeight) + Style.space(2)
+
+                      Text {
+                        id: keyText
+                        objectName: "shortcutsKey"
+                        width: Style.space(108)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.key || ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: true
+                      }
+
+                      Text {
+                        id: descText
+                        objectName: "shortcutsDesc"
+                        x: Style.space(112)
+                        width: Math.max(0, parent.width - x)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.text || ""
+                        color: Qt.darker(root.foreground, 1.35)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2487,6 +2590,7 @@ Panel {
               leftAlign: true
               text: modelData.label
               iconText: modelData.icon
+              tooltipText: modelData.tooltip || ""
               trailingText: modelData.trailing || ""
               selected: modelData.checked === true
               active: root.menuIndex === index

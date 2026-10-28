@@ -25,7 +25,7 @@ import xml.etree.ElementTree as ET
 
 BASE_URL = "https://bandcamp.com/api/subsonic"
 API_VERSION = "1.16.1"
-CLIENT_NAME = "OmaTimeAtBandCamp"
+CLIENT_NAME = "OmaTimeAtBandcamp"
 CRED_PATH = os.path.expanduser("~/.config/omatimeatbandcamp/credentials.toml")
 DEFAULT_TIMEOUT = 60
 PAGE_SIZE = 500

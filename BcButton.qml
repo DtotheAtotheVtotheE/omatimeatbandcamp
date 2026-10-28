@@ -1,8 +1,9 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
-// The one button style for every control in the OmaTimeAtBandCamp window:
+// The one button style for every control in the OmaTimeAtBandcamp window:
 // same height, same padding, same border and radius, same 16px icon, same
 // hover / pressed / selected states (all inherited from the shell Button, so
 // themes keep control of the look). Icon-only buttons are square.
@@ -23,6 +24,12 @@ Button {
   // selected sort row, and the keyboard hint on a context-menu row. It keeps
   // `text` (and therefore every existing label lookup) unchanged.
   property string trailingText: ""
+
+  // v3.5.1: focused controls use the theme accent at full strength, from the
+  // same Color singleton as the rest of the panel. The unfocused borderSpec is
+  // still the shell Button's own token chain, unchanged.
+  readonly property color focusColor: Commons.Color.accent
+  borderSpec: activeFocus ? Border.flat(focusColor, Style.focusBorderWidth) : root._borderSpec
 
   Text {
     objectName: "trailingText"

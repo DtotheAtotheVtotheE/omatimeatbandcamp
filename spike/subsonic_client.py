@@ -16,7 +16,7 @@ import requests
 
 BASE_URL = "https://bandcamp.com/api/subsonic"
 API_VERSION = "1.16.1"
-CLIENT_NAME = "OmaTimeAtBandCamp-spike"
+CLIENT_NAME = "OmaTimeAtBandcamp-spike"
 CRED_PATH = os.path.expanduser("~/.config/omatimeatbandcamp/credentials.toml")
 SECRET_KEYS = ("u", "t", "s", "p")
 

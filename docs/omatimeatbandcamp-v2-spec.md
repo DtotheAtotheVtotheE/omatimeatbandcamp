@@ -1,6 +1,6 @@
-# OmaTimeAtBandCamp — v2 Fix-Everything Spec
+# OmaTimeAtBandcamp — v2 Fix-Everything Spec
 
-For: OpenCode (Qwen3-Coder) working in the existing OmaTimeAtBandCamp repo on oma.
+For: OpenCode (Qwen3-Coder) working in the existing OmaTimeAtBandcamp repo on oma.
 Owner: David Sewall. Date: 2026-10-23.
 
 ## How to use this spec
@@ -25,7 +25,7 @@ Owner: David Sewall. Date: 2026-10-23.
 ## Background (what exists today, verified from screenshots 2026-10-23)
 
 - Waybar custom module showing the text `BC`; clicking it opens the plugin window.
-- Plugin window titled `OmaTimeAtBandCamp`, with:
+- Plugin window titled `OmaTimeAtBandcamp`, with:
   - Header icons top-right: refresh (small ↻ glyph), clear-session (bracket/arrow),
     close (×) — all different sizes/styles from everything else.
   - Search box: "Search albums, playlists, tracks..."
@@ -60,7 +60,7 @@ for a project. OpenCode does ALL of this; the owner's only manual step is the
 one-time `gh` browser login if prompted. Explain each result in plain language
 in the Phase -1 report — no unexplained jargon.
 
-1. **Locate the code.** Find the existing OmaTimeAtBandCamp project directory
+1. **Locate the code.** Find the existing OmaTimeAtBandcamp project directory
    and the Waybar config entries that launch it. Report the path, file list,
    and total line count (this doubles as the start of the v1 audit: note how
    fetching, playback and UI are organised — separate modules or one file).
@@ -135,7 +135,7 @@ Bandcamp now runs an official Subsonic/OpenSubsonic API server (open beta):
      directory `0700`, and verify/refuse if permissions are looser)
 - Auth: prefer Subsonic token auth — per request generate a random salt `s`,
   send `u=<user>`, `t=md5(password + salt)`, `s=<salt>`, `v=1.16.1`,
-  `c=OmaTimeAtBandCamp`, `f=json`. Test whether Bandcamp accepts token auth.
+  `c=OmaTimeAtBandcamp`, `f=json`. Test whether Bandcamp accepts token auth.
   Only if `ping` proves it unsupported may you fall back to `p=enc:<hex>`, and
   record that fact in the spike report.
 - Redact credentials, tokens and signed stream URLs from ALL logs and from the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MPRIS (org.mpris.MediaPlayer2) bridge for OmaTimeAtBandCamp.
+"""MPRIS (org.mpris.MediaPlayer2) bridge for OmaTimeAtBandcamp.
 
 Why a separate process: the QML shell has no D-Bus *server* API, but the
 playback state already lives in QML. Service.qml writes a small JSON state file
@@ -165,7 +165,7 @@ class MprisPlayer(dbus.service.Object):
             "CanQuit": dbus.Boolean(False),
             "CanRaise": dbus.Boolean(False),
             "HasTrackList": dbus.Boolean(False),
-            "Identity": dbus.String("OmaTimeAtBandCamp"),
+            "Identity": dbus.String("OmaTimeAtBandcamp"),
             "DesktopEntry": dbus.String("omatimeatbandcamp"),
             "SupportedUriSchemes": dbus.Array([], signature="s"),
             "SupportedMimeTypes": dbus.Array([], signature="s"),
@@ -299,7 +299,7 @@ def _die_with_parent() -> None:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="OmaTimeAtBandCamp MPRIS bridge")
+    ap = argparse.ArgumentParser(description="OmaTimeAtBandcamp MPRIS bridge")
     ap.add_argument("--state", required=True)
     ap.add_argument("--art", required=True)
     ap.add_argument("--ctl", default="omarchy-shell")

@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "id": "com.github.dtotheatothevtothee.omatimeatbandcamp",
+  "name": "OmaTimeAtBandcamp",
+  "version": "0.1.0",
+  "author": "dtotheatothevtothee",
+  "license": "MIT",
+  "description": "Bandcamp collection and playlist player. Streams are extracted from Bandcamp pages and played through mpv. Sign in to Bandcamp in your browser and the plugin imports the session automatically to unlock purchased and private items; your account is detected automatically. Browse albums and playlists, search everything, and shuffle all tracks, an album, or a playlist.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "OmaTimeAtBandcamp",
+    "description": "Bandcamp player for your collection and playlists",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showIcon": true,
+      "userUrl": "",
+      "cookiePath": "",
+      "browser": "auto",
+      "includePlaylists": true,
+      "refreshIntervalMin": 15,
+      "autoPlayOnSelect": false,
+      "mpvFlags": ""
+    },
+    "schema": [
+      {
+        "key": "userUrl",
+        "type": "text",
+        "label": "Bandcamp collection URL (blank = auto-detect from your browser login)",
+        "defaultValue": ""
+      },
+      {
+        "key": "cookiePath",
+        "type": "text",
+        "label": "Netscape cookie file (optional — auto-imported from your browser when blank)",
+        "defaultValue": ""
+      },
+      {
+        "key": "browser",
+        "type": "enum",
+        "label": "Browser to import the Bandcamp session from",
+        "options": [
+          "auto",
+          "chrome",
+          "chromium",
+          "brave",
+          "edge",
+          "vivaldi",
+          "firefox"
+        ],
+        "defaultValue": "auto"
+      },
+      {
+        "key": "includePlaylists",
+        "type": "boolean",
+        "label": "Include playlists",
+        "defaultValue": true
+      },
+      {
+        "key": "refreshIntervalMin",
+        "type": "integer",
+        "label": "Library refresh interval (minutes)",
+        "min": 5,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 15
+      },
+      {
+        "key": "autoPlayOnSelect",
+        "type": "boolean",
+        "label": "Auto-play when selecting a track",
+        "defaultValue": false
+      },
+      {
+        "key": "mpvFlags",
+        "type": "text",
+        "label": "Extra mpv flags (passed via OMATIME_MPV_FLAGS)",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

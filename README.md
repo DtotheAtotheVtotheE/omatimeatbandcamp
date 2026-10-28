@@ -1,4 +1,4 @@
-# OmaTimeAtBandCamp
+# OmaTimeAtBandcamp
 
 Bandcamp collection/playlists player with stream extraction for Omarchy.
 
@@ -36,7 +36,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   cache. `fetch.py` sends it as a `Cookie` header; `mpvctl.py` passes it to mpv.
 - The cookie jar and cache live in `~/.cache/omatimeatbandcamp/` (dir `0700`,
   `cookies.txt` `0600`) and are **never** part of the plugin source.
-- Use the gear menu's "Log out / Clear Bandcamp session" item (or `clearCookies`
+- Use the gear menu's "Log out" item (or `clearCookies`
   over IPC) to delete the imported jar; the next refresh re-imports it.
 - If your browser is not running or the keyring is locked, cookies may be
   unavailable; set `cookiePath` to a file you export yourself instead.
@@ -50,10 +50,10 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - The module text is always plain `BC`; there is no playback suffix and no separate
   album-art bar widget (v3).
 - The search row has the flexible search field (with a click-to-clear ×, or a magnifier
-  when empty, inside its right end), the single Collection link built from the username in the library cache
-  (`xdg-open`; disabled until the username is known), and the gear button.
-- The gear menu holds Refresh library, Hide pre-orders (checkable, remembered), Keyboard shortcuts
-  (a scrollable quick reference in the body) and Log out / Clear Bandcamp session (with confirmation).
+  when empty, inside its right end) and the gear button.
+- The gear menu holds Refresh, Hide pre-orders (checkable, remembered), Keyboard shortcuts
+  (a two-column quick reference in the body), Collection (built from the username in the
+  library cache; `xdg-open`; disabled until the username is known) and Log out (with confirmation).
 - Panel has tabs for Albums and Playlists, a search box, and a now-playing bar.
 - **Keyboard (panel-scoped only):** these shortcuts work only while the popup is open and focused.
   The plugin registers no global shortcut; optional user binds are in
@@ -64,10 +64,11 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   - `Space` toggles play/pause when a list is focused; while typing in search it types a space.
   - `/` returns focus to search. Typing while a list is focused also returns to search and keeps
     the character.
-  - `Tab` / `Shift+Tab` walk the whole panel in visual order: search → ×/magnifier → Collection →
+  - `Tab` / `Shift+Tab` walk the whole panel in visual order: search → ×/magnifier →
     gear → Albums → Playlists → Sort → sort direction → album/playlist list → Up Next (only when the
     queue exists) → its Clear button → track list → Shuffle → Previous → Play/Pause → Next → wrap.
-    Entering a list focuses its current/selected row; arrows move inside it.
+    Entering a list focuses its current/selected row; arrows move inside it. Every focused
+    control shows the theme accent.
   - `Enter` / `Space` activate a focused button. The 28 px arrow beside Sort flips the active tab's
     sort direction (up = ascending, down = descending); the same arrow marks the selected Sort row.
   - `Esc` backs out one layer: cancel confirmation, close menu, clear search, close window.
@@ -106,9 +107,9 @@ The plugin **ships no keybindings** (store rule). Add these two to your personal
 Hyprland bindings — on current Omarchy that is `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + ALT + B", "OmaTimeAtBandCamp panel",
+o.bind("SUPER + ALT + B", "OmaTimeAtBandcamp panel",
        "omarchy-shell omatimeatbandcamp toggle")
-o.bind("SUPER + ALT + P", "OmaTimeAtBandCamp play/pause",
+o.bind("SUPER + ALT + P", "OmaTimeAtBandcamp play/pause",
        "omarchy-shell omatimeatbandcamp playPause")
 ```
 
@@ -134,8 +135,8 @@ group on left/right" (Omarchy's tiling defaults), so either unbind those two
 first (see below) or pick different keys.
 
 ```lua
-o.bind("SUPER + ALT + LEFT",  "OmaTimeAtBandCamp previous", "omarchy-shell omatimeatbandcamp previous")
-o.bind("SUPER + ALT + RIGHT", "OmaTimeAtBandCamp next",     "omarchy-shell omatimeatbandcamp next")
+o.bind("SUPER + ALT + LEFT",  "OmaTimeAtBandcamp previous", "omarchy-shell omatimeatbandcamp previous")
+o.bind("SUPER + ALT + RIGHT", "OmaTimeAtBandcamp next",     "omarchy-shell omatimeatbandcamp next")
 ```
 
 Or in `~/.config/hypr/hyprland.conf`:
@@ -157,7 +158,7 @@ bind = SUPER ALT, RIGHT, exec, omarchy-shell omatimeatbandcamp next
   arrow):
   ```lua
   hl.unbind("SUPER + ALT + LEFT")
-  o.bind("SUPER + ALT + LEFT", "OmaTimeAtBandCamp previous", "omarchy-shell omatimeatbandcamp previous")
+  o.bind("SUPER + ALT + LEFT", "OmaTimeAtBandcamp previous", "omarchy-shell omatimeatbandcamp previous")
   ```
   The plugin never unbinds or overwrites anything for you.
 
@@ -165,7 +166,7 @@ bind = SUPER ALT, RIGHT, exec, omarchy-shell omatimeatbandcamp next
 
 These work only while the popup is open and focused:
 
-- `Tab` / `Shift+Tab` walk the whole panel: search → ×/magnifier → Collection → gear → Albums →
+- `Tab` / `Shift+Tab` walk the whole panel: search → ×/magnifier → gear → Albums →
   Playlists → Sort → sort direction → list → Up Next + Clear (when a queue exists) → track list →
   Shuffle → Previous → Play/Pause → Next, then wrap. Lists open on their current/selected row.
 - `↓` / `↑` from search enter the focused list and move the cursor; `Enter` plays the selected
@@ -211,15 +212,16 @@ These work only while the popup is open and focused:
   above the context with Clear / Remove (`Delete`) / play-now (`Enter`), and cleared by a shell
   restart or a new context; see [Queue](#queue).
 - Keyboard shortcuts view: the gear menu's Keyboard shortcuts item swaps the two panes for a
-  grouped, scrollable reference of every built-in key, then restores the exact panes, scroll and
-  queue when closed.
+  two-column reference of every built-in key (Navigation/Playback left, Queue/Search & menus
+  right; it fits without scrolling at the standard panel size), then restores the exact panes,
+  scroll and queue when closed.
 - Refresh runs the backend sync in the background from the gear menu (cached library stays on screen);
   streams for Subsonic tracks are resolved by the backend (`backend play`), so stream URLs/credentials
   never appear in argv or logs
 - Cached cover art: `backend art` fetches the current Subsonic cover, downscales it to <=128 px and
   writes `~/.cache/omatimeatbandcamp/current-art.jpg` for MPRIS; when stopped it writes the bundled
   BC placeholder. No cover URL ever reaches QML, the bar config or a log
-- Collection link: opens the verified collection page with `xdg-open`; the username comes from the
+- Collection (gear menu): opens the verified collection page with `xdg-open`; the username comes from the
   library cache, so no per-user URL is hardcoded
 - MPRIS: `backend/mpris.py` publishes title/artist/album, a **local** `file://` cover URL,
   playback status, position and transport controls. mpv's `path` (the credential-bearing stream
