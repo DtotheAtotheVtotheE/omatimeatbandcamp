@@ -894,6 +894,30 @@
  ],
  "playlists": [
   {
+   "id": "pl:fx-2",
+   "name": "Rock & Roll Faves",
+   "declared_track_count": 1,
+   "tracks": [
+    {
+     "title": "Only Song",
+     "artist": "Various",
+     "album": "Mixed",
+     "track_number": 1,
+     "duration": 181.0,
+     "year": null,
+     "streamable": true,
+     "streamable_reason": "subsonic-listed",
+     "subsonic_id": "t:fx-297703-1",
+     "bandcamp_id": null,
+     "subsonic_album_id": null
+    }
+   ],
+   "tracks_loaded": true,
+   "public": null,
+   "changed": null,
+   "returned_track_count": 1
+  },
+  {
    "id": "pl:fx-1",
    "name": "Postpunky?",
    "declared_track_count": 5,
@@ -968,30 +992,6 @@
    "public": null,
    "changed": null,
    "returned_track_count": 5
-  },
-  {
-   "id": "pl:fx-2",
-   "name": "Rock & Roll Faves",
-   "declared_track_count": 1,
-   "tracks": [
-    {
-     "title": "Only Song",
-     "artist": "Various",
-     "album": "Mixed",
-     "track_number": 1,
-     "duration": 181.0,
-     "year": null,
-     "streamable": true,
-     "streamable_reason": "subsonic-listed",
-     "subsonic_id": "t:fx-297703-1",
-     "bandcamp_id": null,
-     "subsonic_album_id": null
-    }
-   ],
-   "tracks_loaded": true,
-   "public": null,
-   "changed": null,
-   "returned_track_count": 1
   }
  ]
 }

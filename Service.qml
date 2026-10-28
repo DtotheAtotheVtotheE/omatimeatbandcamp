@@ -146,8 +146,12 @@ Item {
 
   // Sorting and filtering of the Albums list. Persisted in stateDir/ui.json.
   property string sortMode: "added"
+  // v3.3.1 follow-up: the Playlists tab keeps its own sort (default = the
+  // library's source order). Persisted alongside the Albums sort.
+  property string playlistSortMode: "added"
   property bool hidePreorders: false
   readonly property var albumsView: LibraryModel.sortAlbums(collection, sortMode, hidePreorders)
+  readonly property var playlistsView: LibraryModel.sortPlaylists(playlists, playlistSortMode)
 
   // True from the moment Refresh starts (browser-session import, then backend sync)
   // until the sync exits; drives the toolbar Refresh button.
@@ -202,6 +206,7 @@ Item {
     try {
       var d = JSON.parse(uiFile.text() || "{}")
       if (LibraryModel.validSort(d.sortMode)) sortMode = d.sortMode
+      if (LibraryModel.validPlaylistSort(d.playlistSortMode)) playlistSortMode = d.playlistSortMode
       hidePreorders = d.hidePreorders === true
     } catch (e) {
     }
@@ -209,12 +214,19 @@ Item {
 
   function saveUi() {
     mkStateDir.running = true
-    uiFile.setText(JSON.stringify({ sortMode: sortMode, hidePreorders: hidePreorders }) + "\n")
+    uiFile.setText(JSON.stringify({ sortMode: sortMode, playlistSortMode: playlistSortMode, hidePreorders: hidePreorders }) + "\n")
   }
 
   function setSortMode(mode) {
     if (!LibraryModel.validSort(mode) || mode === sortMode) return
     sortMode = mode
+    if (searchQuery !== "") search(searchQuery)
+    saveUi()
+  }
+
+  function setPlaylistSortMode(mode) {
+    if (!LibraryModel.validPlaylistSort(mode) || mode === playlistSortMode) return
+    playlistSortMode = mode
     if (searchQuery !== "") search(searchQuery)
     saveUi()
   }
@@ -935,6 +947,18 @@ Item {
         if (((a.title || "") + " " + (a.artist || "")).toLowerCase().indexOf(ql) >= 0) albums.push(a)
       }
       r.albums = albums
+    }
+    // v3.3.1 follow-up: the Playlists group follows the Playlists tab's own
+    // sort, the same way Albums follows theirs. Search stays global.
+    if (r.playlists.length > 1) {
+      var orderedPl = LibraryModel.sortPlaylists(playlists, playlistSortMode)
+      var matches = {}
+      for (var p = 0; p < r.playlists.length; p++) matches[String(r.playlists[p].uid)] = true
+      var grouped = []
+      for (var o = 0; o < orderedPl.length; o++) {
+        if (matches[String(orderedPl[o].uid)]) grouped.push(orderedPl[o])
+      }
+      r.playlists = grouped
     }
     searchResults = r
   }

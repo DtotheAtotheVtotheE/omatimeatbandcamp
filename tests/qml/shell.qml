@@ -40,6 +40,7 @@ ShellRoot {
   property var chainFocus: null
   property var menuShot: null
   property bool menuSave: false
+  property real frameNoQueueHeadY: 0
 
   Plug.Service { id: svc }
 
@@ -219,7 +220,10 @@ ShellRoot {
     var all = allButtons(stage, []).filter(function(b) { return b.iconText === "\uf04b" || b.iconText === "\uf04c" })
     return all[all.length - 1]
   }
-  function sortButton() { return button("Sort: " + LibraryModel.sortLabel(svc.sortMode)) }
+  function sortButton() {
+    var mode = svc.activeTab === 1 ? svc.playlistSortMode : svc.sortMode
+    return button("Sort: " + LibraryModel.sortLabel(mode))
+  }
   function searchField() { return find(stage, function(it) { return it.hasOwnProperty("placeholderText") }) }
   function leftList() { return named(stage, "leftList") }
   function trackList() { return named(stage, "trackList") }
@@ -853,12 +857,55 @@ ShellRoot {
       key(Qt.Key_Escape)
       click(button("Playlists (2)"))
     },
+    // ---- pre-release: Sort on the Playlists tab (reduced, per-tab, persisted) ----
     function() {
-      check("Sort is only offered on the Albums list", !button("Sort: Recently added"))
+      check("pre-release: Sort is present on the Playlists tab with its reduced label",
+        !!button("Sort: Recently added") && sortButton().visible === true)
+      check("pre-release: playlists start in the library's source order (Recently added)",
+        svc.playlistSortMode === "added" && titlesEqual(leftTitles(), ["Rock & Roll Faves", "Postpunky?"]))
+      click(sortButton())
+    },
+    function() {
+      var labels = panel.menuItems.map(function(m) { return m.label })
+      check("pre-release: the Playlists sort menu offers EXACTLY Recently added and Title A–Z",
+        labels.join("|") === "Recently added|Title A–Z" && !button("Artist A–Z") && !button("Release date"))
+      check("pre-release: Recently added is checked on the default Playlists sort",
+        panel.menuItems[0].icon === "\uf00c" && panel.menuItems[1].icon !== "\uf00c")
+      click(button("Title A–Z"))
+    },
+    function() {
+      check("pre-release: Title A–Z reorders the playlists case-insensitively",
+        svc.playlistSortMode === "title" && !!button("Sort: Title A–Z") &&
+        titlesEqual(leftTitles(), ["Postpunky?", "Rock & Roll Faves"]))
+      check("pre-release: the playlist sort does not change the Albums sort", svc.sortMode === "added")
+      click(sortButton())
+    },
+    function() { click(button("Recently added")) },
+    function() {
+      check("pre-release: Recently added restores the library source order",
+        svc.playlistSortMode === "added" && titlesEqual(leftTitles(), ["Rock & Roll Faves", "Postpunky?"]))
+      click(sortButton())
+    },
+    function() { click(button("Title A–Z")) },
+    function() {
+      check("pre-release: playlist Title A–Z is the persisted choice for relaunch",
+        svc.playlistSortMode === "title")
+      searchField().text = "o"
+      svc.search("o")
+    },
+    function() {
+      check("pre-release: the search Playlists group follows the playlist sort",
+        svc.searchResults.playlists.map(function(p) { return p.name }).join("|") === "Postpunky?|Rock & Roll Faves")
+      searchField().text = ""
+      svc.search("")
       openSettings()
       check("Hide pre-orders stays available in the gear menu on the Playlists tab", !!button("Hide pre-orders"))
       key(Qt.Key_Escape)
       click(button("Albums (13)"))
+    },
+    function() {
+      check("pre-release: the Albums sort is still its own choice after changing Playlists",
+        svc.sortMode === "added" && !!button("Sort: Recently added") && titlesEqual(leftTitles(), expAdded))
     },
     function() { click(sortButton()) },
     function() { click(button("Title A–Z")) },
@@ -2064,6 +2111,84 @@ ShellRoot {
       svc.clearUserQueue()
     },
 
+    // ---- pre-release: Up Next gets its own bordered sub-frame ----
+    function() {
+      resetUserQueueChecks()
+      svc.loadLibrary()
+      panel.selectedPlaylistUid = ""
+      panel.selectedAlbumUid = ""
+      svc.activeTab = 0
+      searchField().text = ""
+      svc.search("")
+      panel.pickAlbum(svc.collection[collIndex(host.croc)])
+      showRow(host.croc)
+    },
+    function() {
+      var f = named(stage, "upNext"), dp = named(stage, "detailPane")
+      var headY = named(stage, "detailTitle").mapToItem(dp, 0, 0).y
+      check("pre-release: an empty queue shows NO Up Next frame and leaves no gap",
+        f.visible === false && f.height === 0 && Math.abs(headY - Style.spacing.sm) < 0.5)
+      host.frameNoQueueHeadY = headY
+      svc.addTrackToQueue(mk("fr1", 1)[0])
+    },
+    function() {
+      var f = named(stage, "upNext"), dp = named(stage, "detailPane")
+      var lp = named(stage, "leftPane"), lr = named(stage, "libraryRow"), list = named(stage, "upNextList")
+      var head = named(stage, "upNextHeader"), clear = named(stage, "upNextClear")
+      var headY = named(stage, "detailTitle").mapToItem(dp, 0, 0).y
+      var hy = head.mapToItem(f, 0, 0).y, cy = clear.mapToItem(f, 0, 0).y
+      check("pre-release: a non-empty queue shows the bordered Up Next frame",
+        f.visible === true && f.height > 0 && f.border.width > 0)
+      check("pre-release: the frame border is the shared pane/control border colour",
+        f.border.color === dp.border.color && f.border.color === lp.border.color &&
+        f.border.color === named(stage, "footer").border.color)
+      check("pre-release: the frame height includes its own border and padding",
+        Math.abs(f.height - (clear.height + Style.space(2) + list.height
+          + 2 * (f.border.width + panel.upNextFramePadding))) < 0.5)
+      check("pre-release: header and Clear sit inside the frame's top row",
+        isInside(head, f) && isInside(clear, f) &&
+        hy >= f.contentTopInset - 0.5 && hy + head.height <= f.contentTopInset + clear.height + 0.5 &&
+        Math.abs((hy + head.height / 2) - (cy + clear.height / 2)) < 1)
+      check("pre-release: queued rows start below the header/Clear top row",
+        list.mapToItem(f, 0, 0).y >= f.contentTopInset + clear.height - 0.5)
+      check("pre-release: the frame adds its real height + gap above the album header",
+        Math.abs(headY - (host.frameNoQueueHeadY + f.height + Style.spacing.sm)) < 0.5)
+      check("pre-release: a small queue keeps both panes exactly equal",
+        Math.abs(lp.height - lr.height) < 0.5 && Math.abs(dp.height - lr.height) < 0.5 &&
+        Math.abs(lp.mapToItem(lr, 0, lp.height).y - dp.mapToItem(lr, 0, dp.height).y) < 0.5)
+      for (var i = 0; i < 7; i++) svc.addTrackToQueue(mk("frx" + i, 1)[0])
+    },
+    function() {
+      var f = named(stage, "upNext"), dp = named(stage, "detailPane")
+      var lp = named(stage, "leftPane"), lr = named(stage, "libraryRow")
+      var list = named(stage, "upNextList"), tl = trackList()
+      var trackY = tl.contentY
+      check("pre-release: the queue list caps at six visible rows and scrolls internally",
+        list.count === 8 && Math.abs(list.height - 6 * Style.space(30)) < 0.5 &&
+        list.contentHeight > list.height + 1)
+      list.contentY = list.contentHeight - list.height
+      check("pre-release: scrolling the queue never scrolls the album track list",
+        list.contentY > 0 && tl.contentY === trackY)
+      check("pre-release: a large queue keeps both panes exactly equal with the frame present",
+        Math.abs(lp.height - lr.height) < 0.5 && Math.abs(dp.height - lr.height) < 0.5 &&
+        Math.abs(lp.mapToItem(lr, 0, lp.height).y - dp.mapToItem(lr, 0, dp.height).y) < 0.5)
+      check("pre-release: the frame stays inside the detail pane",
+        f.mapToItem(dp, 0, 0).y >= 0 && f.mapToItem(dp, 0, 0).y + f.height <= dp.height)
+      svc.clearUserQueue()
+    },
+    function() {
+      check("pre-release: clearing the queue removes the frame (no frame, no leftover gap)",
+        named(stage, "upNext").visible === false && named(stage, "upNext").height === 0)
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      svc.activeTab = 0
+      searchField().text = ""
+      svc.search("")
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+    },
+
     // same context keeps the queue; a new context clears it
     function() {
       resetUserQueueChecks()
@@ -2233,6 +2358,21 @@ ShellRoot {
     function() { toggleHidePreorders() },
     function() {
       check("[relaunch] filter can be turned off again", svc.hidePreorders === false && titlesEqual(leftTitles(), expTitle))
+      click(button("Playlists (2)"))
+    },
+    function() {
+      check("[relaunch] playlist sort restored from disk (Title A–Z)",
+        svc.playlistSortMode === "title" && svc.sortMode === "title" && !!button("Sort: Title A–Z"))
+      check("[relaunch] playlists are Title A–Z in the relaunched process",
+        titlesEqual(leftTitles(), ["Postpunky?", "Rock & Roll Faves"]))
+      click(sortButton())
+    },
+    function() {
+      check("[relaunch] playlist sort menu still has exactly two options",
+        panel.menuItems.map(function(m) { return m.label }).join("|") === "Recently added|Title A–Z")
+      check("[relaunch] the restored playlist choice is the checked item",
+        panel.menuItems[1].icon === "\uf00c" && panel.menuItems[0].icon !== "\uf00c")
+      key(Qt.Key_Escape)
     }
   ]
 

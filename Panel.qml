@@ -109,8 +109,13 @@ Panel {
   readonly property int upNextMaxVisibleRows: detailMinTrackRows
   readonly property real upNextListHeight: upNextCount === 0 ? 0
     : Math.min(upNextCount, upNextMaxVisibleRows) * upNextRowHeight
+  // v3.3.1 follow-up: Up Next gets its own bordered sub-frame. The frame's
+  // border + padding are counted in the section height, so the v3.2 floor/cap
+  // math and the equal pane heights stay honest.
+  readonly property real upNextFramePadding: Style.spacing.sm
+  readonly property real upNextFrameChrome: 2 * (Style.normalBorderWidth + upNextFramePadding)
   readonly property real upNextSectionHeight: upNextCount === 0 ? 0
-    : controlHeight + Style.space(2) + upNextListHeight
+    : controlHeight + Style.space(2) + upNextListHeight + upNextFrameChrome
   readonly property bool detailContextActive: query !== "" || !!selectedPlaylist || !!selectedAlbum
   readonly property real detailRowContentHeight: detailHeader.height + Style.spacing.sm
     + (upNextCount > 0 ? upNextSectionHeight + Style.spacing.sm : 0)
@@ -152,11 +157,18 @@ Panel {
     { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
     { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
   ]
+  // v3.3.1 follow-up: Albums keep the full sort set; Playlists get exactly two
+  // choices. The two tabs own independent, persisted choices.
+  readonly property bool playlistsTab: !!service && service.activeTab === 1
+  readonly property string activeSortMode: service
+    ? (playlistsTab ? service.playlistSortMode : service.sortMode) : "added"
+  readonly property string activeSortLabel: LibraryModel.sortLabel(activeSortMode)
   readonly property var sortItems: {
     var out = []
-    for (var i = 0; i < LibraryModel.SORT_MODES.length; i++) {
-      var m = LibraryModel.SORT_MODES[i]
-      out.push({ icon: service && service.sortMode === m.id ? "\uf00c" : "\u2003", label: m.label, action: "sort:" + m.id, checked: service && service.sortMode === m.id })
+    var modes = playlistsTab ? LibraryModel.PLAYLIST_SORT_MODES : LibraryModel.SORT_MODES
+    for (var i = 0; i < modes.length; i++) {
+      var m = modes[i]
+      out.push({ icon: activeSortMode === m.id ? "\uf00c" : "\u2003", label: m.label, action: "sort:" + m.id, checked: activeSortMode === m.id })
     }
     return out
   }
@@ -177,9 +189,10 @@ Panel {
   property string focusPane: ""       // "", "list", "tracks"
   property int listCursor: -1
   property int trackCursor: -1
+  readonly property var playlistRows: service ? service.playlistsView : []
   readonly property var listRows: query !== ""
     ? searchRows
-    : (service && service.activeTab === 1 ? playlists : albums)
+    : (service && service.activeTab === 1 ? playlistRows : albums)
 
   function buildSearchRows() {
     var out = []
@@ -532,7 +545,10 @@ Panel {
       if (service) service.setHidePreorders(!service.hidePreorders)
       searchField.forceActiveFocus()
     } else if (action.indexOf("sort:") === 0) {
-      if (service) service.setSortMode(action.substring(5))
+      if (service) {
+        if (root.playlistsTab) service.setPlaylistSortMode(action.substring(5))
+        else service.setSortMode(action.substring(5))
+      }
       searchField.forceActiveFocus()
     }
   }
@@ -898,14 +914,15 @@ Panel {
             Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
-          // Sorting applies to the Albums list only. Shuffle moved to the
-          // footer transport in v3; Refresh/Hide pre-orders moved to the gear menu.
+          // v3.3.1 follow-up: Sort is present on BOTH tabs. Albums keep the
+          // full option set; Playlists offer Recently added / Title A–Z.
+          // Shuffle moved to the footer transport in v3; Refresh/Hide
+          // pre-orders moved to the gear menu.
           BcButton {
             id: sortButton
             objectName: "sortButton"
-            visible: !root.service || root.service.activeTab === 0
             height: root.controlHeight
-            text: "Sort: " + LibraryModel.sortLabel(root.service ? root.service.sortMode : "added")
+            text: "Sort: " + root.activeSortLabel
             iconText: "\uf0d7"
             active: root.menuKind === "sort"
             focusable: true
@@ -1203,15 +1220,24 @@ Panel {
             // the session-only user queue, in added order. Rows select nothing:
             // double-click plays a row immediately (dropping it and everything
             // ahead); right-click removes it. Clear only empties the queue.
-            Item {
+            BorderSurface {
               id: upNextSection
               objectName: "upNext"
               visible: root.upNextCount > 0
               width: parent.width
               height: root.upNextSectionHeight
+              radius: Style.cornerRadius
+              color: "transparent"
+              // Same shared border as the panes and controls; no new colour.
+              borderSpec: root.paneBorderSpec
+              padding: root.upNextFramePadding
 
               Column {
                 anchors.fill: parent
+                anchors.topMargin: upNextSection.contentTopInset
+                anchors.rightMargin: upNextSection.contentRightInset
+                anchors.bottomMargin: upNextSection.contentBottomInset
+                anchors.leftMargin: upNextSection.contentLeftInset
                 spacing: Style.space(2)
 
                 Item {

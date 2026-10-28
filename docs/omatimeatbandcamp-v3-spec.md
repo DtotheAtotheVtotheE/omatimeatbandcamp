@@ -1016,3 +1016,218 @@ the query. Both were re-asserted (see below).
    the menu.
 7. Type a letter with the left list focused: search opens with that letter;
    press Space with a list focused: playback toggles and no space is typed.
+
+## Pre-release fixes (owner-requested, 2026-10-27): Sort on Playlists + Up Next frame
+
+Scope: two owner requests before release. Sort must stay on the Playlists tab
+with a reduced option set, remembered per tab; and Up Next needs its own
+bordered sub-frame so it no longer runs into the selected album's header and
+tracks. Search matching, playback, the queue's semantics, the v3.2 height
+floor/cap, the MPRIS whitelist and every other view are unchanged.
+
+### Baseline (fresh session, before editing)
+
+- Unit: `Ran 97 tests ... OK (skipped=5)`
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK`
+- QML (`tests/qml/run.sh`): **446** checks = phase 1 415 + relaunch 8 +
+  real-data 17 + 6 script-side. All `FAILS=0`.
+
+The baseline matched the expected 97/5 unit, 5 live and 446 QML figures, so
+editing proceeded.
+
+### Playlist source-order check (done before writing the sort)
+
+The spec defines Recently Added as the library's existing source order, so the
+order had to be verified first. `backend/library.py::_pull_playlists` preserves
+the order Subsonic returns, and the cache keeps that list verbatim. The real
+cache (`~/.cache/omatimeatbandcamp/library/library.json`, 33 playlists) starts:
+
+```
+Postpunky?, aaaaaaa, Zaké, dave’s faves., jim o, Instru, Glass Beams!,
+Peppery Art, geotic!, jim & yola, ...
+```
+
+That is not alphabetical, so labelling it "Recently added" is honest: playlists
+carry no purchased/release timestamp in the model or the cache, so the source
+order is the only "added" ordering that exists — the same definition Albums
+uses when it has no date. No relabelling or invented timestamp was needed.
+
+The QML fixture order was swapped (`Rock & Roll Faves`, then `Postpunky?`) so
+source order and Title A–Z differ and both can be asserted.
+
+### What changed — Item 1 (Sort on Playlists)
+
+- **`LibraryModel.js`**: new `PLAYLIST_SORT_MODES` (exactly
+  `Recently added`, `Title A–Z`), `validPlaylistSort(mode)` and
+  `sortPlaylists(playlists, mode)`. `added` returns a copy in source order;
+  `title` sorts by name with the existing accent/case-insensitive `cmpStr`
+  and the id as a stable tie-break.
+- **`Service.qml`**: `playlistSortMode` (default `"added"`),
+  `playlistsView` (the sorted list the UI binds to), `setPlaylistSortMode()`,
+  and persistence in the existing `stateDir/ui.json` file next to `sortMode`
+  and `hidePreorders`. `sortMode` remains the Albums choice; the two are
+  independent. Search now reorders its Playlists group with
+  `sortPlaylists(playlists, playlistSortMode)` and keeps only the matching
+  rows, mirroring how Albums already follow the Albums sort.
+- **`Panel.qml`**: the Sort button is always visible again and its label
+  follows the active tab (`activeSortMode` / `activeSortLabel`); the sort menu
+  lists `PLAYLIST_SORT_MODES` on the Playlists tab and the full
+  `SORT_MODES` on Albums; the menu action dispatches to
+  `setPlaylistSortMode()` or `setSortMode()` by tab. The list binds to
+  `playlistRows` (the sorted view) instead of the raw `playlists`.
+
+Albums sort options, before and after (unchanged):
+
+| Before | After |
+|---|---|
+| Recently added, Artist A–Z, Title A–Z, Release date | Recently added, Artist A–Z, Title A–Z, Release date |
+
+Playlists sort options, before and after:
+
+| Before | After |
+|---|---|
+| (none — button hidden) | Recently added, Title A–Z |
+
+### What changed — Item 2 (Up Next frame)
+
+- Up Next is now a `BorderSurface` inside the detail pane, with the **same
+  `root.paneBorderSpec`** the panes and controls use. No new colours, no new
+  style tokens.
+- Frame chrome is `2 * (Style.normalBorderWidth + Style.spacing.sm)`, i.e.
+  10 px at the current theme (1 px border + 4 px padding per side). The
+  "Up Next (n)" header and Clear stay in the frame's top row, with the queue
+  list below them inside the frame's content insets.
+- `upNextSectionHeight` includes that chrome, so the v3.2 content-driven
+  height counts the border and padding honestly. The floor (6 × 30 px) and
+  cap (396 px) are untouched; the queue list keeps its 6-row cap and scrolls
+  internally, and the album/playlist track list keeps its own independent
+  scroll. `objectName: "upNext"` is unchanged, so all v3.4 queue checks and
+  their probes still address the same item.
+- Empty queue: the section is `visible: false` with height 0, so there is no
+  frame and no residual gap; the album header keeps its usual 4 px offset.
+
+Measured frame heights: 1 queue row → **70 px** (28 header + 2 gap + 30 row +
+10 chrome); 6 visible rows → **220 px** (28 + 2 + 180 + 10). The detail row's
+floor/cap still governs the pane height, and both panes end on the same line
+at both queue sizes.
+
+### Tests (raw counts)
+
+| Run | Baseline | Final |
+|---|---|---|
+| Unit (`python3 -m unittest discover -s tests -t .`) | `Ran 97 ... OK (skipped=5)` | `Ran 97 ... OK (skipped=5)` |
+| Live (`OMATIME_LIVE=1`) | `Ran 5 ... OK` | `Ran 5 ... OK` |
+| QML total | **446** | **472** |
+| — phase 1 (fixture library) | 415 | 437 |
+| — phase 2 (relaunch, same HOME) | 8 | 12 |
+| — real-data smoke | 17 | 17 |
+| — script-side (`run.sh`) | 6 | 6 |
+
+All phases report `FAILS=0`; `tests/qml/run.sh` exits 0 and prints
+`QML tests: OK`. `omarchy plugin validate .` exits 0; `qmllint` over
+`Panel.qml`, `Service.qml`, `BcButton.qml`, `LibraryModel.js` and
+`tests/qml/shell.qml` exits 0 with no errors.
+
+Final − baseline = +26 = 27 new checks − 1 removed check.
+
+### Harness checks updated (and why)
+
+- **Removed** `Sort is only offered on the Albums list`. The requirement
+  changed: Sort must be on Playlists too. Its replacement is the new
+  presence + exact-two-option coverage below, so no coverage was dropped.
+- **Test helper `sortButton()`** now resolves the label from the active tab's
+  mode (`svc.playlistSortMode` on Playlists, `svc.sortMode` on Albums)
+  instead of always `svc.sortMode`. Helper only; no check changed.
+- **Fixture `tests/qml/fixtures/library.json`**: the two playlists were
+  reordered to `Rock & Roll Faves`, `Postpunky?`. Data-only change needed to
+  make source order differ from Title A–Z; album fixtures are untouched.
+- **New frame check tolerance**: the top-row alignment check allows 1 px
+  between the header text's centre and the 28 px Clear button's centre
+  (glyph box is 15 px vs the button's 28 px). This is a new check authored
+  with that tolerance; no existing check was loosened.
+- Every existing Albums sort check is unchanged and still passes: the four
+  options in order (`Recently added|Artist A–Z|Title A–Z|Release date`),
+  the check mark, the order assertions, the filter combination, and the
+  relaunch-restored Album choice.
+- Every existing v3.4 Up Next check is unchanged and still passes (count,
+  row order and labels, above-context placement, Clear, empty-state removal,
+  reorder, height contribution, fits-in-pane).
+
+New Item 1 checks (10 + 4 relaunch):
+
+1. Sort is present on the Playlists tab with its reduced label.
+2. Playlists start in the library's source order (Recently added).
+3. The Playlists sort menu offers EXACTLY Recently added and Title A–Z.
+4. Recently added is checked on the default Playlists sort.
+5. Title A–Z reorders the playlists case-insensitively.
+6. The playlist sort does not change the Albums sort.
+7. Recently added restores the library source order.
+8. Playlist Title A–Z is the persisted choice for relaunch.
+9. The search Playlists group follows the playlist sort.
+10. The Albums sort is still its own choice after changing Playlists.
+11. `[relaunch]` playlist sort restored from disk (Title A–Z).
+12. `[relaunch]` playlists are Title A–Z in the relaunched process.
+13. `[relaunch]` playlist sort menu still has exactly two options.
+14. `[relaunch]` the restored playlist choice is the checked item.
+
+New Item 2 checks (13):
+
+1. An empty queue shows NO Up Next frame and leaves no gap.
+2. A non-empty queue shows the bordered Up Next frame.
+3. The frame border is the shared pane/control border colour (equals the
+   detail pane, left pane and footer borders).
+4. The frame height includes its own border and padding.
+5. Header and Clear sit inside the frame's top row.
+6. Queued rows start below the header/Clear top row.
+7. The frame adds its real height + gap above the album header.
+8. A small queue keeps both panes exactly equal.
+9. The queue list caps at six visible rows and scrolls internally.
+10. Scrolling the queue never scrolls the album track list.
+11. A large queue keeps both panes exactly equal with the frame present.
+12. The frame stays inside the detail pane.
+13. Clearing the queue removes the frame (no frame, no leftover gap).
+
+### Deviations / owner-visible decisions
+
+- **"Recently added" on Playlists is source order**, because playlists have no
+  timestamp anywhere in the model or cache. Verified non-alphabetical against
+  the real library before using the label, as required.
+- **The two tabs persist independently**: `ui.json` now holds
+  `{ sortMode, playlistSortMode, hidePreorders }` in the same file as before.
+  Older files without `playlistSortMode` load as Recently added.
+- **The search Playlists group is only reordered when it has more than one
+  result** (with one result the order cannot be observed). Albums follow the
+  same pattern.
+- **Frame chrome is 10 px at the current theme** and scales with the theme's
+  border width and `spacing.sm`; it is part of the measured section height,
+  not an overlay, so the floor/cap and equal pane bottoms stay exact.
+- **`--load-scripts=no` unchanged**; no credential or stream URL is read,
+  printed or stored by this work.
+
+### Owner live check
+
+Item 1:
+
+1. Open the panel, click Playlists: the Sort button is there and reads
+   `Sort: Recently added` (or your last playlist choice).
+2. Open Sort on Playlists: exactly two rows, Recently added and Title A–Z.
+   Choose Title A–Z: the playlists reorder by name; clear the choice back to
+   Recently added: they return to the library's order.
+3. Switch to Albums: its Sort still offers all four options and keeps its own
+   choice. Switch back to Playlists: your playlist choice is still selected.
+4. Search for a letter matching more than one playlist (e.g. `o`): the
+   Playlists group in the results follows the playlist sort.
+5. Restart the shell: the playlist sort is still what you last chose (and
+   `~/.local/state/omatimeatbandcamp/ui.json` shows `playlistSortMode`).
+
+Item 2:
+
+1. Start an album, right-click a track → Play Next: Up Next appears in its own
+   rounded frame above the album title, same border as the panes and footer.
+2. Check the header row: "Up Next (1)" and Clear sit inside the frame's top
+   edge, with the queued row under them.
+3. Add seven more tracks: the frame stops at six visible rows and scrolls on
+   its own; scrolling it must not move the album track list.
+4. Look at the bottom edges: both panes still end on exactly the same line.
+5. Clear the queue: the frame disappears completely, with no leftover gap
+   above the album header.

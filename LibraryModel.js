@@ -13,6 +13,15 @@ var SORT_MODES = [
   { id: "release", label: "Release date" }
 ]
 
+// v3.3.1 follow-up: the Playlists tab gets its own reduced sort. Playlists
+// carry no purchased/release timestamp, so "added" is the library's source
+// order (the order Subsonic returned, which the cache preserves). Verified
+// against the real library: it is not alphabetical.
+var PLAYLIST_SORT_MODES = [
+  { id: "added", label: "Recently added" },
+  { id: "title", label: "Title A–Z" }
+]
+
 function sortLabel(mode) {
   for (var i = 0; i < SORT_MODES.length; i++) if (SORT_MODES[i].id === mode) return SORT_MODES[i].label
   return SORT_MODES[0].label
@@ -20,6 +29,11 @@ function sortLabel(mode) {
 
 function validSort(mode) {
   for (var i = 0; i < SORT_MODES.length; i++) if (SORT_MODES[i].id === mode) return true
+  return false
+}
+
+function validPlaylistSort(mode) {
+  for (var i = 0; i < PLAYLIST_SORT_MODES.length; i++) if (PLAYLIST_SORT_MODES[i].id === mode) return true
   return false
 }
 
@@ -178,6 +192,21 @@ function sortAlbums(albums, mode, hidePreorders) {
     }
   }
   out.sort(cmp)
+  return out
+}
+
+// Playlist sorting. "added" returns a copy in the library's existing source
+// order; "title" sorts by name, case- and accent-insensitively, with the uid
+// as a stable tie-break.
+function sortPlaylists(playlists, mode) {
+  var out = []
+  var list = playlists || []
+  for (var i = 0; i < list.length; i++) out.push(list[i])
+  if (mode === "title") {
+    out.sort(function(a, b) {
+      return cmpStr(a.name || a.title, b.name || b.title) || cmpStr(a.id, b.id)
+    })
+  }
   return out
 }
 
