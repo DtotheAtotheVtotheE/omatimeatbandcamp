@@ -148,7 +148,7 @@ Panel {
   property real contextMenuAnchorX: 0
   property real contextMenuAnchorY: 0
   readonly property var moreItems: [
-    { icon: "\u21BB", label: "Refresh library", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
+    { icon: "\uf021", label: "Refresh library", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
     { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
     { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
   ]
@@ -213,6 +213,66 @@ Panel {
   function focusSearch() {
     focusPane = ""
     searchField.forceActiveFocus()
+  }
+
+  // v3.3.1: the header focus chain in visual order. Every member is a real
+  // focus target using the shell's shared focus fill/border (TextField or
+  // Button focusable:true). Tab/Shift+Tab only ever move focus; they are never
+  // query text. Hidden controls (Sort on the Playlists tab) are skipped.
+  readonly property var focusChain: [searchField, searchAction, collectionButton,
+    menuButton, albumsButton, playlistsButton, sortButton]
+
+  function focusChainItems() {
+    var out = []
+    for (var i = 0; i < focusChain.length; i++) {
+      var it = focusChain[i]
+      if (it && it.visible && it.enabled) out.push(it)
+    }
+    return out
+  }
+
+  function focusControlName() {
+    var items = focusChainItems()
+    for (var i = 0; i < items.length; i++) if (items[i].activeFocus) return items[i].objectName
+    if (listKeyCatcher.activeFocus) return "listKeyCatcher"
+    return ""
+  }
+
+  function moveFocus(step) {
+    var items = focusChainItems()
+    if (items.length === 0) { focusSearch(); return }
+    var current = -1
+    for (var i = 0; i < items.length; i++) if (items[i].activeFocus) current = i
+    var next = current < 0 ? (step > 0 ? 0 : items.length - 1)
+      : (current + step + items.length) % items.length
+    focusPane = ""
+    items[next].forceActiveFocus()
+  }
+
+  // Returns true when the event was a focus-only Tab/Shift+Tab. The caller must
+  // stop here: no Tab key may reach text entry or the type-to-search branch.
+  function handleTabKey(event) {
+    if (event.key === Qt.Key_Backtab
+        || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
+      moveFocus(-1)
+      event.accepted = true
+      return true
+    }
+    if (event.key === Qt.Key_Tab) {
+      moveFocus(1)
+      event.accepted = true
+      return true
+    }
+    return false
+  }
+
+  // Type-to-search accepts one genuine printable character only. Control
+  // characters (Tab U+0009, newlines, DEL/C1, ...) and empty event.text are
+  // never appended to the query.
+  function isPrintableText(text) {
+    if (!text || text.length !== 1) return false
+    var c = text.charCodeAt(0)
+    return c >= 0x20 && c !== 0x7f && !(c >= 0x80 && c <= 0x9f)
   }
 
   function clearSearch() {
@@ -439,14 +499,25 @@ Panel {
 
   function toggleMenu() {
     menuIndex = 0
-    if (menuKind === "more") closeMenu()
-    else menuKind = "more"
+    if (menuKind === "more") {
+      closeMenu()
+    } else {
+      menuKind = "more"
+      // The menu's own Up/Down/Enter handling lives on the search field (it owns
+      // the window's keyboard). The gear is now a Tab stop too, so hand focus
+      // back to the field when the menu opens; v3.3.1 keeps both behaviours.
+      focusSearch()
+    }
   }
 
   function toggleSortMenu() {
     menuIndex = 0
-    if (menuKind === "sort") closeMenu()
-    else menuKind = "sort"
+    if (menuKind === "sort") {
+      closeMenu()
+    } else {
+      menuKind = "sort"
+      focusSearch()
+    }
   }
 
   function runMenuAction(action) {
@@ -674,8 +745,8 @@ Panel {
             // A little less vertical padding than the stock 30 px field: the
             // text still fits (asserted by the harness) at the shared 28 px.
             verticalPadding: Style.spacing.sm
-            // Leave room inside the right edge for the magnifier glyph.
-            rightPadding: horizontalPadding + Style.space(16) + Style.spacing.sm
+            // Leave room inside the right edge for the clear/magnifier control.
+            rightPadding: horizontalPadding + root.controlHeight + Style.spacing.sm
             anchors.verticalCenter: parent.verticalCenter
             placeholderText: "Search albums, playlists, tracks…"
             foreground: root.foreground
@@ -685,21 +756,33 @@ Panel {
               root.listCursor = -1
             }
 
-            // Dimmed magnifier INSIDE the field, at its right end, the same size
-            // as the footer transport glyphs. It is a plain Text with no input
-            // handlers and enabled: false, so it can never take a click or block
-            // typing; rightPadding above keeps entered text out from under it.
-            Text {
-              objectName: "searchMagnifier"
-              textFormat: Text.PlainText
-              text: "\uf002"
-              color: Qt.darker(root.foreground, 1.3)
-              font.family: root.fontFamily
-              font.pixelSize: Style.space(16)
-              enabled: false
+            // v3.3.1: the right-end icon is a real control in the focus chain.
+            // Empty field: magnifier, click focuses (as before). With text: a ×
+            // with tooltip "Clear search"; click (or Enter/Space when focused)
+            // clears and returns focus to the field. Same icon font/size and
+            // shared focus fill/border as every other BcButton.
+            BcButton {
+              id: searchAction
+              objectName: "searchAction"
+              text: ""
+              iconText: searchField.text !== "" ? "\uf00d" : "\uf002"
+              iconSize: Style.space(16)
+              height: root.controlHeight
+              width: height
+              bordered: false
+              focusable: true
+              tooltipText: searchField.text !== "" ? "Clear search" : ""
+              foreground: root.foreground
+              fontFamily: root.fontFamily
               anchors.right: parent.right
-              anchors.rightMargin: Style.spacing.controlPaddingX
+              anchors.rightMargin: 0
               anchors.verticalCenter: parent.verticalCenter
+              onClicked: {
+                if (searchField.text !== "") root.clearSearch()
+                root.focusSearch()
+              }
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
             }
 
             // The search field owns keyboard focus for the whole window, so the
@@ -709,6 +792,9 @@ Panel {
             // handled in its own handler below.)
             Keys.priority: Keys.BeforeItem
             Keys.onPressed: function(event) {
+              // v3.3.1: Tab/Shift+Tab are ALWAYS focus movement, in every state,
+              // so they can never reach text entry as a U+0009 character.
+              if (root.handleTabKey(event)) return
               if (root.logoutConfirmOpen) {
                 logoutConfirm.handleKey(event)
                 event.accepted = true
@@ -743,11 +829,14 @@ Panel {
             text: "Collection"
             height: root.controlHeight
             enabled: root.collectionUrl !== ""
+            focusable: true
             tooltipText: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet"
             foreground: root.foreground
             fontFamily: root.fontFamily
             anchors.verticalCenter: parent.verticalCenter
             onClicked: if (root.service) root.service.openExternal(root.collectionUrl)
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
           // v3.1: the gear/settings button now lives in the search row. Its menu
@@ -759,10 +848,13 @@ Panel {
             height: root.controlHeight
             tooltipText: "Settings"
             active: root.menuOpen
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
             anchors.verticalCenter: parent.verticalCenter
             onClicked: root.toggleMenu()
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
         }
       }
@@ -779,35 +871,49 @@ Panel {
           spacing: Style.spacing.sm
 
           BcButton {
+            id: albumsButton
+            objectName: "albumsButton"
             text: "Albums (" + root.albums.length + ")"
             height: root.controlHeight
             selected: (root.service ? root.service.activeTab : 0) === 0
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: if (root.service) root.service.activeTab = 0
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
           BcButton {
+            id: playlistsButton
+            objectName: "playlistsButton"
             text: "Playlists (" + root.playlists.length + ")"
             height: root.controlHeight
             selected: (root.service ? root.service.activeTab : 0) === 1
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: if (root.service) root.service.activeTab = 1
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
           // Sorting applies to the Albums list only. Shuffle moved to the
           // footer transport in v3; Refresh/Hide pre-orders moved to the gear menu.
           BcButton {
             id: sortButton
+            objectName: "sortButton"
             visible: !root.service || root.service.activeTab === 0
             height: root.controlHeight
             text: "Sort: " + LibraryModel.sortLabel(root.service ? root.service.sortMode : "added")
             iconText: "\uf0d7"
             active: root.menuKind === "sort"
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
             onClicked: root.toggleSortMenu()
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
         }
 
@@ -1770,6 +1876,9 @@ Panel {
       focus: true
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
+        // v3.3.1: Tab/Shift+Tab move focus out of the lists. Handled before the
+        // type-to-search branch so U+0009 can never become query text.
+        if (root.handleTabKey(event)) return
         if (event.key === Qt.Key_Escape) {
           root.handleEscape(); event.accepted = true; return
         }
@@ -1789,7 +1898,10 @@ Panel {
         }
         if (event.key === Qt.Key_Slash || event.text === "/") { root.focusSearch(); event.accepted = true; return }
         // Typing while a list is focused returns to search and keeps the character.
-        if (event.text && event.text.length === 1 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+        // v3.3.1: only a genuine printable character qualifies; navigation and
+        // control keys carry empty or control-character event.text and must never
+        // be appended to the query (the Tab/Down/Tab blanking bug).
+        if (root.isPrintableText(event.text) && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
           root.focusSearch()
           searchField.text = searchField.text + event.text
           searchField.cursorPosition = searchField.text.length
@@ -1872,6 +1984,7 @@ Panel {
 
       BorderSurface {
         id: menuCard
+        objectName: "menuCard"
         width: Math.min(root.menuKind === "sort" ? Style.space(220) : Style.space(300), parent.width)
         height: menuColumn.implicitHeight + contentTopInset + contentBottomInset
         radius: Style.cornerRadius

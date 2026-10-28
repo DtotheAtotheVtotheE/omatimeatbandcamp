@@ -827,3 +827,192 @@ added to keep the height assertion honest, not a weakened existing one.
    `omarchy restart shell` also starts you with no queue (session-only).
 10. Check the popup height with Up Next full: it grows by the queue rows, stops
     at the cap and scrolls, and both panes still end on the same line.
+
+## v3.3.1 Tab fix + search clear / focus chain / gear icon (owner-reported, 2026-10-26)
+
+Scope: fix the owner-reported invisible-character bug (open the panel, press
+Tab, Down, Tab: both panes blank to "No results" until Backspace), then three
+polish items — a click-to-clear × in the search field, the header Tab order,
+and the gear menu's Refresh glyph. Search matching, grouped results, playback,
+queue, height model, MPRIS whitelist and every other view are unchanged.
+
+### Baseline (fresh session, before editing)
+
+- Unit: `Ran 97 tests ... OK (skipped=5)`
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK`
+- QML (`tests/qml/run.sh`): **426** checks = phase 1 395 + relaunch 8 +
+  real-data 17 + 6 script-side. All `FAILS=0`.
+
+The baseline matched the expected 97/5 unit, 5 live and 426 QML figures, so
+editing proceeded.
+
+### Part A root cause (confirmed by probe, not inferred)
+
+The Phase 8 type-to-search branch in `listKeyCatcher` accepted any `event.text`
+of length 1. Qt reports Tab as a single-character `event.text` of `"\t"`
+(U+0009), and the search field's own Tab was not consumed as a focus move, so
+the sequence was:
+
+1. Tab with search focused: no explicit traversal ran; the field kept focus.
+2. Down: Phase 8 moved focus to the left list (`listKeyCatcher`).
+3. Tab with the list focused: no Tab branch existed, so the type-to-search
+   branch appended `event.text` (`"\t"`), then returned focus to the field.
+
+Raw harness dump **before** the fix (temporary probe, removed afterwards):
+
+```
+after Tab1: field=true  catcher=false pane=""
+after Down: field=false catcher=true  pane=list
+after Tab2: field=true  catcher=false pane=""
+repro text len=1 cps=[U+9] queryLen=1 rows=0
+```
+
+The query therefore contained exactly one U+0009 code point, which matched
+nothing — the owner's "No results / 0 tracks" state. Backspace removed it and
+restored the lists. Switching Albums/Playlists could not cure it because the
+query was still non-empty.
+
+Fix at two layers:
+
+- `Panel.handleTabKey(event)` now runs first on the search field, the clear
+  control, every header button and `listKeyCatcher`: `Tab`, `Shift+Tab` and
+  `Key_Backtab` always move focus through the chain and are accepted, so the
+  key can never reach text entry or type-to-search.
+- `Panel.isPrintableText(text)` gates type-to-search (and the Slash shortcut is
+  unchanged): exactly one code point, `>= 0x20`, excluding DEL and the C1 range,
+  with Ctrl/Alt/Meta excluded. Navigation/control keys carry empty or control
+  `event.text` and are never appended.
+
+Phase 8 behaviour is preserved: a genuine printable character typed while a
+list is focused still returns to search with the character, `/` still jumps to
+search, and Space with a list focused still toggles play/pause without entering
+the query. Both were re-asserted (see below).
+
+### What changed
+
+- **Part A** — `Panel.qml`: `handleTabKey`, `moveFocus`, `focusChainItems`,
+  `focusControlName`, `isPrintableText`; Tab handling at the top of
+  `searchField`'s and `listKeyCatcher`'s `Keys.onPressed`; printable-only
+  type-to-search.
+- **Part B1 click-to-clear** — the right-end glyph is now a borderless
+  `BcButton` (`searchAction`) inside the field: magnifier (`\uf002`) when empty,
+  × (`\uf00d`) with tooltip `Clear search` when text is present. Clicking with
+  text clears the query and returns focus to the field; clicking when empty
+  focuses the field. `rightPadding` reserves the control's box.
+- **Part B2 Tab order** — `focusChain` is search field → clear/magnifier →
+  Collection → gear → Albums → Playlists → Sort, wrapping both ways. Hidden
+  controls (Sort on Playlists) are skipped. Every member is a real focus target
+  (`focusable: true` on the `BcButton`s), so it paints the shell's existing
+  focus fill/border; no new visual language. Enter/Space on the focused clear
+  button clears and refocuses the field (normal `Button` activation).
+  `focusSearch()` is called when a gear/sort menu opens so the menu's existing
+  Up/Down/Enter handling on the field keeps working even though the gear is now
+  a Tab stop.
+- **Part B3 gear icon** — Refresh changes from the thin text arrow `\u21BB` to
+  the icon font's sync glyph `\uf021`, matching the Log out glyph's family,
+  pixel size, weight, button height and glyph box/baseline. Hide pre-orders is
+  still a plain checkable item (`\uf00c` on, em-space off).
+
+### Tests (raw counts)
+
+- Unit: `Ran 97 tests ... OK (skipped=5)` (unchanged).
+- Live fixtures (`OMATIME_LIVE=1`): `Ran 5 tests ... OK` (unchanged).
+- QML (`tests/qml/run.sh`): **446** checks = phase 1 415 + relaunch 8 +
+  real-data 17 + 6 script-side. All `FAILS=0`. Baseline 426 -> +20 checks
+  (21 new, one existing magnifier check replaced; three existing check
+  descriptions/assertions adjusted as listed below).
+- `/usr/lib/qt6/bin/qmllint Panel.qml BcButton.qml tests/qml/shell.qml`: exit 0,
+  no errors.
+- Credential files were not opened (paths/modes only). No stream URL, cover-art
+  URL or credential value was printed or committed. `--load-scripts=no` is
+  untouched.
+- Acceptance screenshot: `/tmp/omatime-v331-gear-menu.png` (300×106, saved and
+  reloaded by the harness; Refresh sync glyph aligned with the Log out icon,
+  Hide pre-orders plain).
+
+### Harness checks updated (and why)
+
+- `v3.1: magnifier is dimmed and non-interactive (plain disabled Text, no input
+  handlers)` -> `v3.3.1: an empty field shows a focusable magnifier control (not
+  a disabled glyph)`: the old check asserted the design Part B1 deliberately
+  replaces. The new check asserts the same geometry/glyph/size and the new
+  contract (magnifier icon, no tooltip when empty, focusable, inside the field).
+- `9 buttons in the open window ...` -> `10 buttons ...`: the in-field
+  clear/magnifier is a real button now; it is the tenth.
+- `all buttons bordered (one border style)` -> `toolbar/footer/header buttons
+  share one bordered style; the in-field clear action stays borderless by
+  design`: the new control is intentionally borderless inside the text field;
+  every other button must still be bordered. This is stricter than the old
+  blanket check, not looser.
+- `searchMagnifier()` now resolves the shell `Button`'s internal glyph `Text`
+  through the new `iconGlyphOf()` helper (BcButton does not name it). The
+  existing magnifier geometry/font-size checks are unchanged and still pass.
+- No other existing check was loosened or removed.
+
+### New harness coverage (21 checks)
+
+- Part A: owner's exact Tab/Down/Tab leaves text `len=0 cps=[]`, query empty,
+  both lists populated, no empty-state overlays. Raw values are logged
+  (`v3.3.1 owner Tab/Down/Tab: len=0 cps=[] query=0 left=13 tracks=2`).
+- Part A: Tab from a focused list moves to search without typing U+0009;
+  Shift+Tab from a list goes back to Sort without typing.
+- Part A: Delete/Home/End/PageUp/PageDown/arrows with a list focused never enter
+  the query.
+- Part A: a printable `q` with a list focused still jumps to search and is kept;
+  Space with a list focused toggles playback and never enters the query.
+- Part B2: Tab walks the exact chain
+  `searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|searchField`
+  and every stop reports the shared focus ring; Shift+Tab walks it in reverse
+  and wraps.
+- Part B1/B2: with text the field shows ×, tooltip `Clear search`, same icon
+  family/pixel size as the gear; clicking × clears, restores both lists and
+  returns focus; Tab from search lands on the focused clear button; Enter and
+  Space on it clear and refocus.
+- Part B3: Refresh uses `\uf021`, same font family, pixel size, weight, button
+  height and glyph box/baseline offset as Log out; Hide pre-orders remains a
+  plain checkable item.
+- Part B3 acceptance: the open gear menu is grabbed to
+  `/tmp/omatime-v331-gear-menu.png`, saved successfully and reloaded as a real
+  image before the check passes.
+- Esc with the gear menu open still closes only the menu, not the window.
+
+### Deviations / owner-visible decisions
+
+- **The clear/magnifier is a borderless button inside the field.** It uses the
+  shared `BcButton` focus fill/border and icon size, but intentionally keeps no
+  resting border so it reads as part of the text field. It is the one
+  exception to "every button is bordered".
+- **Tab needs an explicit chain.** Qt's automatic traversal did not move focus
+  out of the in-field composite in the offscreen harness (and the owner saw the
+  same), so the chain is explicit; this also guarantees Tab can never become
+  text. Tab now wraps from Sort back to search instead of leaving the panel.
+- **Opening the gear/sort menu returns focus to the search field.** This keeps
+  the existing menu keys (Up/Down/Enter, Esc) working exactly as in v3.4. The
+  gear still shows its `active` fill while its menu is open and regains its
+  focus ring on the next Tab.
+- **Sort is skipped in the chain on the Playlists tab** because it is hidden
+  there; Tab then goes Playlists -> search, Shift+Tab search -> Playlists.
+- **No Phase 8 key conflicts.** `/`, arrows, Enter and the Esc layering behave
+  as before; only Tab/Shift+Tab were previously unhandled and are now focus
+  movement.
+
+### Owner live check
+
+1. **Re-try the original repro:** open the panel, press Tab, Down, Tab. The
+   query must stay empty, both panes populated, and no Backspace should be
+   needed.
+2. Repeat with Shift+Tab variants (Shift+Tab from the list and from search):
+   focus moves, nothing is typed, lists stay.
+3. Type an album/track name into search: results appear; the right-end icon is
+   ×. Click ×: query empties, focus returns to the field, both lists return.
+4. Tab through the header: search field → ×/magnifier → Collection → gear →
+   Albums → Playlists → Sort → back to search. Shift+Tab reverses. Every stop
+   shows a visible focus highlight.
+5. With text in the field, Tab to the × and press Enter, then Space: both clear
+   and put the caret back in the field.
+6. Open the gear menu (icon and with the mouse): Refresh shows the circular
+   sync glyph, matching the Log out icon's weight/alignment; Hide pre-orders is
+   a plain checkable row; Up/Down/Enter still operate the menu; Esc closes only
+   the menu.
+7. Type a letter with the left list focused: search opens with that letter;
+   press Space with a list focused: playback toggles and no space is typed.

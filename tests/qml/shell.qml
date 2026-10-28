@@ -35,6 +35,11 @@ ShellRoot {
   property var queueProbe: null
   property var probe: null
   property real upHeightBefore: 0
+  // v3.3.1 focus-chain and gear-menu probes.
+  property var chain: null
+  property var chainFocus: null
+  property var menuShot: null
+  property bool menuSave: false
 
   Plug.Service { id: svc }
 
@@ -87,6 +92,16 @@ ShellRoot {
     cache: false
     asynchronous: true
     source: "file://" + svc.artPath + "?v=" + svc.artRevision
+  }
+
+  // Load the gear-menu screenshot back from disk so the check measures a real
+  // rendered bitmap (the grab result's QImage is opaque to JS in QML).
+  Image {
+    id: menuShotProbe
+    visible: false
+    cache: false
+    asynchronous: true
+    source: ""
   }
 
   Process {
@@ -165,7 +180,14 @@ ShellRoot {
   function shuffleDot() { return named(named(stage, "footerShuffle"), "shuffleDot") }
   function settingsButton() { return named(stage, "settingsButton") }
   function collectionButton() { return named(stage, "link-collection") }
-  function searchMagnifier() { return named(stage, "searchMagnifier") }
+  function searchAction() { return named(stage, "searchAction") }
+  // The shell Button keeps its glyph Text internal; find it by the icon text so
+  // font/size/position checks still measure the rendered glyph, not the button.
+  function iconGlyphOf(btn) {
+    if (!btn || !btn.iconText) return null
+    return find(btn, function(it) { return it !== btn && it.hasOwnProperty("font") && typeof it.text === "string" && it.text === btn.iconText })
+  }
+  function searchMagnifier() { return iconGlyphOf(searchAction()) }
   function keyboardPanel() { return find(stage, function(it) { return typeof it.fittedContentHeight === "function" }) }
   function isInside(item, ancestor) {
     if (!item || !ancestor) return false
@@ -208,7 +230,18 @@ ShellRoot {
   function comparePlaceholder() { cmpArt.same = false; cmpArt.running = true }
 
   function key(k) { tc.keyClick(k, Qt.NoModifier) }
+  function shiftKey(k) { tc.keyClick(k, Qt.ShiftModifier) }
   function typeText(t) { for (var i = 0; i < t.length; i++) tc.keyClick(t.charAt(i)) }
+  // Raw query-text evidence: length plus the actual code points.
+  function rawText(t) {
+    var cps = []
+    for (var i = 0; i < t.length; i++) {
+      var h = t.charCodeAt(i).toString(16).toUpperCase()
+      while (h.length < 4) h = "0" + h
+      cps.push("U+" + h)
+    }
+    return "len=" + t.length + " cps=[" + cps.join(",") + "]"
+  }
 
   // left-list rows (cacheBuffer is raised so every delegate exists and can be measured)
   function prepLists() { leftList().cacheBuffer = 100000; trackList().cacheBuffer = 100000 }
@@ -336,9 +369,10 @@ ShellRoot {
       check("v3.1: magnifier is INSIDE the field at its right end",
         isInside(m, sf) && ms.x > s.x + sf.width * 0.5 && ms.x + m.width <= s.x + sf.width && ms.x >= s.x + sf.width - 40)
       check("v3.1: magnifier glyph is the footer transport glyph size", m.font.pixelSize === named(stage, "footerPrev").iconSize && m.font.pixelSize === Style.space(16))
-      check("v3.1: magnifier is dimmed and non-interactive (plain disabled Text, no input handlers)",
-        m.color.hslLightness < panel.foreground.hslLightness && m.enabled === false &&
-        !find(m, function(it) { return it.hasOwnProperty("containsMouse") || it.hasOwnProperty("acceptedButtons") }))
+      check("v3.3.1: an empty field shows a focusable magnifier control (not a disabled glyph)",
+        searchField().text === "" && !!searchAction() && searchAction().iconText === "\uf002" &&
+        searchAction().tooltipText === "" && searchAction().focusable === true &&
+        isInside(searchAction(), sf) && !!m && m.text === "\uf002")
       var controls = [sf, gear, cb, button("Albums (" + svc.albumsView.length + ")"), button("Playlists (" + svc.playlists.length + ")"), sortButton(),
         named(stage, "footerShuffle"), named(stage, "footerPrev"), named(stage, "footerPlay"), named(stage, "footerNext")]
       var ch = {}
@@ -369,10 +403,12 @@ ShellRoot {
       var hs = {}, ic = {}, bd = {}
       for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
       log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("9 buttons in the open window (gear, Collection, 3 toolbar, 4 footer; Play all, Stop, Refresh and Shuffle are gone from the toolbar)", bs.length === 9)
+      check("10 buttons in the open window (gear, Collection, 3 toolbar, 4 footer, plus the v3.3.1 in-field clear/magnifier; Play all, Stop, Refresh and Shuffle are gone from the toolbar)", bs.length === 10)
       check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
-      check("all buttons bordered (one border style)", Object.keys(bd).length === 1 && Object.keys(bd)[0] === "true")
+      check("toolbar/footer/header buttons share one bordered style; the in-field clear action stays borderless by design",
+        bs.filter(function(x) { return x.objectName !== "searchAction" }).every(function(x) { return x.bordered === true }) &&
+        named(stage, "searchAction").bordered === false)
       var lp = named(stage, "leftPane"), dp = named(stage, "detailPane"), ft = named(stage, "footer")
       log("border colours: left=" + lp.border.color + " detail=" + dp.border.color + " footer=" + ft.border.color)
       check("album list, detail pane and footer share ONE border colour (the detail pane's theme accent)",
@@ -1296,6 +1332,218 @@ ShellRoot {
     function() {
       var rows = panel.detailTrackList
       check("keyboard: Enter plays the focused track", svc.currentTrack && svc.currentTrack.uid === rows[1].uid && svc.queueIndex === 1)
+    },
+
+    // ---- v3.3.1: Tab is focus movement, never query text ----
+    function() {
+      panel.open()
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      svc.activeTab = 0
+      panel.selectAlbum(panel.albums[0])
+      searchField().text = ""
+      svc.search("")
+      panel.focusPane = ""
+      panel.listCursor = -1
+      prepLists()
+      searchField().forceActiveFocus()
+    },
+    // The owner's exact repro: open panel (search focused), Tab, Down, Tab.
+    function() { key(Qt.Key_Tab) },
+    function() { key(Qt.Key_Down) },
+    function() { key(Qt.Key_Tab) },
+    function() {
+      var t = searchField().text
+      log("v3.3.1 owner Tab/Down/Tab: " + rawText(t) + " query=" + svc.searchQuery.length +
+        " left=" + leftList().count + " tracks=" + trackList().count + " focus=" + panel.focusControlName())
+      check("v3.3.1: owner Tab/Down/Tab leaves the query EMPTY (raw text length 0)",
+        t === "" && svc.searchQuery === "")
+      check("v3.3.1: ...and both panes stay populated (no No results blanking)",
+        panel.listRows.length > 0 && leftList().count > 0 && trackList().count > 0 &&
+        named(stage, "leftEmpty").visible === false && named(stage, "detailEmpty").text === "")
+    },
+    // The actual injection path: Tab while a list owns focus used to append U+0009.
+    function() {
+      panel.focusPane = "list"
+      if (panel.listCursor < 0) panel.listCursor = 0
+      named(stage, "listKeyCatcher").forceActiveFocus()
+    },
+    function() { key(Qt.Key_Tab) },
+    function() {
+      check("v3.3.1: Tab from a focused list moves focus to search and never types U+0009",
+        searchField().activeFocus && searchField().text === "" && svc.searchQuery === "")
+      panel.focusPane = "list"
+      named(stage, "listKeyCatcher").forceActiveFocus()
+    },
+    function() { shiftKey(Qt.Key_Tab) },
+    function() {
+      check("v3.3.1: Shift+Tab from a focused list reverses to Sort and never types",
+        named(stage, "sortButton").activeFocus && searchField().text === "" && svc.searchQuery === "")
+      panel.focusPane = "list"
+      named(stage, "listKeyCatcher").forceActiveFocus()
+    },
+    function() {
+      // Navigation/control keys with empty or control event.text, all with a list
+      // focused: none may become query text.
+      key(Qt.Key_Delete); key(Qt.Key_Home); key(Qt.Key_End)
+      key(Qt.Key_PageDown); key(Qt.Key_PageUp)
+      key(Qt.Key_Up); key(Qt.Key_Down); key(Qt.Key_Left); key(Qt.Key_Right)
+    },
+    function() {
+      check("v3.3.1: navigation/control keys with a list focused never enter the query",
+        searchField().text === "" && svc.searchQuery === "")
+    },
+    function() {
+      panel.focusPane = "list"
+      named(stage, "listKeyCatcher").forceActiveFocus()
+      typeText("q")
+    },
+    function() {
+      check("v3.3.1: a genuine printable character with a list focused still jumps to search and is kept",
+        searchField().text === "q" && svc.searchQuery === "q" && searchField().activeFocus)
+      searchField().text = ""
+      svc.search("")
+      panel.focusPane = ""
+      searchField().forceActiveFocus()
+    },
+    function() {
+      svc.queue = [{ uid: "v331#space", title: "Space Probe", artist: "A", album: "X", duration: 10, streamable: true }]
+      svc.queueIndex = 0
+      svc.isPlaying = true
+      svc.isPaused = false
+      panel.focusPane = "list"
+      named(stage, "listKeyCatcher").forceActiveFocus()
+    },
+    function() { key(Qt.Key_Space) },
+    function() {
+      check("v3.3.1: Space with a list focused toggles playback and is never typed into the query",
+        svc.isPaused === true && searchField().text === "" && svc.searchQuery === "")
+      svc.queue = []
+      svc.queueIndex = -1
+      svc.isPlaying = false
+      svc.isPaused = false
+      svc.position = 0
+      svc.duration = 0
+      // The Phase 8 metadata fence below reads currentTrack; restore a real
+      // library track so this block does not leave it null.
+      var libAlbum = panel.albums.filter(function(x) { return svc.tracksFor(x).length > 0 })[0]
+      var libTrack = libAlbum ? svc.tracksFor(libAlbum)[0] : null
+      if (libTrack) { svc.queue = [libTrack]; svc.queueIndex = 0 }
+      searchField().forceActiveFocus()
+    },
+    // Header chain in visual order, forward and reverse, with the shared focus state.
+    function() {
+      searchField().forceActiveFocus()
+      host.chain = []
+      host.chainFocus = []
+      for (var i = 0; i < 7; i++) {
+        key(Qt.Key_Tab)
+        host.chain.push(panel.focusControlName())
+        var f = panel.focusChainItems().filter(function(x) { return x.activeFocus })[0]
+        host.chainFocus.push(!!f && (f._showFocusRing !== undefined ? f._showFocusRing : f.activeFocus))
+      }
+    },
+    function() {
+      check("v3.3.1: Tab walks search → clear/magnifier → Collection → gear → Albums → Playlists → Sort, then wraps",
+        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|searchField")
+      check("v3.3.1: every chain stop shows the shared focus state",
+        host.chainFocus.every(function(x) { return x === true }))
+      searchField().forceActiveFocus()
+      host.chain = []
+      for (var i = 0; i < 7; i++) {
+        shiftKey(Qt.Key_Tab)
+        host.chain.push(panel.focusControlName())
+      }
+    },
+    function() {
+      check("v3.3.1: Shift+Tab reverses the same chain and wraps",
+        host.chain.join("|") === "sortButton|playlistsButton|albumsButton|settingsButton|link-collection|searchAction|searchField")
+      searchField().forceActiveFocus()
+    },
+    // Click-to-clear × and its keyboard equivalent.
+    function() {
+      searchField().text = "La Dee"
+      svc.search("La Dee")
+      searchField().forceActiveFocus()
+    },
+    function() {
+      var sa = searchAction(), g = searchMagnifier(), gearGlyph = iconGlyphOf(named(stage, "settingsButton"))
+      check("v3.3.1: with text the field shows a ×, the Clear search tooltip and the shared icon font",
+        sa.iconText === "\uf00d" && sa.tooltipText === "Clear search" && !!g && g.text === "\uf00d" &&
+        !!gearGlyph && g.font.family === gearGlyph.font.family && g.font.pixelSize === gearGlyph.font.pixelSize)
+      click(sa)
+    },
+    function() {
+      check("v3.3.1: clicking × clears the query, restores both lists and returns focus to the field",
+        searchField().text === "" && svc.searchQuery === "" && searchField().activeFocus &&
+        leftList().count > 0 && trackList().count > 0)
+    },
+    function() {
+      searchField().text = "The White Lady"
+      svc.search("The White Lady")
+      searchField().forceActiveFocus()
+      key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.3.1: Tab from search lands on the focused clear control", searchAction().activeFocus && searchAction()._showFocusRing === true)
+      key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.3.1: Enter on the focused clear button clears and refocuses the field",
+        searchField().text === "" && svc.searchQuery === "" && searchField().activeFocus)
+      searchField().text = "La Dee"
+      svc.search("La Dee")
+      searchField().forceActiveFocus()
+      key(Qt.Key_Tab)
+    },
+    function() { key(Qt.Key_Space) },
+    function() {
+      check("v3.3.1: Space on the focused clear button clears and refocuses the field too",
+        searchField().text === "" && svc.searchQuery === "" && searchField().activeFocus)
+    },
+    // Gear menu: the refresh glyph uses the same icon font as Log out.
+    function() { openSettings() },
+    function() {
+      var refresh = button("Refresh library"), logout = button("Log out / Clear Bandcamp session")
+      var hide = button("Hide pre-orders")
+      var ri = iconGlyphOf(refresh), li = iconGlyphOf(logout)
+      var card = named(stage, "menuCard")
+      check("v3.3.1: Refresh uses the icon font's sync glyph, same family as Log out",
+        !!refresh && refresh.iconText === "\uf021" && !!ri && !!li && ri.font.family === li.font.family)
+      check("v3.3.1: Refresh and Log out icons share size/weight and aligned boxes/baselines",
+        !!ri && !!li && refresh.iconSize === logout.iconSize && ri.font.pixelSize === li.font.pixelSize &&
+        ri.font.bold === li.font.bold && refresh.height === logout.height && ri.height === li.height &&
+        Math.abs(ri.mapToItem(refresh, 0, 0).y - li.mapToItem(logout, 0, 0).y) <= 0.5)
+      check("v3.3.1: Hide pre-orders stays a plain checkable item",
+        !!hide && hide.selected === svc.hidePreorders &&
+        (hide.iconText === "\uf00c" || hide.iconText === "\u2003"))
+      host.menuShot = null
+      host.menuSave = false
+      menuShotProbe.source = ""
+      card.grabToImage(function(result) {
+        host.menuSave = result.saveToFile("/tmp/omatime-v331-gear-menu.png")
+        host.menuShot = result
+        if (host.menuSave) menuShotProbe.source = "file:///tmp/omatime-v331-gear-menu.png?" + Date.now()
+      })
+    },
+    // grabToImage is async and offscreen frames are lazy; give the callback a
+    // couple of harness ticks before checking.
+    function() { },
+    function() { },
+    function() {
+      log("v3.3.1 shot: saved=" + host.menuSave + " status=" + menuShotProbe.status +
+        " " + menuShotProbe.implicitWidth + "x" + menuShotProbe.implicitHeight)
+      check("v3.3.1: the gear menu rendered a screenshot (refresh + log out + checkable item)",
+        !!host.menuShot && host.menuSave === true && menuShotProbe.status === Image.Ready &&
+        menuShotProbe.implicitWidth > 0 && menuShotProbe.implicitHeight > 0)
+      key(Qt.Key_Escape)
+    },
+    function() {
+      check("v3.3.1: Esc still closes only the gear menu", !panel.menuOpen && panel.opened)
+      searchField().text = ""
+      svc.search("")
+      panel.focusPane = ""
+      searchField().forceActiveFocus()
     },
 
     // ---- Phase 8: metadata fence (the daemon reads only this file) ----

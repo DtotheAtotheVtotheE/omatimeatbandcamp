@@ -49,8 +49,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - Right-click the bar item to play/pause; middle-click goes to the next track.
 - The module text is always plain `BC`; there is no playback suffix and no separate
   album-art bar widget (v3).
-- The search row has the flexible search field (with a dimmed magnifier inside its
-  right end), the single Collection link built from the username in the library cache
+- The search row has the flexible search field (with a click-to-clear ×, or a magnifier
+  when empty, inside its right end), the single Collection link built from the username in the library cache
   (`xdg-open`; disabled until the username is known), and the gear button.
 - The gear menu holds Refresh library, Hide pre-orders (checkable, remembered) and
   Log out / Clear Bandcamp session (with confirmation).
@@ -64,6 +64,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   - `Space` toggles play/pause when a list is focused; while typing in search it types a space.
   - `/` returns focus to search. Typing while a list is focused also returns to search and keeps
     the character.
+  - `Tab` / `Shift+Tab` walk the header in visual order (search → ×/magnifier → Collection → gear → Albums → Playlists → Sort); click the × (or press Enter/Space on it) to clear the search.
   - `Esc` backs out one layer: cancel confirmation, close menu, clear search, close window.
 - **Media keys:** the plugin publishes MPRIS (`org.mpris.MediaPlayer2.omatimeatbandcamp`), so the
   laptop's Play/Pause, Next and Previous keys work through Omarchy's existing
