@@ -93,12 +93,12 @@ PY
 
 launch "phase 1 (fixture library)" "$home" 1
 
-# v3.5.2: the stencil must render in the theme accent, from the saved real-size
-# PNG (not just from the QML binding). Crop the art's exact panel rect and count
-# pixels equal to Color.accent; also prove no baked white survives.
-shot=/tmp/omatime-v352-header.png
-accent=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.2 pixels: accent=\(#[0-9A-Fa-f]\{6\}\).*/\1/p' | head -1)
-rect=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.2 pixels: accent=#[0-9A-Fa-f]\{6\} art=\([0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*\).*/\1/p' | head -1)
+# v3.5.3: the SVG mark must render in the theme accent at full strength, from
+# the saved real-size PNG (not just from the QML binding). Crop the art's exact
+# panel rect and require pixels equal to Color.accent; also prove no baked white.
+shot=/tmp/omatime-v353-header.png
+accent=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.3 pixels: accent=\(#[0-9A-Fa-f]\{6\}\).*/\1/p' | head -1)
+rect=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.3 pixels: accent=#[0-9A-Fa-f]\{6\} art=\([0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*\).*/\1/p' | head -1)
 if [ -n "$accent" ] && [ -n "$rect" ] && [ -f "$shot" ]; then
   probe=$(python3 - "$shot" "$accent" "$rect" <<'PY'
 import subprocess, sys
@@ -119,25 +119,26 @@ bg = Counter(pixels).most_common(1)[0][0]
 want = tuple(bytes.fromhex(accent[1:]))
 ink = [p for p in pixels if max(p) >= max(bg) + 30]
 peak = max(ink, key=sum) if ink else bg
+exact = sum(1 for p in pixels if tuple(p) == want)
 pure_white = sum(1 for p in pixels if p[0] >= 250 and p[1] >= 250 and p[2] >= 250)
 # Every rendered mark pixel is the accent blended with the background; nothing
-# may be brighter than the accent (that would be baked white).
+# may be brighter than the accent (that would be baked white). The vector fill
+# must produce solid accent pixels, not just an antialiased near-miss.
 over_accent = sum(1 for p in pixels if max(p) > max(want) + 2)
-peak_near_accent = max(abs(peak[i] - want[i]) for i in range(3)) <= 10
-print(f"rect={x},{y},{w},{h} accent={accent} inkPixels={len(ink)} "
+print(f"rect={x},{y},{w},{h} accent={accent} inkPixels={len(ink)} exactAccentPixels={exact} "
       f"peak=#{peak[0]:02x}{peak[1]:02x}{peak[2]:02x} pureWhitePixels={pure_white} "
       f"overAccentPixels={over_accent}")
-sys.exit(0 if len(ink) >= 150 and peak_near_accent and pure_white == 0 and
+sys.exit(0 if len(ink) >= 150 and exact >= 1 and tuple(peak) == want and pure_white == 0 and
          (want == (255, 255, 255) or over_accent == 0) else 1)
 PY
 )
   if [ $? -eq 0 ]; then
-    echo "  PASS the rendered cat stencil is the theme accent, with no baked white ($probe)"; passes=$((passes + 1))
+    echo "  PASS the rendered cat SVG paths are the theme accent at full strength, with no baked white ($probe)"; passes=$((passes + 1))
   else
-    echo "  FAIL the rendered cat stencil does not match the theme accent ($probe)"; fail=1
+    echo "  FAIL the rendered cat SVG paths do not match the theme accent ($probe)"; fail=1
   fi
 else
-  echo "  FAIL cat-stencil pixel probe missing (accent='$accent' rect='$rect' shot='$shot')"; fail=1
+  echo "  FAIL cat-SVG pixel probe missing (accent='$accent' rect='$rect' shot='$shot')"; fail=1
 fi
 
 if [ -e "$home/.cache/omatimeatbandcamp/cookies.txt" ]; then

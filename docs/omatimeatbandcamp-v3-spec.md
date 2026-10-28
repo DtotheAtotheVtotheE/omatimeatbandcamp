@@ -1919,3 +1919,185 @@ requires a full-popup grab at the panel's exact size.
    the strokes are thin and the ear tips are soft. That is the raster stencil at
    1:1, not a missing crop; the full drawing (face, whiskers, flute, paws, body)
    is present.
+
+## v3.5.3 cat final form — SVG trace, centred in every header state (2026-10-28)
+
+### Baseline (fresh session, before editing)
+
+- Branch/commit: `v2` @ `851428e` (the v3.5.2 raster-stencil commit).
+- Python: **99 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`).
+- QML: **573 checks**, `FAILS=0` in every phase (phase 1 533, relaunch 15,
+  real-data 17, script-side 8); `QML tests: OK`.
+- The counts matched the quoted baseline exactly before any file was changed.
+
+### Input audit — `docs/cat-flute.svg`
+
+- Present, 18,023 bytes, and **verified before use**: the header comment is
+  `<!-- Generator: visioncortex VTracer 0.6.12 -->`, the root is
+  `<svg width="508" height="346">`, and there are exactly **5 `<path>`**
+  elements, each `fill="currentColor"`.
+- Path inventory (exact `d` data is copied into `CatMark.qml`):
+
+  | # | transform | `d` length | `d` sha256 (first 16) |
+  |---|-----------|-----------:|-----------------------|
+  | 1 | `translate(225.8125,0.5)` | 16,149 | `b9ce2a65764b9aec` |
+  | 2 | `translate(178,105)` | 319 | `054b17d8280a37e9` |
+  | 3 | `translate(94,106)` | 353 | `9f32a2f28a4e9811` |
+  | 4 | `translate(259.12109375,181.62109375)` | 366 | `c7b7bce6172af5f9` |
+  | 5 | `translate(362,182)` | 320 | `6f9a5ca5f08b32c4` |
+
+- The shipped asset is byte-identical to the input:
+  `assets/cat-flute.svg` and `docs/cat-flute.svg` both hash to
+  `29f42400c1b1369d47b873f56c006e826e7ac1f6a16a207a1a73be3aba8a673b`.
+
+### The render — `CatMark.qml`
+
+- The PNG mask, hidden `Image`, `Canvas`, `source-in` compositing and repaint
+  timers are gone. `assets/cat-flute-mask.png` was deleted.
+- `CatMark` is a vector `Item` (`objectName: "catStencil"`) with implicit size
+  **508 × 346**, `artAspect = 508 / 346`, and `pathCount = 5`.
+- Each SVG `<path>` is a `Shape`/`ShapePath` with a `PathSvg` whose `path` is the
+  **exact `d` string from the file**. The file's `translate(...)` is applied as a
+  `Translate` on the corresponding Shape. A `Scale` on the inner 508 × 346 layer
+  maps the SVG coordinate space into the fitted item; it is visual only, so the
+  item's width/height remain the fit box the geometry checks measure.
+- Fill binding: `ShapePath.fillColor: root.tintColor`; `CatMark.tintColor` is
+  `Color.accent`, and `Panel.qml` binds `tintColor: Color.accent` as before.
+  There is no baked colour and no raster source. `fillRule` is
+  `ShapePath.WindingFill`, the SVG default nonzero rule.
+- Exposed for the harness: `svgFile`, `pathModel`, `pathData`, `pathCount`,
+  `isVector`, `fillColor`, `renderedColor`, `artAspect`.
+
+### Placement — `Panel.qml`
+
+- The header block now explicitly includes the status row. While
+  `service.status !== ""` (including `Syncing library…`), a caption row
+  (`headerStatusRow`, `headerStatus`) sits under the search row; the status text
+  stops before the cat zone. The toolbar no longer duplicates the status text.
+- `headerStack.height` and `headerCatZoneHeight` both grow by the status row +
+  the column spacing while it is visible. The cat zone still starts at the
+  panel's top border and is as wide as before.
+- The mark is fitted on **both** axes with the same one-pixel margin:
+  `width = min(zoneW - 2m, (zoneH - 2m) * aspect)`, `height = width / aspect`,
+  then `anchors.centerIn: parent`. Aspect is never stretched.
+- Measured in the harness:
+
+  | state | zone | art | art centre vs zone centre | top/bottom margins |
+  |-------|------|-----|---------------------------|--------------------|
+  | normal | 125.88 × 75.98 | 108.65 × 74.00 | 756.45,78.00 vs 756.06,78.00 (0.39 / 0.00 px) | 1.00 / 1.00 px |
+  | syncing (tall) | 125.88 × 100.00 | 123.88 × 84.37 | 756.06,90.19 vs 756.06,90.00 (0.00 / 0.19 px) | 8.00 / 7.63 px |
+
+- In the tall state the art is width-limited and keeps the 508/346 aspect; it is
+  centred in the whole block rather than pinned to the top, and the ear tips are
+  8 px below the top border. The normal state keeps its 1 px breathing margin.
+
+### Button behaviour
+
+- Unchanged: same settings menu (`toggleMenu`), `Settings` tooltip, Tab position
+  immediately after the search action, hover tint, and accent focus outline on
+  the zone. Only the zone's height grows with the status row.
+
+### Changed checks (enumerated)
+
+Removed/replaced in phase 1 (the raster invariants no longer apply):
+
+- `v3.5.2: the cat mark is the shipped stencil image, not the old vector trace`
+  → `v3.5.3: the cat mark is the shipped SVG trace, not a raster stencil`
+  (asserts `catStencil`, no `catMaskCanvas`/`catMaskImage`, `cat-flute.svg`,
+  508 × 346, 5 paths, `catPath0`/`catPath4`).
+- `v3.5.2: the stencil is rendered through its alpha mask in the theme accent`
+  → `v3.5.3: every cat path is filled from the theme accent binding (no baked
+  colour)`.
+- `v3.5.2: the stencil's bounding-box centre matches the cat-zone centre on
+  both axes` → same assertion renamed `v3.5.3` for the SVG mark.
+- `v3.5.2: the stencil fills at least 90% of the cat-zone height` → `v3.5.3`.
+- `v3.5.2: the stencil preserves the asset aspect ratio (never stretched)` →
+  `v3.5.3`, now against 508/346.
+- `v3.5.2: the stencil sits with equal small top/bottom margins (no blank band
+  under the flute)` → `v3.5.3: … and clear of the top border`.
+- `v3.5.2: the header rendered at the real panel size (full popup, no scaling)`
+  → `v3.5.3: the normal header rendered at the real panel size …`, saving
+  `/tmp/omatime-v353-header.png`.
+
+Added in phase 1 (normal/tall geometry + screenshots):
+
+- `v3.5.3: the SVG mark's bbox sits fully inside the cat zone (no clipping)`.
+- `v3.5.3: the syncing status row is inside the header block and grows the cat
+  zone`.
+- `v3.5.3: tall syncing header: the art centre matches the zone centre on both
+  axes` (≤ 1 px).
+- `v3.5.3: tall syncing header: the art bbox stays inside the zone, clear of the
+  top border`.
+- `v3.5.3: tall syncing header: equal top/bottom margins and aspect preserved`.
+- `v3.5.3: the tall syncing header rendered at the real panel size (full popup,
+  no scaling)`, saving `/tmp/omatime-v353-syncing.png`.
+- `v3.5.3: the status row hides again and the cat zone returns to its normal
+  height`.
+
+Replaced on the script side (same slot, stricter):
+
+- `PASS the rendered cat stencil is the theme accent, with no baked white` →
+  `PASS the rendered cat SVG paths are the theme accent at full strength, with
+  no baked white`. The probe now requires `peak == Color.accent` exactly
+  (previously within 10/255) and at least one exact-accent pixel, plus no pure
+  white and nothing above the accent.
+
+Replaced in Python (2 raster tests → 3 SVG tests, net +1):
+
+- Deleted `tests/test_cat_mask_asset.py` and its PNG decoding/alpha-ramp tests.
+- `tests/test_cat_svg_asset.py::test_svg_is_the_shipped_vtracer_trace` — file
+  present, VTracer header, 508 × 346, 5 paths, PNG gone and unreferenced.
+- `…::test_every_svg_path_is_current_color` — all 5 paths `currentColor`, no
+  hex/RGB fill, no `<image>`/base64.
+- `…::test_qml_path_data_matches_the_svg_and_is_fill_bound` — the 5 `d` strings
+  and transforms in `CatMark.qml` equal the SVG exactly; fill is
+  `tintColor: Color.accent`, not a literal colour.
+
+No existing check was weakened or deleted without a replacement above.
+
+### Results
+
+- Python: **100 tests OK, 5 skipped** (`99 → 100`).
+- Live fixtures: **5 tests OK**.
+- QML: **580 checks**, `FAILS=0` in every phase (phase 1 540, relaunch 15,
+  real-data 17, script-side 8); `QML tests: OK` (`573 → 580`).
+- Pixel probe on the saved normal screenshot:
+  `rect=705,4,104,69 accent=#cacccc inkPixels=982 exactAccentPixels=6
+  peak=#cacccc pureWhitePixels=0 overAccentPixels=0`.
+- Normal screenshot: `/tmp/omatime-v353-header.png`, **835 × 570** (the whole
+  popup at its real size).
+- Tall syncing screenshot: `/tmp/omatime-v353-syncing.png`, **835 × 594** (the
+  header is 24 px taller; the whole popup grows with it). Both images are
+  `saved=true`, `Image.Ready`, and match `keyboardPanel()` dimensions.
+
+### Deviations / owner-visible decisions
+
+- The `Syncing library…` status line moved from the toolbar's right end into a
+  dedicated header row under the search field. This is what makes the header
+  block (and the cat zone) genuinely taller while a status is shown; the text
+  stops before the zone so it never runs under the button. Other statuses
+  (`Library updated…`, errors) use the same row for consistency.
+- In the tall state the art becomes width-limited (123.88 × 84.37) instead of
+  growing vertically. It keeps the asset's aspect and the fit rule; no vertical
+  stretch or blank band. The ears stay 8 px clear of the top border.
+- The SVG stays the reviewed asset; `docs/cat-flute.svg` is kept as provenance
+  alongside the shipped copy, and no generator is committed.
+- `docs/radio-spike-2026-10.md` remains an unrelated untracked research note.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel. The cat-and-flute mark is now a
+   crisp vector trace in the live theme accent — no white raster edges. Switch
+   theme/accent and reopen; the fill follows immediately.
+2. Normal header: the mark is centred in the zone, ears clear of the top border,
+   and the flute/body are fully visible.
+3. Trigger a library refresh so `Syncing library…` appears: the header grows by
+   the status row, the mark stays centred in the taller block (not pinned to the
+   top), and the ears do not clip the border. After the status clears, the
+   header returns to its normal height.
+4. Click the mark: the same settings menu opens, with the same tooltip and Tab
+   position; hover and accent focus outline are unchanged.
+5. Look at `/tmp/omatime-v353-header.png` (835 × 570) and
+   `/tmp/omatime-v353-syncing.png` (835 × 594): both are the full popup at real
+   size, and the mark is centred in its zone in both.

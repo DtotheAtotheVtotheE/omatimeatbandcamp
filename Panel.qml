@@ -151,7 +151,13 @@ Panel {
     + 2 * Style.spacing.controlPaddingX
     + 2 * Math.max(Style.normalBorderWidth, Style.hoverBorderWidth, Style.selectedBorderWidth, Style.focusBorderWidth)
     + Style.spacing.sm + controlHeight
+  // v3.5.3: the syncing status row belongs to the header block. While a status
+  // is shown the header grows by this row, and the cat zone grows with it so the
+  // mark stays centred in the whole block instead of being pinned to the top.
+  readonly property bool headerStatusVisible: !!service && service.status !== ""
+  readonly property real headerStatusRowHeight: headerStatusVisible ? Style.space(20) : 0
   readonly property real headerCatZoneHeight: headerTitleBandHeight + controlHeight
+    + (headerStatusVisible ? contentColumn.spacing + headerStatusRowHeight : 0)
 
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
@@ -1019,7 +1025,10 @@ Panel {
         id: headerStack
         objectName: "headerStack"
         width: parent.width
+        // v3.5.3: include the syncing status row, so the header block (and the
+        // cat zone) really grows while a sync is reported.
         height: root.controlHeight + contentColumn.spacing + root.controlHeight
+          + (root.headerStatusVisible ? contentColumn.spacing + root.headerStatusRowHeight : 0)
 
       // v3.1: the title is the only text in this row. v3.5.1 live-look centres
       // it in the whole band from the panel's top border to the search bar, not
@@ -1180,11 +1189,36 @@ Panel {
         }
       }
 
-      // v3.5.1 live-look: the cat-and-flute mark is the settings button. It
-      // fills the right end of the header from the panel's top border to the
-      // bottom of the search row, starts where the old Collection button did,
-      // and is borderless at rest. Hover gets the shell's faint fill; keyboard
-      // focus gets the theme accent outline.
+      // v3.5.3: the sync/status row is part of the header block, immediately
+      // under the search row. The text stops before the cat zone, so it can
+      // never run under the settings button.
+      Item {
+        id: headerStatusRow
+        objectName: "headerStatusRow"
+        visible: root.headerStatusVisible
+        y: root.controlHeight + contentColumn.spacing + root.controlHeight + contentColumn.spacing
+        width: parent.width
+        height: root.headerStatusRowHeight
+
+        Text {
+          objectName: "headerStatus"
+          text: root.service ? root.service.status : ""
+          color: Qt.darker(root.foreground, 1.4)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.rightMargin: root.headerCatZoneWidth + Style.spacing.sm
+          anchors.verticalCenter: parent.verticalCenter
+        }
+      }
+
+      // v3.5.3: the cat-and-flute mark is the settings button. It fills the
+      // right end of the full header block — panel top border to the bottom of
+      // the search row, or past the syncing status row while that is shown —
+      // starts where the old Collection button did, and is borderless at rest.
+      // Hover gets the shell's faint fill; keyboard focus gets the accent outline.
       Item {
         id: headerCatZone
         objectName: "headerCatZone"
@@ -1305,23 +1339,6 @@ Panel {
             onClicked: root.toggleSortDirection()
             Keys.onPressed: function(event) { root.handleTabKey(event) }
             Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
-          }
-        }
-
-        Row {
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.sm
-
-          Text {
-            visible: root.service && root.service.status !== ""
-            text: root.service ? root.service.status : ""
-            color: Qt.darker(root.foreground, 1.4)
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-            width: Math.min(implicitWidth, Math.max(0, contentColumn.width - toolbarLeft.width - Style.spacing.md * 2))
-            anchors.verticalCenter: parent.verticalCenter
           }
         }
       }

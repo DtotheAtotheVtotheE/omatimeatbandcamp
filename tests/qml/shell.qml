@@ -42,6 +42,10 @@ ShellRoot {
   property bool menuSave: false
   property var headerShot: null
   property bool headerSave: false
+  property var syncShot: null
+  property bool syncSave: false
+  property real syncZoneHeight: 0
+  property real syncArtWidth: 0
   property real frameNoQueueHeadY: 0
 
   Plug.Service { id: svc }
@@ -111,6 +115,15 @@ ShellRoot {
   // the real panel size rather than a scaled or mocked preview.
   Image {
     id: headerShotProbe
+    visible: false
+    cache: false
+    asynchronous: true
+    source: ""
+  }
+
+  // v3.5.3: the tall syncing-header screenshot, loaded back the same way.
+  Image {
+    id: syncShotProbe
     visible: false
     cache: false
     asynchronous: true
@@ -379,18 +392,20 @@ ShellRoot {
         !!settingsButton() && settingsButton().iconText === "" && settingsButton().tooltipText === "Settings" &&
         isInside(settingsButton(), named(stage, "headerCatZone")) &&
         isInside(settingsButton(), named(stage, "headerStack")) && !button("\uf141"))
-      var cat = named(stage, "catStencil"), catCanvas = named(stage, "catMaskCanvas")
-      var catSrc = named(stage, "catMaskImage")
-      check("v3.5.2: the cat mark is the shipped stencil image, not the old vector trace",
-        !!cat && !named(stage, "catMarkShape") && !!catCanvas &&
-        String(cat.maskFile).indexOf("cat-flute-mask.png") >= 0 &&
-        cat.implicitWidth === 509 && cat.implicitHeight === 346)
-      check("v3.5.2: the stencil is rendered through its alpha mask in the theme accent",
-        !!cat && !!catCanvas && catCanvas.available === true &&
-        catCanvas.renderTarget === Canvas.Image && !!catSrc && catSrc.status === Image.Ready &&
+      var cat = named(stage, "catStencil")
+      check("v3.5.3: the cat mark is the shipped SVG trace, not a raster stencil",
+        !!cat && !named(stage, "catMaskCanvas") && !named(stage, "catMaskImage") &&
+        !named(stage, "catMarkShape") &&
+        String(cat.svgFile).indexOf("cat-flute.svg") >= 0 &&
+        cat.implicitWidth === 508 && cat.implicitHeight === 346 &&
+        cat.pathCount === 5 && cat.isVector === true &&
+        !!named(stage, "catPath0") && !!named(stage, "catPath4"))
+      check("v3.5.3: every cat path is filled from the theme accent binding (no baked colour)",
+        !!cat && cat.pathData.length === 5 &&
         String(cat.tintColor) === String(Color.accent) &&
+        String(cat.fillColor) === String(Color.accent) &&
         String(cat.renderedColor) === String(Color.accent) &&
-        Math.abs(cat.artAspect - 509 / 346) < 0.0001)
+        Math.abs(cat.artAspect - 508 / 346) < 0.0001)
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
       check("v3.1: the old left-hand search icon is gone", !named(stage, "searchIcon"))
       check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
@@ -424,26 +439,31 @@ ShellRoot {
       var art = named(stage, "catStencil")
       var ac = art.mapToItem(stage, art.width / 2, art.height / 2)
       var zc = cz.mapToItem(stage, cz.width / 2, cz.height / 2)
-      var artTop = art.mapToItem(stage, 0, 0).y
-      log("v3.5.2 geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
+      var ap = art.mapToItem(stage, 0, 0)
+      var artTop = ap.y, artLeft = ap.x
+      log("v3.5.3 normal geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
         " centre=" + ac.x.toFixed(2) + "," + ac.y.toFixed(2) + " zoneCentre=" + zc.x.toFixed(2) + "," + zc.y.toFixed(2) +
-        " heightRatio=" + (art.height / cz.height).toFixed(3))
+        " heightRatio=" + (art.height / cz.height).toFixed(3) +
+        " topMargin=" + (artTop - z.y).toFixed(2) + " bottomMargin=" + ((z.y + cz.height) - (artTop + art.height)).toFixed(2))
       // Pixel probe bounds, relative to the panel that the screenshot captures.
       // The script-side check crops exactly this rect from the saved PNG.
       var po = keyboardPanel().mapToItem(stage, 0, 0)
-      var ap = art.mapToItem(stage, 0, 0)
-      log("v3.5.2 pixels: accent=" + String(Color.accent) +
+      log("v3.5.3 pixels: accent=" + String(Color.accent) +
         " art=" + Math.floor(ap.x - po.x) + "," + Math.floor(ap.y - po.y) + "," +
         (Math.ceil(art.width) + 1) + "," + (Math.ceil(art.height) + 1))
-      check("v3.5.2: the stencil's bounding-box centre matches the cat-zone centre on both axes",
+      check("v3.5.3: the SVG mark's bounding-box centre matches the cat-zone centre on both axes",
         Math.abs(ac.x - zc.x) <= 1 && Math.abs(ac.y - zc.y) <= 1)
-      check("v3.5.2: the stencil fills at least 90% of the cat-zone height",
+      check("v3.5.3: the SVG mark's bbox sits fully inside the cat zone (no clipping)",
+        artLeft >= z.x - 0.5 && artTop >= z.y + 0.5 &&
+        artLeft + art.width <= z.x + cz.width + 0.5 &&
+        artTop + art.height <= z.y + cz.height + 0.5)
+      check("v3.5.3: the SVG mark fills at least 90% of the cat-zone height",
         art.height >= cz.height * 0.90)
-      check("v3.5.2: the stencil preserves the asset aspect ratio (never stretched)",
-        Math.abs((art.width / art.height) - (509 / 346)) <= 0.01)
-      check("v3.5.2: the stencil sits with equal small top/bottom margins (no blank band under the flute)",
+      check("v3.5.3: the SVG mark preserves the asset aspect ratio (never stretched)",
+        Math.abs((art.width / art.height) - (508 / 346)) <= 0.01)
+      check("v3.5.3: the SVG mark sits with equal small top/bottom margins and clear of the top border",
         Math.abs((artTop - z.y) - ((z.y + cz.height) - (artTop + art.height))) <= 1 &&
-        (artTop - z.y) <= Style.space(2))
+        (artTop - z.y) > 0.5 && (artTop - z.y) <= Style.space(2))
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -466,28 +486,89 @@ ShellRoot {
       check("v3.5.1: only the cat settings control is deliberately taller (it spans both header rows)",
         gear.height === cz.height && gear.height > Style.spacing.controlHeight)
     },
-    // v3.5.2: a real-size header screenshot, saved so the result can be quoted
-    // and looked at. Grab the whole popup (not a cropped/scaled preview).
+    // v3.5.3: real-size header screenshots for the normal and tall syncing
+    // states, saved so the results can be quoted and looked at. Grab the whole
+    // popup (not a cropped/scaled preview) in both states.
     function() {
       host.headerShot = null
       host.headerSave = false
       headerShotProbe.source = ""
       keyboardPanel().grabToImage(function(result) {
-        host.headerSave = result.saveToFile("/tmp/omatime-v352-header.png")
+        host.headerSave = result.saveToFile("/tmp/omatime-v353-header.png")
         host.headerShot = result
-        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v352-header.png?" + Date.now()
+        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v353-header.png?" + Date.now()
       })
     },
     function() { },
     function() { },
     function() {
-      log("v3.5.2 header shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
+      log("v3.5.3 normal shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
         " " + headerShotProbe.implicitWidth + "x" + headerShotProbe.implicitHeight +
         " panel=" + keyboardPanel().width + "x" + keyboardPanel().height)
-      check("v3.5.2: the header rendered at the real panel size (full popup, no scaling)",
+      check("v3.5.3: the normal header rendered at the real panel size (full popup, no scaling)",
         !!host.headerShot && host.headerSave === true && headerShotProbe.status === Image.Ready &&
         headerShotProbe.implicitWidth === keyboardPanel().width &&
         headerShotProbe.implicitHeight === keyboardPanel().height)
+    },
+    // Tall syncing-header state: the status row is shown, the zone grows, and
+    // the art must still be centred inside the whole block.
+    function() { svc.status = "Syncing library…" },
+    function() { },
+    function() {
+      var cz = named(stage, "headerCatZone"), sr = named(stage, "headerStatusRow")
+      var art = named(stage, "catStencil")
+      var z = cz.mapToItem(stage, 0, 0), s = sr.mapToItem(stage, 0, 0)
+      var ac = art.mapToItem(stage, art.width / 2, art.height / 2)
+      var zc = cz.mapToItem(stage, cz.width / 2, cz.height / 2)
+      var ap = art.mapToItem(stage, 0, 0)
+      host.syncZoneHeight = cz.height
+      host.syncArtWidth = art.width
+      log("v3.5.3 syncing geometry: zone=" + cz.width.toFixed(2) + "x" + cz.height.toFixed(2) +
+        " statusRow=" + sr.width.toFixed(2) + "x" + sr.height.toFixed(2) +
+        " art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
+        " centre=" + ac.x.toFixed(2) + "," + ac.y.toFixed(2) +
+        " zoneCentre=" + zc.x.toFixed(2) + "," + zc.y.toFixed(2) +
+        " topMargin=" + (ap.y - z.y).toFixed(2) + " bottomMargin=" + ((z.y + cz.height) - (ap.y + art.height)).toFixed(2))
+      check("v3.5.3: the syncing status row is inside the header block and grows the cat zone",
+        !!sr && sr.visible && sr.height === panel.headerStatusRowHeight &&
+        Math.abs((z.y + cz.height) - (s.y + sr.height)) <= 1 &&
+        cz.height > panel.headerTitleBandHeight + Style.spacing.controlHeight)
+      check("v3.5.3: tall syncing header: the art centre matches the zone centre on both axes",
+        Math.abs(ac.x - zc.x) <= 1 && Math.abs(ac.y - zc.y) <= 1)
+      check("v3.5.3: tall syncing header: the art bbox stays inside the zone, clear of the top border",
+        ap.x >= z.x - 0.5 && ap.y >= z.y + 0.5 &&
+        ap.x + art.width <= z.x + cz.width + 0.5 &&
+        ap.y + art.height <= z.y + cz.height + 0.5)
+      check("v3.5.3: tall syncing header: equal top/bottom margins and aspect preserved",
+        Math.abs((ap.y - z.y) - ((z.y + cz.height) - (ap.y + art.height))) <= 1 &&
+        Math.abs((art.width / art.height) - (508 / 346)) <= 0.01)
+      host.syncShot = null
+      host.syncSave = false
+      syncShotProbe.source = ""
+      keyboardPanel().grabToImage(function(result) {
+        host.syncSave = result.saveToFile("/tmp/omatime-v353-syncing.png")
+        host.syncShot = result
+        if (host.syncSave) syncShotProbe.source = "file:///tmp/omatime-v353-syncing.png?" + Date.now()
+      })
+    },
+    function() { },
+    function() { },
+    function() {
+      log("v3.5.3 syncing shot: saved=" + host.syncSave + " status=" + syncShotProbe.status +
+        " " + syncShotProbe.implicitWidth + "x" + syncShotProbe.implicitHeight +
+        " panel=" + keyboardPanel().width + "x" + keyboardPanel().height)
+      check("v3.5.3: the tall syncing header rendered at the real panel size (full popup, no scaling)",
+        !!host.syncShot && host.syncSave === true && syncShotProbe.status === Image.Ready &&
+        syncShotProbe.implicitWidth === keyboardPanel().width &&
+        syncShotProbe.implicitHeight === keyboardPanel().height)
+      svc.status = ""
+    },
+    function() { },
+    function() {
+      var cz = named(stage, "headerCatZone"), sr = named(stage, "headerStatusRow")
+      check("v3.5.3: the status row hides again and the cat zone returns to its normal height",
+        (!sr || !sr.visible) &&
+        cz.height === panel.headerTitleBandHeight + Style.spacing.controlHeight)
     },
     function() {
       // Prove the in-field glyph cannot take input: click it while the list owns
