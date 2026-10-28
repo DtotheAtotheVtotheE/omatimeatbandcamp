@@ -8,6 +8,9 @@ Item {
   required property QtObject bar
   property var owner: null
   property int padding: Style.spacing.popupPadding
+  // The real KeyboardPanel exposes a surface borderSpec; the stub's Rectangle
+  // draws a 2 px border, so mirror that width here.
+  property var borderSpec: Border.flat(Color.popups.border, 2)
   property int contentWidth: 920
   property int contentHeight: 600
   property bool open: false

@@ -140,6 +140,19 @@ Panel {
   readonly property real helpViewHeight: Math.max(detailMinTrackRows * detailBaseTrackRowHeight,
     Math.min(detailCapHeight, helpColumns ? helpColumns.implicitHeight + 2 * Style.spacing.sm : 0))
 
+  // v3.5.1 live-look: header geometry. The title band runs from the panel's top
+  // border to the top of the search bar; the cat zone spans that band plus the
+  // search row and starts where the old Collection button began. That start is
+  // rebuilt from the old Collection/gear widths, so the search field keeps
+  // approximately its old length and the freed controls become the mark.
+  readonly property real headerTopInset: panel.padding + Border.top(panel.borderSpec)
+  readonly property real headerTitleBandHeight: headerTopInset + controlHeight + contentColumn.spacing
+  readonly property real headerCatZoneWidth: collectionLabelMetrics.advanceWidth
+    + 2 * Style.spacing.controlPaddingX
+    + 2 * Math.max(Style.normalBorderWidth, Style.hoverBorderWidth, Style.selectedBorderWidth, Style.focusBorderWidth)
+    + Style.spacing.sm + controlHeight
+  readonly property real headerCatZoneHeight: headerTitleBandHeight + controlHeight
+
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
   // Refresh and the Hide pre-orders filter live here in v3, not in the toolbar.
@@ -160,12 +173,14 @@ Panel {
   property real contextMenuAnchorX: 0
   property real contextMenuAnchorY: 0
   readonly property var moreItems: [
-    { icon: "\uf021", label: "Refresh", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
-    { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
-    { icon: "\uf11c", label: "Keyboard shortcuts", action: "help" },
-    { icon: "\uf07b", label: "Collection", action: "collection", enabled: root.collectionUrl !== "",
+    { leadingIcon: "\uf021", icon: "\u2003", label: "Refresh", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
+    // v3.5.1 addendum: the mask is the leading icon. `icon` stays the original
+    // check slot, so the existing checked-state display is unchanged.
+    { leadingIcon: "\ueeb6", icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
+    { leadingIcon: "\uf11c", icon: "\u2003", label: "Keyboard shortcuts", action: "help" },
+    { leadingIcon: "\uf07b", icon: "\u2003", label: "Collection", action: "collection", enabled: root.collectionUrl !== "",
       tooltip: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet" },
-    { icon: "\uf08b", label: "Log out", action: "logout" }
+    { leadingIcon: "\uf08b", icon: "\u2003", label: "Log out", action: "logout" }
   ]
   // v3.3.1 follow-up: Albums keep the full sort set; Playlists get exactly two
   // choices. The two tabs own independent, persisted choices.
@@ -194,7 +209,7 @@ Panel {
   // listed. Text only — the renderer uses existing type sizes and colours.
   readonly property var helpRows: [
     { group: true, title: "Navigation" },
-    { key: "Tab / Shift+Tab", text: "Move through the panel: search, clear, gear, Albums, Playlists, Sort, sort direction, lists, queue, track list, transport." },
+    { key: "Tab / Shift+Tab", text: "Move through the panel: search, clear, settings (cat), Albums, Playlists, Sort, sort direction, lists, queue, track list, transport." },
     { key: "↑ / ↓", text: "Move within the focused list, queue or menu." },
     { key: "← / →", text: "Switch between the album/playlist list and the track list." },
     { group: true, title: "Playback" },
@@ -998,13 +1013,30 @@ Panel {
       spacing: Style.spacing.sm
 
       // header ---------------------------------------------------------------
-      // v3.1: the title is the only thing in this row. The gear moved down to
-      // the search row, and the title is one step larger (about +2 pt).
+      // v3.5.1 live-look: one header stack so the cat zone can overlay the
+      // title band and the search row while the Column still flows normally.
+      Item {
+        id: headerStack
+        objectName: "headerStack"
+        width: parent.width
+        height: root.controlHeight + contentColumn.spacing + root.controlHeight
+
+      // v3.1: the title is the only text in this row. v3.5.1 live-look centres
+      // it in the whole band from the panel's top border to the search bar, not
+      // just in this row.
       Item {
         id: headerRow
         objectName: "headerRow"
+        y: 0
         width: parent.width
         height: root.controlHeight
+
+        TextMetrics {
+          id: collectionLabelMetrics
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          text: "Collection"
+        }
 
         Text {
           objectName: "headerTitle"
@@ -1015,15 +1047,17 @@ Panel {
           font.pixelSize: Style.font.subtitle + 2
           font.bold: true
           anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
+          y: (root.headerTitleBandHeight - implicitHeight) / 2 - root.headerTopInset
         }
       }
 
       // search ---------------------------------------------------------------
-      // v3.5.1: the flexible search field (the magnifier sits inside its right
-      // end) and the gear/settings button only. Collection now lives in the
-      // gear menu.
+      // v3.5.1 live-look: the field ends exactly at the cat zone's left edge.
+      // The mark occupies the whole right end of the header (see below).
       Item {
+        id: searchBand
+        objectName: "searchBand"
+        y: root.controlHeight + contentColumn.spacing
         width: parent.width
         height: root.controlHeight
 
@@ -1039,9 +1073,9 @@ Panel {
           TextField {
             id: searchField
             objectName: "searchField"
-            // v3.5.1: the field takes every pixel left after the gear and the
-            // one Row gap. No half-row rule.
-            width: Math.max(0, searchRow.width - menuButton.width - searchRow.spacing)
+            // The cat zone starts where the old Collection button began, so the
+            // field keeps approximately its previous length.
+            width: Math.max(0, searchRow.width - root.headerCatZoneWidth)
             height: root.controlHeight
             // A little less vertical padding than the stock 30 px field: the
             // text still fits (asserted by the harness) at the shared 28 px.
@@ -1143,24 +1177,51 @@ Panel {
             }
           }
 
-          // v3.1: the gear/settings button now lives in the search row. Its menu
-          // entries and behaviour are unchanged; v3.5.1 adds Collection to it.
-          BcButton {
-            id: menuButton
-            objectName: "settingsButton"
-            iconText: "\uf013"
-            height: root.controlHeight
-            tooltipText: "Settings"
-            active: root.menuOpen
-            focusable: true
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: root.toggleMenu()
-            Keys.onPressed: function(event) { root.handleTabKey(event) }
-            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+        }
+      }
+
+      // v3.5.1 live-look: the cat-and-flute mark is the settings button. It
+      // fills the right end of the header from the panel's top border to the
+      // bottom of the search row, starts where the old Collection button did,
+      // and is borderless at rest. Hover gets the shell's faint fill; keyboard
+      // focus gets the theme accent outline.
+      Item {
+        id: headerCatZone
+        objectName: "headerCatZone"
+        x: parent.width - width
+        y: -root.headerTopInset
+        width: root.headerCatZoneWidth
+        height: root.headerCatZoneHeight
+
+        BcButton {
+          id: menuButton
+          objectName: "settingsButton"
+          x: 0
+          y: 0
+          width: parent.width
+          height: parent.height
+          text: ""
+          iconText: ""
+          bordered: false
+          focusable: true
+          tooltipText: "Settings"
+          active: root.menuOpen
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          // No static border or background. Keyboard focus is the same accent
+          // token as every other focused control (Item 3).
+          borderSpec: activeFocus ? Border.flat(Color.accent, Style.focusBorderWidth) : Border.none()
+          onClicked: root.toggleMenu()
+          Keys.onPressed: function(event) { root.handleTabKey(event) }
+          Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+
+          CatMark {
+            anchors.centerIn: parent
+            scale: Math.min(parent.width / implicitWidth, parent.height / implicitHeight)
+            strokeColor: Color.accent
           }
         }
+      }
       }
 
       // toolbar --------------------------------------------------------------
@@ -2589,7 +2650,9 @@ Panel {
               width: menuColumn.width
               leftAlign: true
               text: modelData.label
-              iconText: modelData.icon
+              leadingIconText: modelData.leadingIcon || ""
+              leadingIconSpinning: modelData.spinning === true
+              iconText: modelData.icon !== undefined ? modelData.icon : ""
               tooltipText: modelData.tooltip || ""
               trailingText: modelData.trailing || ""
               selected: modelData.checked === true

@@ -40,6 +40,8 @@ ShellRoot {
   property var chainFocus: null
   property var menuShot: null
   property bool menuSave: false
+  property var headerShot: null
+  property bool headerSave: false
   property real frameNoQueueHeadY: 0
 
   Plug.Service { id: svc }
@@ -99,6 +101,16 @@ ShellRoot {
   // rendered bitmap (the grab result's QImage is opaque to JS in QML).
   Image {
     id: menuShotProbe
+    visible: false
+    cache: false
+    asynchronous: true
+    source: ""
+  }
+
+  // Load the full-popup header screenshot back from disk, so its dimensions are
+  // the real panel size rather than a scaled or mocked preview.
+  Image {
+    id: headerShotProbe
     visible: false
     cache: false
     asynchronous: true
@@ -193,6 +205,12 @@ ShellRoot {
   function iconGlyphOf(btn) {
     if (!btn || !btn.iconText) return null
     return find(btn, function(it) { return it !== btn && it.hasOwnProperty("font") && typeof it.text === "string" && it.text === btn.iconText })
+  }
+  // v3.5.1 addendum: menu rows carry a dedicated leading icon Text, separate
+  // from the shell Button's check slot. Measure that Text, not the placeholder.
+  function leadingGlyphOf(btn) {
+    if (!btn || !btn.leadingIconText) return null
+    return find(btn, function(it) { return it !== btn && it.objectName === "leadingIcon" && it.text === btn.leadingIconText })
   }
   function searchMagnifier() { return iconGlyphOf(searchAction()) }
   function keyboardPanel() { return find(stage, function(it) { return typeof it.fittedContentHeight === "function" }) }
@@ -357,9 +375,15 @@ ShellRoot {
       check("no clear-session icon in header", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uF08B" && it.visible }))
       check("header row contains ONLY the title (the gear is no longer in it)", !!named(stage, "headerTitle") && named(stage, "headerTitle").text === "OmaTimeAtBandcamp" && allButtons(named(stage, "headerRow"), []).length === 0)
       check("v3.1: title font is one step larger (+2 pt over the v3 subtitle size)", named(stage, "headerTitle").font.pixelSize === Style.font.subtitle + 2)
-      check("gear (settings) button still exists, with its menu, and now lives in the search row",
-        !!settingsButton() && settingsButton().iconText === "\uf013" && settingsButton().tooltipText === "Settings" &&
-        isInside(settingsButton(), named(stage, "searchRow")) && !button("\uf141"))
+      check("v3.5.1: the settings control is the cat-and-flute mark at the right end of the header, with its menu",
+        !!settingsButton() && settingsButton().iconText === "" && settingsButton().tooltipText === "Settings" &&
+        isInside(settingsButton(), named(stage, "headerCatZone")) &&
+        isInside(settingsButton(), named(stage, "headerStack")) && !button("\uf141"))
+      var cat = named(stage, "catMark"), catShape = named(stage, "catMarkShape")
+      check("v3.5.1: the cat mark is a vector Shape (no bitmap) and every stroke uses the theme accent",
+        !!cat && !!catShape && catShape.data.length >= 7 &&
+        find(cat, function(it) { return it.hasOwnProperty("source") }) === null &&
+        String(cat.strokeColor) === String(Color.accent))
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
       check("v3.1: the old left-hand search icon is gone", !named(stage, "searchIcon"))
       check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
@@ -370,15 +394,26 @@ ShellRoot {
     },
     function() {
       var sf = searchField(), gear = settingsButton(), row = named(stage, "searchRow")
+      var cz = named(stage, "headerCatZone"), sb = named(stage, "searchBand")
       var s = sf.mapToItem(stage, 0, 0), g = gear.mapToItem(stage, 0, 0)
-      log("v3.5.1 popup content width=" + keyboardPanel().contentWidth + " row=" + row.width + " field=" + sf.width + " gear=" + gear.width + " spacing=" + row.spacing)
+      var z = cz.mapToItem(stage, 0, 0), p = keyboardPanel().mapToItem(stage, 0, 0)
+      var band = sb.mapToItem(stage, 0, 0)
+      log("v3.5.1 popup content width=" + keyboardPanel().contentWidth + " row=" + row.width + " field=" + sf.width + " cat=" + cz.width + " catHeight=" + cz.height + " spacing=" + row.spacing)
       check("v3.2: popup content width is the new ~835 px value (820-840 accepted)", keyboardPanel().contentWidth === Style.space(835) && keyboardPanel().contentWidth >= 820 && keyboardPanel().contentWidth <= 840)
-      check("v3.5.1: search row is field → gear only, both vertically centred",
-        allButtons(row, []).filter(function(b) { return b.objectName !== "searchAction" }).length === 1 &&
-        allButtons(row, []).filter(function(b) { return b.objectName !== "searchAction" })[0] === gear &&
-        s.x < g.x && Math.abs(g.y - s.y) <= 2)
-      check("v3.5.1: search field takes all row width left after the gear and the one gap",
-        Math.abs(sf.width - (row.width - gear.width - row.spacing)) <= 1 && sf.width > row.width * 0.75)
+      check("v3.5.1: the search row holds only the field; the cat control sits beside it",
+        allButtons(row, []).filter(function(b) { return b.objectName !== "searchAction" }).length === 0 &&
+        isInside(sf, row) && !isInside(gear, row) && isInside(gear, cz))
+      check("v3.5.1: the field ends exactly where the cat zone begins and the cat zone ends at the row's right edge",
+        Math.abs((s.x + sf.width) - z.x) <= 1 && Math.abs((z.x + cz.width) - (row.mapToItem(stage, 0, 0).x + row.width)) <= 1)
+      check("v3.5.1: the field takes all remaining row width (no gap before the cat zone)",
+        Math.abs(sf.width - (row.width - cz.width)) <= 1 && sf.width > row.width * 0.75)
+      check("v3.5.1: the cat zone spans the title band and the search row, from the panel's top edge to the search row's bottom",
+        Math.abs(z.y - p.y) <= 1 && Math.abs((z.y + cz.height) - (band.y + sb.height)) <= 1 &&
+        cz.height === panel.headerCatZoneHeight && cz.height > sf.height)
+      var title = named(stage, "headerTitle"), t = title.mapToItem(stage, 0, 0)
+      log("v3.5.1 geometry: panelY=" + p.y + " catY=" + z.y + " catBottom=" + (z.y + cz.height) + " bandY=" + band.y + " bandBottom=" + (band.y + sb.height) + " titleCenter=" + (t.y + title.height / 2) + " expected=" + (p.y + (band.y - p.y) / 2) + " inset=" + panel.headerTopInset)
+      check("v3.5.1: the title is centred in the band above the search row",
+        Math.abs((t.y + title.height / 2) - (p.y + (band.y - p.y) / 2)) <= 1)
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -391,13 +426,38 @@ ShellRoot {
         searchField().text === "" && !!searchAction() && searchAction().iconText === "\uf002" &&
         searchAction().tooltipText === "" && searchAction().focusable === true &&
         isInside(searchAction(), sf) && !!m && m.text === "\uf002")
-      var controls = [sf, gear, button("Albums (" + svc.albumsView.length + ")"), button("Playlists (" + svc.playlists.length + ")"), sortButton(),
+      var controls = [sf, button("Albums (" + svc.albumsView.length + ")"), button("Playlists (" + svc.playlists.length + ")"), sortButton(),
         named(stage, "footerShuffle"), named(stage, "footerPrev"), named(stage, "footerPlay"), named(stage, "footerNext")]
       var ch = {}
       for (var i = 0; i < controls.length; i++) ch[Math.round(controls[i].height)] = 1
       log("v3.1 named control heights=" + Object.keys(ch))
-      check("v3.1: search field, gear, Albums (N), Playlists (N), Sort and the four footer transport buttons share ONE measured height",
+      check("v3.1: search field, Albums (N), Playlists (N), Sort and the four footer transport buttons share ONE measured height",
         controls.every(function(x) { return !!x }) && Object.keys(ch).length === 1 && Object.keys(ch)[0] == Style.spacing.controlHeight)
+      check("v3.5.1: only the cat settings control is deliberately taller (it spans both header rows)",
+        gear.height === cz.height && gear.height > Style.spacing.controlHeight)
+    },
+    // v3.5.1: a real-size header screenshot, saved so the result can be quoted
+    // and looked at. Grab the whole popup (not a cropped/scaled preview).
+    function() {
+      host.headerShot = null
+      host.headerSave = false
+      headerShotProbe.source = ""
+      keyboardPanel().grabToImage(function(result) {
+        host.headerSave = result.saveToFile("/tmp/omatime-v351-header.png")
+        host.headerShot = result
+        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v351-header.png?" + Date.now()
+      })
+    },
+    function() { },
+    function() { },
+    function() {
+      log("v3.5.1 header shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
+        " " + headerShotProbe.implicitWidth + "x" + headerShotProbe.implicitHeight +
+        " panel=" + keyboardPanel().width + "x" + keyboardPanel().height)
+      check("v3.5.1: the header rendered at the real panel size (full popup, no scaling)",
+        !!host.headerShot && host.headerSave === true && headerShotProbe.status === Image.Ready &&
+        headerShotProbe.implicitWidth === keyboardPanel().width &&
+        headerShotProbe.implicitHeight === keyboardPanel().height)
     },
     function() {
       // Prove the in-field glyph cannot take input: click it while the list owns
@@ -418,15 +478,16 @@ ShellRoot {
     },
     function() {
       var bs = allButtons(stage, [])
+      var ordinary = bs.filter(function(x) { return x.objectName !== "settingsButton" })
       var hs = {}, ic = {}, bd = {}
-      for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
-      log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("10 buttons in the open window (gear, 3 toolbar, direction, 4 footer, plus the v3.3.1 in-field clear/magnifier; Collection moved into the gear menu)", bs.length === 10)
-      check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
+      for (var i = 0; i < ordinary.length; i++) { hs[Math.round(ordinary[i].height)] = 1; ic[ordinary[i].iconSize] = 1; bd[ordinary[i].bordered] = 1 }
+      log("buttons=" + bs.length + " ordinary heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
+      check("10 buttons in the open window (cat settings, 3 toolbar, direction, 4 footer, plus the v3.3.1 in-field clear/magnifier; Collection moved into the gear menu)", bs.length === 10)
+      check("all ordinary buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
-      check("toolbar/footer/header buttons share one bordered style; the in-field clear action stays borderless by design",
-        bs.filter(function(x) { return x.objectName !== "searchAction" }).every(function(x) { return x.bordered === true }) &&
-        named(stage, "searchAction").bordered === false)
+      check("toolbar/footer buttons stay bordered; the in-field action and the borderless cat mark are the intended exceptions",
+        ordinary.filter(function(x) { return x.objectName !== "searchAction" }).every(function(x) { return x.bordered === true }) &&
+        named(stage, "searchAction").bordered === false && settingsButton().bordered === false)
       var lp = named(stage, "leftPane"), dp = named(stage, "detailPane"), ft = named(stage, "footer")
       log("border colours: left=" + lp.border.color + " detail=" + dp.border.color + " footer=" + ft.border.color)
       check("album list, detail pane and footer share ONE border colour (the detail pane's theme accent)",
@@ -443,7 +504,7 @@ ShellRoot {
     function() { check("second Esc closes", !panel.opened); panel.open() },
     function() { click(settingsButton()) },
     function() {
-      check("gear menu opens from its search-row position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "searchRow")))
+      check("gear menu opens from the cat control's header position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "headerCatZone")))
       check("gear menu has exactly Refresh / Hide pre-orders / Keyboard shortcuts / Collection / Log out, in order",
         panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh|Hide pre-orders|Keyboard shortcuts|Collection|Log out")
       check("gear-menu Collection carries the username URL, enabled when known",
@@ -1266,9 +1327,10 @@ ShellRoot {
       check("v3.5.1: Collection is not in the header; the old links stay gone",
         !named(stage, "link-collection") && gone.every(function(l) { return !button(l) }) && !named(stage, "linksRow"))
       var right = sf.mapToItem(stage, 0, 0).x + sf.width
-      check("v3.5.1: the gear is the only control to the right of the field",
-        gear.mapToItem(stage, 0, 0).x >= right - 1 &&
-        allButtons(named(stage, "searchRow"), []).filter(function(b) { return b.objectName !== "searchAction" }).length === 1)
+      var cz = named(stage, "headerCatZone")
+      check("v3.5.1: the cat control is the only thing to the right of the field",
+        Math.abs(gear.mapToItem(stage, 0, 0).x - right) <= 1 && Math.abs(cz.mapToItem(stage, 0, 0).x - right) <= 1 &&
+        allButtons(named(stage, "searchRow"), []).filter(function(b) { return b.objectName !== "searchAction" }).length === 0)
       check("v3.5.1: magnifier sits inside the field's right end, not to its left",
         isInside(m, sf) && m.mapToItem(stage, 0, 0).x >= right - 40 && m.mapToItem(stage, 0, 0).x + m.width <= right)
       check("v3.5.1: Collection keeps the library-username URL (fixture-user)",
@@ -1550,10 +1612,10 @@ ShellRoot {
       searchField().forceActiveFocus()
     },
     function() {
-      var sa = searchAction(), g = searchMagnifier(), gearGlyph = iconGlyphOf(named(stage, "settingsButton"))
+      var sa = searchAction(), g = searchMagnifier(), refGlyph = iconGlyphOf(sortButton())
       check("v3.3.1: with text the field shows a ×, the Clear search tooltip and the shared icon font",
         sa.iconText === "\uf00d" && sa.tooltipText === "Clear search" && !!g && g.text === "\uf00d" &&
-        !!gearGlyph && g.font.family === gearGlyph.font.family && g.font.pixelSize === gearGlyph.font.pixelSize)
+        !!refGlyph && g.font.family === refGlyph.font.family && g.font.pixelSize === refGlyph.font.pixelSize)
       click(sa)
     },
     function() {
@@ -1584,21 +1646,32 @@ ShellRoot {
       check("v3.3.1: Space on the focused clear button clears and refocuses the field too",
         searchField().text === "" && svc.searchQuery === "" && searchField().activeFocus)
     },
-    // Gear menu: the refresh glyph uses the same icon font as Log out.
+    // Gear menu: leading icons share one aligned slot, and Refresh uses the same
+    // icon font as Log out.
     function() { openSettings() },
     function() {
       var refresh = button("Refresh"), logout = button("Log out")
       var hide = button("Hide pre-orders")
-      var ri = iconGlyphOf(refresh), li = iconGlyphOf(logout)
+      var ri = leadingGlyphOf(refresh), li = leadingGlyphOf(logout)
       var card = named(stage, "menuCard")
       check("v3.3.1: Refresh uses the icon font's sync glyph, same family as Log out",
-        !!refresh && refresh.iconText === "\uf021" && !!ri && !!li && ri.font.family === li.font.family)
-      check("v3.3.1: Refresh and Log out icons share size/weight and aligned boxes/baselines",
+        !!refresh && refresh.leadingIconText === "\uf021" && logout.leadingIconText === "\uf08b" && !!ri && !!li && ri.font.family === li.font.family)
+      check("v3.5.1 addendum: Refresh and Log out leading icons share size/weight and aligned boxes/baselines",
         !!ri && !!li && refresh.iconSize === logout.iconSize && ri.font.pixelSize === li.font.pixelSize &&
         ri.font.bold === li.font.bold && refresh.height === logout.height && ri.height === li.height &&
         Math.abs(ri.mapToItem(refresh, 0, 0).y - li.mapToItem(logout, 0, 0).y) <= 0.5)
-      check("v3.3.1: Hide pre-orders stays a plain checkable item",
-        !!hide && hide.selected === svc.hidePreorders &&
+      var rows = panel.moreItems.map(function(m) { return button(m.label) })
+      var glyphs = rows.map(leadingGlyphOf)
+      var aligned = rows.length === 5 && glyphs.every(function(g, i) {
+        if (!g || !rows[i] || g.text !== rows[i].leadingIconText) return false
+        var at = g.mapToItem(rows[i], 0, 0)
+        var first = glyphs[0].mapToItem(rows[0], 0, 0)
+        return Math.abs(at.x - first.x) <= 0.5 && Math.abs(at.y - first.y) <= 0.5
+      })
+      check("v3.5.1 addendum: all five menu rows have a leading icon in one aligned slot",
+        aligned && rows.every(function(b) { return !!b && b.leadingIconText !== "" }))
+      check("v3.5.1 addendum: Hide pre-orders adds the theatre-masks icon in the new slot and keeps its check in the original slot",
+        !!hide && hide.leadingIconText === "\ueeb6" && hide.selected === svc.hidePreorders &&
         (hide.iconText === "\uf00c" || hide.iconText === "\u2003"))
       host.menuShot = null
       host.menuSave = false

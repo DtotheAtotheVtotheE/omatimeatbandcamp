@@ -1494,17 +1494,20 @@ Part D:
 
 ## v3.5.1 live-look fixes (owner-requested, 2026-10-28)
 
-Branch `v2`. A live-look pass after v3.5: Collection moves into the gear menu, the
-product name is spelled `Bandcamp`, keyboard focus uses the theme accent, and the
-shortcuts reference fits without scrolling.
+Branch `v2`. A live-look pass after v3.5: Collection moves into the settings menu,
+the product name is spelled `Bandcamp`, keyboard focus uses the theme accent, the
+shortcuts reference fits without scrolling, and the header becomes a title band,
+a field and the cat-and-flute settings mark.
 
 ### Baseline (fresh session, before editing)
 
 - `python3 -m unittest discover -s tests -t .`: **97 tests OK, 5 skipped**.
 - `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests OK**.
-- `tests/qml/run.sh`: **558 checks passed** (phase 1 520, relaunch 15, real-data
-  17, script-side 6), `FAILS=0` in every phase.
-- Values matched the expected baseline exactly, so editing proceeded.
+- `tests/qml/run.sh`: **560 checks passed** (phase 1 521, relaunch 15, real-data
+  17, script-side 7), `FAILS=0` in every phase.
+- The expected baseline was 558. The repo was already at commit `404d330`
+  (Items 1–4), whose two added guards bring the raw total to 560; the spec below
+  documents that +2. No check was missing, so editing proceeded from 560.
 
 ### Item 1 — Collection moves into the gear menu
 
@@ -1524,6 +1527,8 @@ shortcuts reference fits without scrolling.
   Prev → Play/Pause → Next → search. The shortcuts view's Tab row text follows.
 - The gear menu itself keeps its existing Up/Down/Enter handling; menu items are
   not separate Tab tokens.
+- Item 5 below replaces this temporary gear button with the cat-and-flute mark.
+  The menu contents, labels, order and Collection behaviour are unchanged.
 
 ### Item 2 — Product spelling normalised to "Bandcamp"
 
@@ -1585,19 +1590,56 @@ builds the search string at runtime so its own source does not reintroduce it.
   `contentHeight <= height` under the harness theme. The panel's 180 px floor and
   396 px cap are unchanged.
 
+### Item 5 — Header layout + cat-and-flute settings control
+
+- The header is now one `headerStack` item holding the title band and the search
+  row, so the settings control can overlay both without adding flow height. The
+  title is vertically centred in the band from the panel's top border to the top
+  of the search bar.
+- The search field ends exactly where the settings zone begins: its width is
+  `searchRow.width - headerCatZoneWidth`, with no extra gap. The zone starts
+  where the old Collection button began, rebuilt from the old Collection text
+  metrics, control padding, border widths, one row gap and the old gear width, so
+  the field keeps approximately its previous length.
+- The zone starts at the panel's top border and ends at the bottom of the search
+  row. Its `BcButton` is therefore the one intentionally tall control; every
+  other named control still shares the 28 px height. It is borderless at rest,
+  gets the shell's existing hover fill, and shows the theme accent outline when
+  focused. `objectName: "settingsButton"` is unchanged, so the Tab chain keeps
+  the same stop and there is still no `link-collection` stop.
+- The visual mark is `CatMark.qml`: a vector trace using QML `Shape`/`ShapePath`
+  in the reference drawing's 508×346 coordinate space. Every stroke binds to
+  `strokeColor`, which the panel sets to `Color.accent`. No bitmap is embedded;
+  `docs/cat-and-flute-reference.jpg` is committed alongside it as provenance.
+- The title-only header check remains true: there are no buttons inside
+  `headerRow`; the cat control is a sibling overlay in `headerStack`.
+
+### Addendum — Settings-menu leading icons
+
+- `BcButton` gains a dedicated, fixed-width leading icon slot
+  (`leadingIconText`, `leadingIconSlot`, `leadingIconSpinning`) that shifts the
+  label and the existing icon/check slot. The original check slot is untouched.
+- All five settings entries use the leading slot: Refresh `\uf021`, Hide
+  pre-orders `\ueeb6`, Keyboard shortcuts `\uf11c`, Collection `\uf07b`, Log out
+  `\uf08b`. The harness asserts all five icons occupy one aligned x/y box.
+- The installed `JetBrainsMono Nerd Font` was inventoried before choosing a
+  glyph. `\ueeb6` renders as the theatre masks, so the eye-slash fallback is not
+  used. Hide pre-orders keeps its existing check display in the original slot
+  (`\uf00c` when On, an em-space placeholder when Off), plus the mask in the new
+  slot. Menu order and the checkable behaviour are unchanged.
+
 ### Tests (raw counts)
 
 Clean run on the final tree, with no file edited while the harness was running:
 
 - `python3 -m unittest discover -s tests -t .`: **97 tests OK, 5 skipped**.
 - `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests OK**.
-- `tests/qml/run.sh`: **560 checks passed** (phase 1 521, relaunch 15,
+- `tests/qml/run.sh`: **567 checks passed** (phase 1 528, relaunch 15,
   real-data 17, script-side 7), `FAILS=0` in every phase, exit 0.
 
-The baseline total was 558; the +2 is exactly the two added guards: one
-phase-1 assertion that the focused controls match the theme accent, and one
-script-side repo-text check for the old product spelling. No existing check was
-removed or weakened.
+The starting total was 560 (see Baseline). Item 5 and the icon addendum add 7
+checks and rewrite the stale layout expectations; no existing check was removed
+or weakened.
 
 > Count note: an earlier run reported 743 because `BcButton.qml` was edited
 > while Quickshell was watching the plugin, which hot-reloaded the shell and
@@ -1607,23 +1649,43 @@ removed or weakened.
 ### Harness checks updated (and why)
 
 1. Product-name/title expectation is now `OmaTimeAtBandcamp`.
-2. Header composition: Collection is gone, the search row is field → gear only,
-   the search-field width formula loses one button and one gap, and the open
-   window has 10 buttons (was 11).
-3. Gear-menu exact contents are the five owner labels in order; the new
+2. Header composition: Collection is gone, the search row holds only the field,
+   the cat settings control sits beside it in `headerStack`, the field width
+   formula is `row − cat zone`, and the open window has 10 buttons (was 11).
+3. Settings-menu exact contents are the five owner labels in order; the new
    Collection item's URL/enabled style is checked inside the menu. The logout
    keyboard path presses Down four times (was three).
-4. Phase 7 now opens Collection through the gear menu and still asserts exactly
+4. Phase 7 now opens Collection through the settings menu and still asserts exactly
    the same opened URL.
 5. Header focus walk is six stops (was seven) and both full Part B chain
    expectations lose `link-collection` (14→13 with no queue, 16→15 with one).
-6. The shortcuts-view keyboard path is Tab ×2 to the gear (was ×3).
+6. The shortcuts-view keyboard path is Tab ×2 to the settings control (was ×3).
 7. The shortcuts-view row-size check uses the reflowed 108/112 px columns, and
    the old "scrolls internally" assertion becomes a no-scroll fit assertion
    because that is the new owner requirement.
 8. Added focus-accent checks for a button, the search field and list/queue rows.
 9. Added a script-side repo-text check for the old product spelling, with the
    pattern assembled at runtime.
+10. The settings control check now requires the cat mark in `headerCatZone`, an
+    empty `iconText`, the Settings tooltip and no gear glyph, instead of the old
+    gear-in-search-row expectation.
+11. The search-field width and right-edge checks now measure against the cat
+    zone (field ends at its left edge, cat zone ends at the row's right edge).
+12. The shared-height check excludes the one intentionally tall cat control and
+    asserts that its height spans both header rows. All ordinary buttons stay at
+    the 28 px control height.
+13. The bordered-style check keeps toolbar/footer buttons bordered and accepts
+    exactly two intended borderless controls: the in-field action and the
+    at-rest cat mark.
+14. The menu-position check now looks for the cat control in `headerCatZone`
+    rather than in `searchRow`.
+15. The shared-icon-font check uses Sort's rendered glyph as the reference,
+    because the old gear glyph no longer exists.
+16. Refresh/Log out glyph checks now read the new leading-icon slot, and new
+    checks assert one aligned leading box across all five rows, the mask icon on
+    Hide pre-orders, and its unchanged check slot/state.
+17. Added title-centring, cat-zone span, vector/bitmap, accent-stroke and
+    real-panel-size screenshot checks.
 
 No check was weakened or deleted.
 
@@ -1633,33 +1695,54 @@ No check was weakened or deleted.
   exact fixture URL; opening it uses the recorded opener path.
 - Focused button, field and row borders equal `Color.accent`; an unfocused field
   and an unfocused queue row differ.
-- The five gear entries are exact and in order.
+- The five settings entries are exact and in order.
+- The cat mark is a vector Shape with no bitmap and every stroke uses
+  `Color.accent`; it spans from the panel top to the search row bottom, starts at
+  the field's right edge, and does not add header flow height.
+- The title centre matches the band centre, and the full popup saves a real-size
+  screenshot at `/tmp/omatime-v351-header.png`.
+- All five settings rows have a leading icon in one aligned box; Hide pre-orders
+  uses the theatre-masks glyph and keeps its check in the original slot.
 - The shortcuts groups are side by side in the requested order and the content
   fits the view height without scrolling.
 - The repo text contains no old product spelling.
 
 ### Deviations / owner-visible decisions
 
-- The gear labels are the owner's exact short wording (Refresh, Log out), not
+- The settings labels are the owner's exact short wording (Refresh, Log out), not
   the older longer labels.
 - Collection is a menu item, so it is intentionally not its own Tab stop; the
-  gear menu keeps Up/Down/Enter navigation.
+  settings menu keeps Up/Down/Enter navigation.
 - Focus uses an added full-strength accent ring rather than changing the shell's
   shared focus-fill token, so every unfocused colour stays exactly as it was.
 - The shortcuts key column is narrower to suit two columns; text and font sizes
   are unchanged.
+- The header control is a traced vector drawing, not a theme icon: the cat and
+  flute follow `docs/cat-and-flute-reference.jpg`, with the reference committed
+  as provenance. Stroke colour is still the theme accent, not a hard-coded hex.
+- The settings control is deliberately taller than the shared 28 px control
+  height so it can span the title band and search row; every other control keeps
+  the one-height rule.
+- Menu icons moved to a new leading slot so Hide pre-orders could gain the mask
+  without losing its check. The checkable display and menu order are unchanged.
 
 ### Owner live check
 
-1. `omarchy restart shell`, open the panel. The header is search + gear only.
-2. Open the gear menu: Refresh / Hide pre-orders / Keyboard shortcuts /
-   Collection / Log out, in that order. Choose Collection: the same public
-   collection page opens as before.
+1. `omarchy restart shell`, open the panel. The header is the title band, the
+   search field and the cat-and-flute settings mark at the right; there is no
+   gear icon. Confirm the title looks centred in the band and the field ends at
+   the mark rather than under it.
+2. Click the cat mark: the settings menu is Refresh / Hide pre-orders /
+   Keyboard shortcuts / Collection / Log out, in that order. Every row has a
+   left icon; Hide pre-orders shows theatre masks and keeps its check on the
+   right. Choose Collection: the same public collection page opens as before.
 3. Press Tab from search through the whole chain: search → clear/magnifier →
-   gear → Albums → Playlists → Sort → direction → album/playlist list → Up Next
-   and Clear (only with a queue) → track list → Shuffle → Previous → Play/Pause
-   → Next → search. Shift+Tab reverses it.
-4. Check focus visibility against the real theme accent on the gear, Sort,
+   settings (cat) → Albums → Playlists → Sort → direction → album/playlist list
+   → Up Next and Clear (only with a queue) → track list → Shuffle → Previous →
+   Play/Pause → Next → search. Shift+Tab reverses it.
+4. Check focus visibility against the real theme accent on the cat mark, Sort,
    direction, footer controls, search field and a focused list/queue row.
 5. Open Keyboard shortcuts: the four groups are in two columns with no scrolling
    needed; Esc restores the panes, selection, scroll and queue.
+6. Look at `/tmp/omatime-v351-header.png`: it is the full popup at its real
+   size, saved by the harness.

@@ -36,7 +36,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   cache. `fetch.py` sends it as a `Cookie` header; `mpvctl.py` passes it to mpv.
 - The cookie jar and cache live in `~/.cache/omatimeatbandcamp/` (dir `0700`,
   `cookies.txt` `0600`) and are **never** part of the plugin source.
-- Use the gear menu's "Log out" item (or `clearCookies`
+- Use the settings menu's "Log out" item (or `clearCookies`
   over IPC) to delete the imported jar; the next refresh re-imports it.
 - If your browser is not running or the keyring is locked, cookies may be
   unavailable; set `cookiePath` to a file you export yourself instead.
@@ -50,10 +50,14 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - The module text is always plain `BC`; there is no playback suffix and no separate
   album-art bar widget (v3).
 - The search row has the flexible search field (with a click-to-clear ×, or a magnifier
-  when empty, inside its right end) and the gear button.
-- The gear menu holds Refresh, Hide pre-orders (checkable, remembered), Keyboard shortcuts
-  (a two-column quick reference in the body), Collection (built from the username in the
-  library cache; `xdg-open`; disabled until the username is known) and Log out (with confirmation).
+  when empty, inside its right end). The field ends where the cat-and-flute settings mark
+  begins: the mark fills the right end of the header from the top edge down past the search
+  row, so it is one tall target rather than a small icon button.
+- The settings menu (opened by the cat mark) holds Refresh, Hide pre-orders (checkable,
+  remembered; its check stays in the original slot and a theatre-masks icon sits in the new
+  left icon slot), Keyboard shortcuts (a two-column quick reference in the body), Collection
+  (built from the username in the library cache; `xdg-open`; disabled until the username is
+  known) and Log out (with confirmation).
 - Panel has tabs for Albums and Playlists, a search box, and a now-playing bar.
 - **Keyboard (panel-scoped only):** these shortcuts work only while the popup is open and focused.
   The plugin registers no global shortcut; optional user binds are in
@@ -65,7 +69,7 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   - `/` returns focus to search. Typing while a list is focused also returns to search and keeps
     the character.
   - `Tab` / `Shift+Tab` walk the whole panel in visual order: search → ×/magnifier →
-    gear → Albums → Playlists → Sort → sort direction → album/playlist list → Up Next (only when the
+    settings (cat) → Albums → Playlists → Sort → sort direction → album/playlist list → Up Next (only when the
     queue exists) → its Clear button → track list → Shuffle → Previous → Play/Pause → Next → wrap.
     Entering a list focuses its current/selected row; arrows move inside it. Every focused
     control shows the theme accent.
@@ -166,7 +170,7 @@ bind = SUPER ALT, RIGHT, exec, omarchy-shell omatimeatbandcamp next
 
 These work only while the popup is open and focused:
 
-- `Tab` / `Shift+Tab` walk the whole panel: search → ×/magnifier → gear → Albums →
+- `Tab` / `Shift+Tab` walk the whole panel: search → ×/magnifier → settings (cat) → Albums →
   Playlists → Sort → sort direction → list → Up Next + Clear (when a queue exists) → track list →
   Shuffle → Previous → Play/Pause → Next, then wrap. Lists open on their current/selected row.
 - `↓` / `↑` from search enter the focused list and move the cursor; `Enter` plays the selected
@@ -183,8 +187,9 @@ These work only while the popup is open and focused:
   activates, `Esc` closes without acting, and focus returns to the opening row.
 - `Esc` backs out one layer: cancel confirmation, close menu, close the shortcuts view, clear
   search, close window.
-- The gear menu's **Keyboard shortcuts** item opens the same list in the body, replacing the two
-  panes while it is open. `Esc` (or selecting the item again) closes it and returns focus to the gear.
+- The settings menu's **Keyboard shortcuts** item opens the same list in the body, replacing the two
+  panes while it is open. `Esc` (or selecting the item again) closes it and returns focus to the
+  cat settings control.
 
 ## Features
 
@@ -197,7 +202,7 @@ These work only while the popup is open and focused:
 - Two-line rows (titles wrap, artist on a dimmed second line); selected row and playing track highlighted
 - Sort (Recently added, Artist A–Z, Title A–Z, Release date) from the toolbar, the arrow beside
   Sort for direction (remembered per tab; the selected Sort row shows the same arrow), and a Hide
-  pre-orders filter in the gear menu; all are remembered
+  pre-orders filter in the settings menu; all are remembered
   (`~/.local/state/omatimeatbandcamp/ui.json`)
 - Shuffle: one On/Off icon in the footer transport, remembered per context (each album, each playlist,
   search results, whole library), with a small dot under the glyph while the current context is On;
@@ -211,17 +216,17 @@ These work only while the popup is open and focused:
   (tracks, `Alt+Enter` / `Ctrl+Enter`) or Add to Queue (albums/playlists, `Ctrl+Enter`), shown
   above the context with Clear / Remove (`Delete`) / play-now (`Enter`), and cleared by a shell
   restart or a new context; see [Queue](#queue).
-- Keyboard shortcuts view: the gear menu's Keyboard shortcuts item swaps the two panes for a
+- Keyboard shortcuts view: the settings menu's Keyboard shortcuts item swaps the two panes for a
   two-column reference of every built-in key (Navigation/Playback left, Queue/Search & menus
   right; it fits without scrolling at the standard panel size), then restores the exact panes,
   scroll and queue when closed.
-- Refresh runs the backend sync in the background from the gear menu (cached library stays on screen);
+- Refresh runs the backend sync in the background from the settings menu (cached library stays on screen);
   streams for Subsonic tracks are resolved by the backend (`backend play`), so stream URLs/credentials
   never appear in argv or logs
 - Cached cover art: `backend art` fetches the current Subsonic cover, downscales it to <=128 px and
   writes `~/.cache/omatimeatbandcamp/current-art.jpg` for MPRIS; when stopped it writes the bundled
   BC placeholder. No cover URL ever reaches QML, the bar config or a log
-- Collection (gear menu): opens the verified collection page with `xdg-open`; the username comes from the
+- Collection (settings menu): opens the verified collection page with `xdg-open`; the username comes from the
   library cache, so no per-user URL is hardcoded
 - MPRIS: `backend/mpris.py` publishes title/artist/album, a **local** `file://` cover URL,
   playback status, position and transport controls. mpv's `path` (the credential-bearing stream
