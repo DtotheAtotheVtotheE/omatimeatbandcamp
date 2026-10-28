@@ -2101,3 +2101,377 @@ No existing check was weakened or deleted without a replacement above.
 5. Look at `/tmp/omatime-v353-header.png` (835 × 570) and
    `/tmp/omatime-v353-syncing.png` (835 × 594): both are the full popup at real
    size, and the mark is centred in its zone in both.
+
+## v3.5.4 cat column + bold art + eye-slash (2026-10-28)
+
+### Baseline (fresh session, before editing)
+
+- Branch/commit: `v2` @ `8f330de` (the v3.5.3 SVG-trace commit).
+- Python: **100 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`).
+- QML: **580 checks**, `FAILS=0` in every phase (phase 1 540, relaunch 15,
+  real-data 17, script-side 8); `QML tests: OK`.
+- The counts matched the quoted baseline exactly before any file was changed.
+
+### Input audit — `docs/cat-flute-bold.svg`
+
+- Present, exactly **15,203 bytes**, with the header comment
+  `<!-- Generator: visioncortex VTracer 0.6.12 -->`.
+- Root size is **508 × 346**, and it has exactly **3 `<path>`** elements, all
+  `fill="currentColor"`. The asset was copied byte-for-byte to
+  `assets/cat-flute.svg`; both files hash to
+  `a8dfadbd8b06a38543a986328148396210178e2bca8a0f494eb39e3e50710fe2`.
+
+| # | transform | `d` length | `d` sha256 (first 16) |
+|---|-----------|-----------:|-----------------------|
+| 1 | `translate(34.01953125,-0.609375)` | 14,097 | `4a5c5cf2f5351caa` |
+| 2 | `translate(95,103)` | 345 | `ec8cf09c2f76323f` |
+| 3 | `translate(179.8125,103.3125)` | 372 | `6b80937e8d601ae6` |
+
+### Bold art — `CatMark.qml`
+
+- The same `Shape` / `ShapePath` / `PathSvg` renderer is kept; only the path
+  inventory changed from 5 paths to the bold file's **3 paths**. Each `d`
+  string is copied exactly from the SVG, each file `translate(...)` sits on its
+  Shape, and the inner 508 × 346 layer is scaled into the fitted item.
+- Every `ShapePath.fillColor` is `root.tintColor`; `tintColor` is
+  `Color.accent` and Panel binds it again. No raster and no baked colour.
+- Added `inkCentroidX = 0.3739915779`, `inkCentroidY = 0.5262729689`: the
+  alpha-weighted centroid of a high-resolution render of the bold SVG,
+  normalised to the 508 × 346 viewBox. Panel positions the mark by this point.
+
+### Layout — `Panel.qml`
+
+- **Header:** title + search only. The v3.5.3 status row was removed from the
+  header, and `headerStack.height` is back to two control rows plus one gap.
+- **Search field:** `searchFieldWidth = round(panel.contentWidth * 0.72) -
+  headerTopInset` (the first attempt used `panel.width`; see the retry
+  postmortem below for the live-only failure). Measured right edge is
+  **71.98%** of the popup width (accepted 68–75%). Field height, styling,
+  placeholder, clear/magnifier and Tab behaviour are unchanged.
+- **Cat column:** an overlay sibling of the content column (so it does not
+  participate in the Column layout), `x = searchFieldWidth`, from the panel top
+  border (`y = -headerTopInset`) down to the top of the panes. Measured
+  **218 × 112**; the whole column is the one `settingsButton`, so hover and the
+  accent focus outline frame all of it.
+- **Mark:** fit with a 4 px margin on both axes, aspect preserved; positioned so
+  the ink centroid lands on the column centre:
+  `x = colW/2 - inkCentroidX*width`, `y = colH/2 - inkCentroidY*height`, with
+  bbox clamps that keep at least 1 px above the top border.
+  Measured art **152.69 × 104.00**, bbox top **1.27 px** below the border,
+  centroid exactly on the column centre in QML (`710.00,96.00` vs
+  `710.00,96.00`).
+- **Sync status:** a `syncStatusLabel` Text in the toolbar row, visible only
+  while `service.status` starts with `Syncing library`. It is an overlay, not a
+  Row child. Measured rect **505,127,96 × 14**, right edge **601.00** (flush
+  with the field), Sort-direction right edge **455.84**, clearance **49.16 px**
+  (≥ 8 required). The label overlaps no control and shifts no geometry.
+- **Hide pre-orders:** leading icon is now the Font Awesome eye-slash
+  `\uf070`; the same leading slot, font, icon size and row height are used, and
+  the original check slot (`\uf00c` / blank) is unchanged.
+
+### Changed checks (enumerated)
+
+Removed/replaced (phase 1) because the tall-header design was replaced:
+
+- `v3.5.3: the syncing status row is inside the header block and grows the cat
+  zone` → removed; the header no longer contains a status row.
+- `v3.5.3: tall syncing header: the art centre matches the zone centre on both
+  axes` → replaced by the centroid/column checks.
+- `v3.5.3: tall syncing header: the art bbox stays inside the zone, clear of
+  the top border` → replaced by the column bbox/ear-clearance check.
+- `v3.5.3: tall syncing header: equal top/bottom margins and aspect preserved`
+  → removed with the tall header; aspect fit is asserted in the new fit check.
+- `v3.5.3: the status row hides again and the cat zone returns to its normal
+  height` → replaced by the label-hides/column-stays-put check.
+- `v3.5.1: the cat zone spans the title band and the search row…`, the old
+  field-width/zone-width checks, and `v3.5.1: only the cat settings control is
+  deliberately taller (it spans both header rows)` were replaced by the column
+  geometry checks below.
+- `v3.5.3: the cat mark is the shipped SVG trace` → `v3.5.4: the cat mark is
+  the bold shipped SVG trace`, now 3 paths.
+- `v3.5.3: every cat path is filled from the theme accent binding` → `v3.5.4:
+  every bold cat path…`, now 3 paths.
+- `v3.5.1: the settings control is the cat-and-flute mark at the right end of
+  the header` → `v3.5.4: the settings control is the cat-and-flute mark with its
+  menu`, now checked against the column.
+- `v3.5.3: the normal header rendered at the real panel size` → `v3.5.4: the
+  normal header rendered at the real panel size`, saving
+  `/tmp/omatime-v354-header.png`.
+- `v3.5.3: the tall syncing header rendered at the real panel size` → `v3.5.4:
+  the syncing-state panel rendered at the real panel size`, saving
+  `/tmp/omatime-v354-syncing.png`.
+- `v3.5.1 addendum: Hide pre-orders adds the theatre-masks icon…` → `v3.5.4:
+  Hide pre-orders uses the eye-slash glyph in the same leading slot and keeps
+  its check slot unchanged`.
+
+Added/replaced (phase 1):
+
+- `v3.5.4: the header is title + search only, with no status row in it`.
+- `v3.5.4: the search row holds only the field; the cat column sits beside it`.
+- `v3.5.4: the search field's right edge sits at ~72% of the panel width
+  (68–75% accepted)`.
+- `v3.5.4: the cat column starts at the field's right edge and ends at the
+  panel's right inner edge`.
+- `v3.5.4: the cat column runs from the panel top border to the top of the
+  panes`.
+- `v3.5.4: the whole cat column is the settings button`.
+- `v3.5.4: the title is still centred in the band above the search row`.
+- `v3.5.4: the bold mark is fitted inside the column on both axes, aspect
+  preserved`.
+- `v3.5.4: the mark's ink centroid matches the cat-column centre on both axes`.
+- `v3.5.4: the mark's bbox sits fully inside the column with the ears clear of
+  the top border`.
+- `v3.5.4: the bold mark still fills at least 90% of the column height`.
+- `v3.5.4: the ink centroid is measured from the bold asset, not the bbox`.
+- `v3.5.4: the syncing label appears in the Albums/Playlists/Sort row only
+  while syncing`.
+- `v3.5.4: the syncing label's right edge is flush with the search field's
+  right edge`.
+- `v3.5.4: the syncing label clears Sort direction by at least 8 px and
+  overlaps nothing`.
+- `v3.5.4: showing the syncing label shifts no header, field, column or control
+  geometry`.
+- `v3.5.4: the cat column and art geometry are identical in normal and syncing
+  states`.
+- `v3.5.4: the syncing label hides again and the cat column stays put`.
+- `v3.5.4: the label stays hidden for non-sync status text`.
+
+Replaced in Python (same 3 SVG tests, bold inventory):
+
+- `test_svg_is_the_shipped_vtracer_trace` — now asserts the 15,203-byte bold
+  asset, VTracer header, 508 × 346, 3 paths.
+- `test_every_svg_path_is_current_color` — now 3 `currentColor` paths.
+- `test_qml_path_data_matches_the_svg_and_is_fill_bound` — now compares the
+  bold file's 3 exact `d` strings/transforms with `CatMark.qml`.
+
+Script side (same accent check plus one new centroid check):
+
+- `PASS the rendered bold cat paths are the theme accent at full strength, with
+  no baked white`.
+- `PASS the rendered bold cat's ink centroid is centred in the column` — crops
+  the column from the saved PNG, alpha-weights the ink against the panel
+  background, and requires the centroid within 3 px of the column centre on
+  both axes.
+
+No existing check was weakened or deleted without a replacement above.
+
+### Results
+
+- Python: **100 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK**.
+- QML: **585 checks**, `FAILS=0` in every phase (phase 1 544, relaunch 15,
+  real-data 17, script-side 9); `QML tests: OK` (`580 → 585`).
+- Normal geometry: field right edge **71.98%** of panel width; cat column
+  **218 × 112**; art **152.69 × 104.00**, top margin **1.27 px**.
+- Syncing state: same column/art geometry; label right edge **601.00**, field
+  right edge **601.00**, Sort-direction right edge **455.84**, clearance
+  **49.16 px**.
+- Accent probe:
+  `rect=655,4,148,99 accent=#cacccc inkPixels=2855 exactAccentPixels=1470
+  peak=#cacccc pureWhitePixels=0 overAccentPixels=0`.
+- Centroid probe:
+  `column=601,0,219,113 centroid=709.60,55.84 target=710.50,56.50
+  error=-0.90,-0.66 inkWeight=2498.6`.
+- Normal screenshot: `/tmp/omatime-v354-header.png`, **835 × 570**.
+- Syncing screenshot: `/tmp/omatime-v354-syncing.png`, **835 × 570** (same
+  layout; only the toolbar label appears). Both are `saved=true`,
+  `Image.Ready`, and match `keyboardPanel()` dimensions.
+
+### Deviations / owner-visible decisions
+
+- The cat column is an overlay rather than a Column child. This is deliberate:
+  as a Column child it would add its own height to the popup and push the panes
+  down. As an overlay it spans the required area without shifting layout.
+- The cat column covers the otherwise-empty right end of the toolbar row. No
+  control lives there, and the syncing label stops exactly at the column's left
+  edge, so nothing is covered.
+- The field lands at **71.98%** (inside the allowed 68–75%) rather than exactly
+  72.0% because the width is rounded to whole pixels and the panel's left inset
+  is subtracted.
+- Only `Syncing library...` statuses are rendered in the toolbar label. The
+  other transient statuses (`Library updated…`, failures) are not shown in the
+  header; the header is title + search only in every state.
+- `docs/radio-spike-2026-10.md` remains an unrelated untracked research note.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel. The header is just the title and the
+   shorter search field; the cat/flute mark is bold, vector, and fills the tall
+   right-hand column down to the panes.
+2. Confirm the mark's visual centre looks balanced: the ink centroid (body +
+   flute mass), not the empty bounding-box centre, is centred in the column.
+3. Trigger a refresh: `Syncing library…` appears in the Albums/Playlists/Sort
+   row, right-aligned under the search field, with clear space before the
+   direction button. Nothing moves while it appears/disappears.
+4. Click anywhere in the column: the same settings menu opens. Tab to it: the
+   accent outline frames the whole column; hover tints the whole column.
+5. Open the gear menu: Hide pre-orders now uses the eye-slash glyph in the same
+   left slot, with its check unchanged.
+6. Compare `/tmp/omatime-v354-header.png` and `/tmp/omatime-v354-syncing.png`
+   (both 835 × 570): identical layout, only the status label differs.
+
+## v3.5.4 retry — live-path width basis (2026-10-28)
+
+The v3.5.4 feature set above is kept: bold 3-path SVG art, shortened search
+field, cat column from the panel top border to the panes with the mark placed
+by its ink centroid, the syncing label in the controls row (right-aligned to
+the field's right edge), and the eye-slash gear glyph. This retry fixes the
+live-only geometry failure in the first attempt and adds a harness regression
+that reproduces it.
+
+### Baseline (fresh session, before editing)
+
+- Branch/commit: `v2` @ `a486a82` (`Revert "v3.5.4: cat column, bold SVG art,
+  eye-slash icon"` on top of `531b8f7`); `git diff 8f330de HEAD` was empty, so
+  the tree content equalled `8f330de`.
+- Python: **100 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`).
+- QML: **580 checks**, `FAILS=0` (phase 1 540, relaunch 15, real-data 17,
+  script-side 8); `QML tests: OK`.
+- All four figures matched the quoted baseline exactly before any file changed.
+
+### Phase 1 postmortem — why the harness passed and the live panel did not
+
+The bad tree was checked out in a scratch worktree at
+`/tmp/opencode/omatime-531b8f7`; the live plugin directory was never checked
+out over.
+
+**a. Live-path instantiation and logs.** The panel was loaded through its real
+bar-widget entry point (`Panel.qml`) with the real `qs.Ui.KeyboardPanel` — a
+full-screen layer surface with an 835 px card — not `tests/qml/shell.qml`'s
+plain-Item stub. Measured on the live session's logical screen:
+
+```
+screen=1280x720 KeyboardPanel.width=1280 height=720 contentWidth=835 contentHeight=120
+contentColumn at 0,0 size 803x88 searchRow.width=803 searchBand.width=803
+searchField at 0,32 size 906x28 right=906 contentRight=803 overflow=103
+headerCatColumn at 906,-16 size 0x112 catStencil at 908.99,42.87 size -8x-5.45
+```
+
+No `CatMark.qml` error or warning appeared. The shell's own log
+(`/run/user/1000/quickshell/by-id/vc0dty1nnt/log.log`) shows no OmaTimeAtBandcamp
+panel/widget failure; its only plugin warnings are from unrelated
+`rohirik.agent-monitor` / `asdfsnlr.omabricktetris` widgets, plus the expected
+`Module path ".../omatimeatbandcamp" is outside of the config folder`. So the
+cat was absent because its column was zero-wide, not because the QML failed to
+load.
+
+**b. The width basis.** In the harness the field resolves against
+`KeyboardPanel.stub.qml`'s root `Item`, whose `width: contentWidth` made
+`panel.width == 835`. In the live parent chain it resolves against the real
+`KeyboardPanel` `PanelWindow`, which is anchored full-screen, so
+`panel.width == 1280` while the visible card is `panel.contentWidth == 835` and
+the content column is **803**. The same expression therefore produced:
+
+| value | harness | live |
+|---|---:|---:|
+| `panel.width` (basis) | 835 | 1280 |
+| `contentColumn.width` | 803 | 803 |
+| `searchFieldWidth` = `round(panel.width * 0.72) - 16` | **585** | **906** |
+| field right edge vs content right | 601 vs 819 | 906 vs 803 (**+103 overflow**) |
+
+**c. The zero-width cat.** `headerCatColumnWidth = max(0,
+contentColumn.width - searchFieldWidth)` was `max(0, 803 - 585) = 218` in the
+harness and `max(0, 803 - 906) = 0` live. `CatMark` was then fitted to
+`parent.width - 2 * fitMargin = 0 - 16`, giving the measured **-8 × -5.45**
+item; it painted nothing.
+
+**One root cause:** `searchFieldWidth` was bound to `panel.width`, which in the
+real `KeyboardPanel` is the full-screen layer surface (1280 px), not the popup
+card width (835 px); the test stub made those two equal (835 px), so the
+harness measured 585 px and 218 px of cat while the live panel measured 906 px
+and a zero-width cat column.
+
+### Fix at the source
+
+`Panel.qml` now derives the field from the card width that both the real
+KeyboardPanel and the stub expose explicitly:
+
+```qml
+readonly property real searchFieldWidth: Math.min(contentColumn.width, Math.max(0,
+  Math.round(panel.contentWidth * 0.72) - headerTopInset))
+```
+
+`contentWidth` is 835 in the real shell and in the stub; the extra
+`contentColumn.width` clamp means the field can never run past the card on a
+narrow surface. Nothing about the art, centroid placement, column extent,
+syncing label or eye-slash glyph changed.
+
+### Regression check — named for this incident
+
+The stub now separates `surfaceWidth` (the full-screen surface, defaulting to
+`contentWidth`) from `contentWidth` (the card), and keeps the card/holder sized
+by `contentWidth`. Three new harness steps change only `surfaceWidth` to
+1280 / 1920 / 2560 px and assert, for each:
+
+- the field is still `round(contentWidth * 0.72) - headerTopInset` (585 px);
+- its right edge stays inside the content column and flush with the column's
+  left edge;
+- the cat column has non-zero width and `CatMark` has non-zero width/height.
+
+Added checks:
+
+- `v3.5.4 retry: at a 1280 px live surface the field stays inside the card and
+  the cat keeps nonzero width (531b8f7 regression)`.
+- `v3.5.4 retry: at a 1920 px live surface … (531b8f7 regression)`.
+- `v3.5.4 retry: at a 2560 px live surface … (531b8f7 regression)`.
+
+Run against `531b8f7`'s `Panel.qml` with the new test files, all three fail:
+
+```
+surface=1280 expectedField=585 actualField=906 column=0.00 cat=-8.00x-5.45 ok=false
+surface=1920 expectedField=585 actualField=1366 column=0.00 cat=-8.00x-5.45 ok=false
+surface=2560 expectedField=585 actualField=1827 column=0.00 cat=-8.00x-5.45 ok=false
+FAILS=3 ... QML tests: FAILED
+```
+
+With the fix they pass:
+
+```
+surface=1280 expectedField=585 actualField=585 fieldRight=601.00 contentRight=819.00 column=218.00 cat=152.69x104.00 ok=true
+surface=1920 … ok=true
+surface=2560 … ok=true
+```
+
+No existing check was removed or weakened. Added **3** QML checks (`585 → 588`);
+phase 1 went from 544 to **547**, with relaunch 15, real-data 17 and script-side
+9 unchanged.
+
+### Results
+
+- Python: **100 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK**.
+- QML: **588 checks**, `FAILS=0` in every phase (phase 1 547, relaunch 15,
+  real-data 17, script-side 9); `QML tests: OK`.
+- Accent probe: `rect=655,4,148,99 accent=#cacccc inkPixels=2855
+  exactAccentPixels=1470 peak=#cacccc pureWhitePixels=0 overAccentPixels=0`.
+- Centroid probe: `column=601,0,219,113 centroid=709.60,55.84
+  target=710.50,56.50 error=-0.90,-0.66 inkWeight=2498.6`.
+- Harness geometry: field **585**, field right **601 (71.98%)**, cat column
+  **218 × 112**, art **152.69 × 104.00**, top margin **1.27 px**.
+- Live-path geometry with the real KeyboardPanel at 1280 × 720: field **585**
+  (right **585**, content right **803**, overflow **-218**), cat column
+  **218 × 112**, cat **152.69 × 104.00** — normal and syncing states identical.
+- Harness screenshots (full popup, real size): `/tmp/omatime-v354-header.png`
+  and `/tmp/omatime-v354-syncing.png`, both **835 × 570**, `saved=true`,
+  `Image.Ready`.
+- Live-path screenshots (real KeyboardPanel, 1.5 device scale):
+  `/tmp/omatime-v354-live-normal.png` and
+  `/tmp/omatime-v354-live-syncing.png`, both **1253 × 180** physical px
+  (**835 × 120** logical card). The field ends before the cat, the cat paints,
+  and only the syncing label changes.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel on the real 1280 × 720 logical
+   screen. The search field ends around 72% of the popup, not past its right
+   edge.
+2. The bold cat/flute fills the column from the top border down to the panes;
+   the ink centroid is centred, not the empty bbox.
+3. Trigger a refresh: `Syncing library…` appears in the controls row,
+   right-aligned to the field's right edge; nothing moves.
+4. The gear menu still uses the eye-slash leading glyph, and Tab/hover/focus
+   still frame the whole cat column.
+5. Compare the two live-path screenshots above; the cat column and field are
+   identical in both, only the status label differs.

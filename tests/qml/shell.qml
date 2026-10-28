@@ -44,9 +44,11 @@ ShellRoot {
   property bool headerSave: false
   property var syncShot: null
   property bool syncSave: false
-  property real syncZoneHeight: 0
-  property real syncArtWidth: 0
+  property var headerGeom: null
   property real frameNoQueueHeadY: 0
+  // v3.5.4 retry: the live-path regression changes only the stub's surface
+  // width and restores it before the screenshot checks.
+  property real livePathSavedSurfaceWidth: 0
 
   Plug.Service { id: svc }
 
@@ -121,7 +123,7 @@ ShellRoot {
     source: ""
   }
 
-  // v3.5.3: the tall syncing-header screenshot, loaded back the same way.
+  // v3.5.4: the syncing-state screenshot, loaded back the same way.
   Image {
     id: syncShotProbe
     visible: false
@@ -227,10 +229,44 @@ ShellRoot {
   }
   function searchMagnifier() { return iconGlyphOf(searchAction()) }
   function keyboardPanel() { return find(stage, function(it) { return typeof it.fittedContentHeight === "function" }) }
+  // v3.5.4 retry: on 531b8f7 the field was computed from the full-screen
+  // KeyboardPanel.width, so widening only the surface (as the real shell does)
+  // pushed the field past the card and collapsed the cat column to zero. The
+  // fixed code derives both from contentWidth, so only surfaceWidth changes.
+  function livePathHeaderOk(surfaceWidth) {
+    var kp = keyboardPanel(), sf = searchField()
+    var cc = named(stage, "headerCatColumn"), art = named(stage, "catStencil")
+    var f = sf.mapToItem(stage, 0, 0), z = cc.mapToItem(stage, 0, 0)
+    var expectedField = Math.round(kp.contentWidth * 0.72) - panel.headerTopInset
+    var contentRight = z.x + cc.width
+    var ok = Math.abs(sf.width - expectedField) <= 1 &&
+      (f.x + sf.width) <= contentRight + 0.5 &&
+      Math.abs((f.x + sf.width) - z.x) <= 1 &&
+      cc.width > 0 && art.width > 0 && art.height > 0
+    log("v3.5.4 retry surface=" + surfaceWidth + " contentWidth=" + kp.contentWidth +
+      " expectedField=" + expectedField + " actualField=" + sf.width +
+      " fieldRight=" + (f.x + sf.width).toFixed(2) + " contentRight=" + contentRight.toFixed(2) +
+      " column=" + cc.width.toFixed(2) + " cat=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
+      " ok=" + ok)
+    return ok
+  }
   function isInside(item, ancestor) {
     if (!item || !ancestor) return false
     for (var p = item; p; p = p.parent) if (p === ancestor) return true
     return false
+  }
+  // v3.5.4: capture/compare geometric rectangles in stage coordinates so the
+  // normal and syncing states can be proven pixel-identical.
+  function geomOf(item) {
+    if (!item) return null
+    var p = item.mapToItem(stage, 0, 0)
+    return { x: p.x, y: p.y, w: item.width, h: item.height }
+  }
+  function sameGeom(a, b, tol) {
+    if (!a || !b) return false
+    var d = tol === undefined ? 0.01 : tol
+    return Math.abs(a.x - b.x) <= d && Math.abs(a.y - b.y) <= d &&
+      Math.abs(a.w - b.w) <= d && Math.abs(a.h - b.h) <= d
   }
   function clickMagnifier() {
     var m = searchMagnifier()
@@ -388,20 +424,19 @@ ShellRoot {
       check("no clear-session icon in header", !find(stage, function(it) { return it.hasOwnProperty("iconText") && it.iconText === "\uF08B" && it.visible }))
       check("header row contains ONLY the title (the gear is no longer in it)", !!named(stage, "headerTitle") && named(stage, "headerTitle").text === "OmaTimeAtBandcamp" && allButtons(named(stage, "headerRow"), []).length === 0)
       check("v3.1: title font is one step larger (+2 pt over the v3 subtitle size)", named(stage, "headerTitle").font.pixelSize === Style.font.subtitle + 2)
-      check("v3.5.1: the settings control is the cat-and-flute mark at the right end of the header, with its menu",
+      check("v3.5.4: the settings control is the cat-and-flute mark with its menu",
         !!settingsButton() && settingsButton().iconText === "" && settingsButton().tooltipText === "Settings" &&
-        isInside(settingsButton(), named(stage, "headerCatZone")) &&
-        isInside(settingsButton(), named(stage, "headerStack")) && !button("\uf141"))
+        isInside(settingsButton(), named(stage, "headerCatColumn")) && !button("\uf141"))
       var cat = named(stage, "catStencil")
-      check("v3.5.3: the cat mark is the shipped SVG trace, not a raster stencil",
+      check("v3.5.4: the cat mark is the bold shipped SVG trace, not a raster stencil",
         !!cat && !named(stage, "catMaskCanvas") && !named(stage, "catMaskImage") &&
         !named(stage, "catMarkShape") &&
         String(cat.svgFile).indexOf("cat-flute.svg") >= 0 &&
         cat.implicitWidth === 508 && cat.implicitHeight === 346 &&
-        cat.pathCount === 5 && cat.isVector === true &&
-        !!named(stage, "catPath0") && !!named(stage, "catPath4"))
-      check("v3.5.3: every cat path is filled from the theme accent binding (no baked colour)",
-        !!cat && cat.pathData.length === 5 &&
+        cat.pathCount === 3 && cat.isVector === true &&
+        !!named(stage, "catPath0") && !!named(stage, "catPath2"))
+      check("v3.5.4: every bold cat path is filled from the theme accent binding (no baked colour)",
+        !!cat && cat.pathData.length === 3 &&
         String(cat.tintColor) === String(Color.accent) &&
         String(cat.fillColor) === String(Color.accent) &&
         String(cat.renderedColor) === String(Color.accent) &&
@@ -416,54 +451,73 @@ ShellRoot {
     },
     function() {
       var sf = searchField(), gear = settingsButton(), row = named(stage, "searchRow")
-      var cz = named(stage, "headerCatZone"), sb = named(stage, "searchBand")
+      var cc = named(stage, "headerCatColumn"), sb = named(stage, "searchBand")
       var s = sf.mapToItem(stage, 0, 0), g = gear.mapToItem(stage, 0, 0)
-      var z = cz.mapToItem(stage, 0, 0), p = keyboardPanel().mapToItem(stage, 0, 0)
+      var z = cc.mapToItem(stage, 0, 0), p = keyboardPanel().mapToItem(stage, 0, 0)
       var band = sb.mapToItem(stage, 0, 0)
-      log("v3.5.1 popup content width=" + keyboardPanel().contentWidth + " row=" + row.width + " field=" + sf.width + " cat=" + cz.width + " catHeight=" + cz.height + " spacing=" + row.spacing)
+      var panes = named(stage, "libraryRow").mapToItem(stage, 0, 0)
+      var panelW = keyboardPanel().width
+      var fieldRightFraction = ((s.x + sf.width) - p.x) / panelW
+      log("v3.5.4 popup width=" + panelW + " row=" + row.width + " field=" + sf.width +
+        " column=" + cc.width + "x" + cc.height + " fieldRight=" + fieldRightFraction.toFixed(4))
       check("v3.2: popup content width is the new ~835 px value (820-840 accepted)", keyboardPanel().contentWidth === Style.space(835) && keyboardPanel().contentWidth >= 820 && keyboardPanel().contentWidth <= 840)
-      check("v3.5.1: the search row holds only the field; the cat control sits beside it",
+      check("v3.5.4: the header is title + search only, with no status row in it",
+        !named(stage, "headerStatusRow") && !named(stage, "headerStatus") &&
+        named(stage, "headerStack").height === panel.controlHeight * 2 + Style.spacing.sm)
+      check("v3.5.4: the search row holds only the field; the cat column sits beside it",
         allButtons(row, []).filter(function(b) { return b.objectName !== "searchAction" }).length === 0 &&
-        isInside(sf, row) && !isInside(gear, row) && isInside(gear, cz))
-      check("v3.5.1: the field ends exactly where the cat zone begins and the cat zone ends at the row's right edge",
-        Math.abs((s.x + sf.width) - z.x) <= 1 && Math.abs((z.x + cz.width) - (row.mapToItem(stage, 0, 0).x + row.width)) <= 1)
-      check("v3.5.1: the field takes all remaining row width (no gap before the cat zone)",
-        Math.abs(sf.width - (row.width - cz.width)) <= 1 && sf.width > row.width * 0.75)
-      check("v3.5.1: the cat zone spans the title band and the search row, from the panel's top edge to the search row's bottom",
-        Math.abs(z.y - p.y) <= 1 && Math.abs((z.y + cz.height) - (band.y + sb.height)) <= 1 &&
-        cz.height === panel.headerCatZoneHeight && cz.height > sf.height)
+        isInside(sf, row) && !isInside(gear, row) && isInside(gear, cc))
+      check("v3.5.4: the search field's right edge sits at ~72% of the panel width (68-75% accepted)",
+        fieldRightFraction >= 0.68 && fieldRightFraction <= 0.75)
+      check("v3.5.4: the cat column starts at the field's right edge and ends at the panel's right inner edge",
+        Math.abs((s.x + sf.width) - z.x) <= 1 &&
+        Math.abs((z.x + cc.width) - (p.x + panelW - panel.headerTopInset)) <= 1)
+      check("v3.5.4: the cat column runs from the panel top border to the top of the panes",
+        Math.abs(z.y - p.y) <= 1 && Math.abs((z.y + cc.height) - panes.y) <= 1 &&
+        cc.height === panel.headerCatColumnHeight && cc.height > sf.height)
+      check("v3.5.4: the whole cat column is the settings button",
+        Math.abs(g.x - z.x) <= 0.5 && Math.abs(g.y - z.y) <= 0.5 &&
+        Math.abs((g.x + gear.width) - (z.x + cc.width)) <= 0.5 &&
+        Math.abs((g.y + gear.height) - (z.y + cc.height)) <= 0.5)
       var title = named(stage, "headerTitle"), t = title.mapToItem(stage, 0, 0)
-      log("v3.5.1 geometry: panelY=" + p.y + " catY=" + z.y + " catBottom=" + (z.y + cz.height) + " bandY=" + band.y + " bandBottom=" + (band.y + sb.height) + " titleCenter=" + (t.y + title.height / 2) + " expected=" + (p.y + (band.y - p.y) / 2) + " inset=" + panel.headerTopInset)
-      check("v3.5.1: the title is centred in the band above the search row",
+      log("v3.5.4 geometry: panelY=" + p.y + " columnY=" + z.y + " columnBottom=" + (z.y + cc.height) +
+        " panesY=" + panes.y + " bandY=" + band.y + " titleCenter=" + (t.y + title.height / 2) +
+        " inset=" + panel.headerTopInset)
+      check("v3.5.4: the title is still centred in the band above the search row",
         Math.abs((t.y + title.height / 2) - (p.y + (band.y - p.y) / 2)) <= 1)
       var art = named(stage, "catStencil")
-      var ac = art.mapToItem(stage, art.width / 2, art.height / 2)
-      var zc = cz.mapToItem(stage, cz.width / 2, cz.height / 2)
       var ap = art.mapToItem(stage, 0, 0)
-      var artTop = ap.y, artLeft = ap.x
-      log("v3.5.3 normal geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
-        " centre=" + ac.x.toFixed(2) + "," + ac.y.toFixed(2) + " zoneCentre=" + zc.x.toFixed(2) + "," + zc.y.toFixed(2) +
-        " heightRatio=" + (art.height / cz.height).toFixed(3) +
-        " topMargin=" + (artTop - z.y).toFixed(2) + " bottomMargin=" + ((z.y + cz.height) - (artTop + art.height)).toFixed(2))
+      var cx = ap.x + art.inkCentroidX * art.width
+      var cy = ap.y + art.inkCentroidY * art.height
+      var colCx = z.x + cc.width / 2, colCy = z.y + cc.height / 2
+      log("v3.5.4 normal geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
+        " bbox=" + ap.x.toFixed(2) + "," + ap.y.toFixed(2) +
+        " centroid=" + cx.toFixed(2) + "," + cy.toFixed(2) +
+        " columnCentre=" + colCx.toFixed(2) + "," + colCy.toFixed(2) +
+        " heightRatio=" + (art.height / cc.height).toFixed(3) +
+        " topMargin=" + (ap.y - z.y).toFixed(2))
       // Pixel probe bounds, relative to the panel that the screenshot captures.
-      // The script-side check crops exactly this rect from the saved PNG.
+      // The script-side checks crop exactly these rects from the saved PNG.
       var po = keyboardPanel().mapToItem(stage, 0, 0)
-      log("v3.5.3 pixels: accent=" + String(Color.accent) +
+      log("v3.5.4 pixels: accent=" + String(Color.accent) +
         " art=" + Math.floor(ap.x - po.x) + "," + Math.floor(ap.y - po.y) + "," +
-        (Math.ceil(art.width) + 1) + "," + (Math.ceil(art.height) + 1))
-      check("v3.5.3: the SVG mark's bounding-box centre matches the cat-zone centre on both axes",
-        Math.abs(ac.x - zc.x) <= 1 && Math.abs(ac.y - zc.y) <= 1)
-      check("v3.5.3: the SVG mark's bbox sits fully inside the cat zone (no clipping)",
-        artLeft >= z.x - 0.5 && artTop >= z.y + 0.5 &&
-        artLeft + art.width <= z.x + cz.width + 0.5 &&
-        artTop + art.height <= z.y + cz.height + 0.5)
-      check("v3.5.3: the SVG mark fills at least 90% of the cat-zone height",
-        art.height >= cz.height * 0.90)
-      check("v3.5.3: the SVG mark preserves the asset aspect ratio (never stretched)",
+        (Math.ceil(art.width) + 1) + "," + (Math.ceil(art.height) + 1) +
+        " column=" + Math.floor(z.x - po.x) + "," + Math.floor(z.y - po.y) + "," +
+        (Math.ceil(cc.width) + 1) + "," + (Math.ceil(cc.height) + 1))
+      check("v3.5.4: the bold mark is fitted inside the column on both axes, aspect preserved",
+        art.width <= cc.width + 0.5 && art.height <= cc.height + 0.5 &&
         Math.abs((art.width / art.height) - (508 / 346)) <= 0.01)
-      check("v3.5.3: the SVG mark sits with equal small top/bottom margins and clear of the top border",
-        Math.abs((artTop - z.y) - ((z.y + cz.height) - (artTop + art.height))) <= 1 &&
-        (artTop - z.y) > 0.5 && (artTop - z.y) <= Style.space(2))
+      check("v3.5.4: the mark's ink centroid matches the cat-column centre on both axes",
+        Math.abs(cx - colCx) <= 2 && Math.abs(cy - colCy) <= 2)
+      check("v3.5.4: the mark's bbox sits fully inside the column with the ears clear of the top border",
+        ap.x >= z.x - 0.5 && ap.y >= z.y + 0.5 &&
+        ap.x + art.width <= z.x + cc.width + 0.5 &&
+        ap.y + art.height <= z.y + cc.height + 0.5)
+      check("v3.5.4: the bold mark still fills at least 90% of the column height",
+        art.height >= cc.height * 0.90)
+      check("v3.5.4: the ink centroid is measured from the bold asset, not the bbox",
+        Math.abs(art.inkCentroidX - 0.3739915779) < 0.0001 &&
+        Math.abs(art.inkCentroidY - 0.5262729689) < 0.0001)
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -483,81 +537,121 @@ ShellRoot {
       log("v3.1 named control heights=" + Object.keys(ch))
       check("v3.1: search field, Albums (N), Playlists (N), Sort and the four footer transport buttons share ONE measured height",
         controls.every(function(x) { return !!x }) && Object.keys(ch).length === 1 && Object.keys(ch)[0] == Style.spacing.controlHeight)
-      check("v3.5.1: only the cat settings control is deliberately taller (it spans both header rows)",
-        gear.height === cz.height && gear.height > Style.spacing.controlHeight)
+      check("v3.5.4: only the cat settings control is deliberately taller (it is the whole column)",
+        gear.height === cc.height && gear.height > Style.spacing.controlHeight)
+      host.headerGeom = {
+        field: geomOf(sf), column: geomOf(cc), gear: geomOf(gear), art: geomOf(art),
+        albums: geomOf(button("Albums (" + svc.albumsView.length + ")")),
+        playlists: geomOf(button("Playlists (" + svc.playlists.length + ")")),
+        sort: geomOf(sortButton()), sortDir: geomOf(named(stage, "sortDirectionButton")),
+        toolbar: geomOf(named(stage, "toolbar")), panes: geomOf(named(stage, "libraryRow"))
+      }
     },
-    // v3.5.3: real-size header screenshots for the normal and tall syncing
-    // states, saved so the results can be quoted and looked at. Grab the whole
-    // popup (not a cropped/scaled preview) in both states.
+    // v3.5.4 retry: reproduce the real shell's parent chain. KeyboardPanel is
+    // a full-screen layer surface, so its width is the monitor width while the
+    // card is contentWidth. On 531b8f7 these steps fail: the field grows with
+    // the surface and the cat column collapses to zero.
+    function() {
+      host.livePathSavedSurfaceWidth = keyboardPanel().surfaceWidth
+      keyboardPanel().surfaceWidth = 1280
+    },
+    function() {
+      check("v3.5.4 retry: at a 1280 px live surface the field stays inside the card and the cat keeps nonzero width (531b8f7 regression)",
+        livePathHeaderOk(1280))
+      keyboardPanel().surfaceWidth = 1920
+    },
+    function() {
+      check("v3.5.4 retry: at a 1920 px live surface the field stays inside the card and the cat keeps nonzero width (531b8f7 regression)",
+        livePathHeaderOk(1920))
+      keyboardPanel().surfaceWidth = 2560
+    },
+    function() {
+      check("v3.5.4 retry: at a 2560 px live surface the field stays inside the card and the cat keeps nonzero width (531b8f7 regression)",
+        livePathHeaderOk(2560))
+      keyboardPanel().surfaceWidth = host.livePathSavedSurfaceWidth
+    },
+    // v3.5.4: real-size screenshots of the normal and syncing states. The
+    // layout must be identical in both; only the toolbar status label changes.
     function() {
       host.headerShot = null
       host.headerSave = false
       headerShotProbe.source = ""
       keyboardPanel().grabToImage(function(result) {
-        host.headerSave = result.saveToFile("/tmp/omatime-v353-header.png")
+        host.headerSave = result.saveToFile("/tmp/omatime-v354-header.png")
         host.headerShot = result
-        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v353-header.png?" + Date.now()
+        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v354-header.png?" + Date.now()
       })
     },
     function() { },
     function() { },
     function() {
-      log("v3.5.3 normal shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
+      log("v3.5.4 normal shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
         " " + headerShotProbe.implicitWidth + "x" + headerShotProbe.implicitHeight +
         " panel=" + keyboardPanel().width + "x" + keyboardPanel().height)
-      check("v3.5.3: the normal header rendered at the real panel size (full popup, no scaling)",
+      check("v3.5.4: the normal header rendered at the real panel size (full popup, no scaling)",
         !!host.headerShot && host.headerSave === true && headerShotProbe.status === Image.Ready &&
         headerShotProbe.implicitWidth === keyboardPanel().width &&
         headerShotProbe.implicitHeight === keyboardPanel().height)
     },
-    // Tall syncing-header state: the status row is shown, the zone grows, and
-    // the art must still be centred inside the whole block.
     function() { svc.status = "Syncing library…" },
     function() { },
     function() {
-      var cz = named(stage, "headerCatZone"), sr = named(stage, "headerStatusRow")
-      var art = named(stage, "catStencil")
-      var z = cz.mapToItem(stage, 0, 0), s = sr.mapToItem(stage, 0, 0)
-      var ac = art.mapToItem(stage, art.width / 2, art.height / 2)
-      var zc = cz.mapToItem(stage, cz.width / 2, cz.height / 2)
-      var ap = art.mapToItem(stage, 0, 0)
-      host.syncZoneHeight = cz.height
-      host.syncArtWidth = art.width
-      log("v3.5.3 syncing geometry: zone=" + cz.width.toFixed(2) + "x" + cz.height.toFixed(2) +
-        " statusRow=" + sr.width.toFixed(2) + "x" + sr.height.toFixed(2) +
-        " art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
-        " centre=" + ac.x.toFixed(2) + "," + ac.y.toFixed(2) +
-        " zoneCentre=" + zc.x.toFixed(2) + "," + zc.y.toFixed(2) +
-        " topMargin=" + (ap.y - z.y).toFixed(2) + " bottomMargin=" + ((z.y + cz.height) - (ap.y + art.height)).toFixed(2))
-      check("v3.5.3: the syncing status row is inside the header block and grows the cat zone",
-        !!sr && sr.visible && sr.height === panel.headerStatusRowHeight &&
-        Math.abs((z.y + cz.height) - (s.y + sr.height)) <= 1 &&
-        cz.height > panel.headerTitleBandHeight + Style.spacing.controlHeight)
-      check("v3.5.3: tall syncing header: the art centre matches the zone centre on both axes",
-        Math.abs(ac.x - zc.x) <= 1 && Math.abs(ac.y - zc.y) <= 1)
-      check("v3.5.3: tall syncing header: the art bbox stays inside the zone, clear of the top border",
-        ap.x >= z.x - 0.5 && ap.y >= z.y + 0.5 &&
-        ap.x + art.width <= z.x + cz.width + 0.5 &&
-        ap.y + art.height <= z.y + cz.height + 0.5)
-      check("v3.5.3: tall syncing header: equal top/bottom margins and aspect preserved",
-        Math.abs((ap.y - z.y) - ((z.y + cz.height) - (ap.y + art.height))) <= 1 &&
-        Math.abs((art.width / art.height) - (508 / 346)) <= 0.01)
+      var label = named(stage, "syncStatusLabel"), sf = searchField()
+      var sd = named(stage, "sortDirectionButton"), tb = named(stage, "toolbar")
+      var cc = named(stage, "headerCatColumn"), art = named(stage, "catStencil")
+      var lr = label.mapToItem(stage, 0, 0), sr = sd.mapToItem(stage, 0, 0)
+      var tr = tb.mapToItem(stage, 0, 0), sfRight = sf.mapToItem(stage, 0, 0).x + sf.width
+      var clearance = lr.x - (sr.x + sd.width)
+      var neighbours = [button("Albums (" + svc.albumsView.length + ")"),
+        button("Playlists (" + svc.playlists.length + ")"), sortButton(), sd, cc]
+      var noOverlap = neighbours.every(function(x) {
+        if (!x) return false
+        var r = x.mapToItem(stage, 0, 0)
+        return (lr.x + label.width <= r.x + 0.5) || (lr.x >= r.x + x.width - 0.5) ||
+          (lr.y + label.height <= r.y + 0.5) || (lr.y >= r.y + x.height - 0.5)
+      })
+      var cur = {
+        field: geomOf(sf), column: geomOf(cc), gear: geomOf(settingsButton()), art: geomOf(art),
+        albums: geomOf(button("Albums (" + svc.albumsView.length + ")")),
+        playlists: geomOf(button("Playlists (" + svc.playlists.length + ")")),
+        sort: geomOf(sortButton()), sortDir: geomOf(sd),
+        toolbar: geomOf(tb), panes: geomOf(named(stage, "libraryRow"))
+      }
+      var unchanged = Object.keys(host.headerGeom).every(function(k) {
+        return sameGeom(host.headerGeom[k], cur[k])
+      })
+      log("v3.5.4 syncing label: text=" + JSON.stringify(label.text) + " visible=" + label.visible +
+        " rect=" + lr.x.toFixed(2) + "," + lr.y.toFixed(2) + "," + label.width.toFixed(2) + "x" + label.height.toFixed(2) +
+        " fieldRight=" + sfRight.toFixed(2) + " sortDirRight=" + (sr.x + sd.width).toFixed(2) +
+        " clearance=" + clearance.toFixed(2) + " toolbarY=" + tr.y.toFixed(2))
+      check("v3.5.4: the syncing label appears in the Albums/Playlists/Sort row only while syncing",
+        !!label && label.visible && label.text.indexOf("Syncing library") === 0 &&
+        lr.y >= tr.y - 0.5 && lr.y + label.height <= tr.y + tb.height + 0.5)
+      check("v3.5.4: the syncing label's right edge is flush with the search field's right edge",
+        Math.abs((lr.x + label.width) - sfRight) <= 1)
+      check("v3.5.4: the syncing label clears Sort direction by at least 8 px and overlaps nothing",
+        clearance >= Style.space(8) - 0.5 && noOverlap)
+      check("v3.5.4: showing the syncing label shifts no header, field, column or control geometry",
+        unchanged)
+      check("v3.5.4: the cat column and art geometry are identical in normal and syncing states",
+        sameGeom(host.headerGeom.column, cur.column) && sameGeom(host.headerGeom.gear, cur.gear) &&
+        sameGeom(host.headerGeom.art, cur.art))
       host.syncShot = null
       host.syncSave = false
       syncShotProbe.source = ""
       keyboardPanel().grabToImage(function(result) {
-        host.syncSave = result.saveToFile("/tmp/omatime-v353-syncing.png")
+        host.syncSave = result.saveToFile("/tmp/omatime-v354-syncing.png")
         host.syncShot = result
-        if (host.syncSave) syncShotProbe.source = "file:///tmp/omatime-v353-syncing.png?" + Date.now()
+        if (host.syncSave) syncShotProbe.source = "file:///tmp/omatime-v354-syncing.png?" + Date.now()
       })
     },
     function() { },
     function() { },
     function() {
-      log("v3.5.3 syncing shot: saved=" + host.syncSave + " status=" + syncShotProbe.status +
+      log("v3.5.4 syncing shot: saved=" + host.syncSave + " status=" + syncShotProbe.status +
         " " + syncShotProbe.implicitWidth + "x" + syncShotProbe.implicitHeight +
         " panel=" + keyboardPanel().width + "x" + keyboardPanel().height)
-      check("v3.5.3: the tall syncing header rendered at the real panel size (full popup, no scaling)",
+      check("v3.5.4: the syncing-state panel rendered at the real panel size (full popup, no scaling)",
         !!host.syncShot && host.syncSave === true && syncShotProbe.status === Image.Ready &&
         syncShotProbe.implicitWidth === keyboardPanel().width &&
         syncShotProbe.implicitHeight === keyboardPanel().height)
@@ -565,10 +659,12 @@ ShellRoot {
     },
     function() { },
     function() {
-      var cz = named(stage, "headerCatZone"), sr = named(stage, "headerStatusRow")
-      check("v3.5.3: the status row hides again and the cat zone returns to its normal height",
-        (!sr || !sr.visible) &&
-        cz.height === panel.headerTitleBandHeight + Style.spacing.controlHeight)
+      var label = named(stage, "syncStatusLabel")
+      check("v3.5.4: the syncing label hides again and the cat column stays put",
+        (!label || !label.visible) && sameGeom(host.headerGeom.column, geomOf(named(stage, "headerCatColumn"))))
+      svc.status = "Library updated · 13 albums"
+      check("v3.5.4: the label stays hidden for non-sync status text", !!label && !label.visible)
+      svc.status = ""
     },
     function() {
       // Prove the in-field glyph cannot take input: click it while the list owns
@@ -615,7 +711,7 @@ ShellRoot {
     function() { check("second Esc closes", !panel.opened); panel.open() },
     function() { click(settingsButton()) },
     function() {
-      check("gear menu opens from the cat control's header position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "headerCatZone")))
+      check("gear menu opens from the cat control's header position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "headerCatColumn")))
       check("gear menu has exactly Refresh / Hide pre-orders / Keyboard shortcuts / Collection / Log out, in order",
         panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh|Hide pre-orders|Keyboard shortcuts|Collection|Log out")
       check("gear-menu Collection carries the username URL, enabled when known",
@@ -1438,7 +1534,7 @@ ShellRoot {
       check("v3.5.1: Collection is not in the header; the old links stay gone",
         !named(stage, "link-collection") && gone.every(function(l) { return !button(l) }) && !named(stage, "linksRow"))
       var right = sf.mapToItem(stage, 0, 0).x + sf.width
-      var cz = named(stage, "headerCatZone")
+      var cz = named(stage, "headerCatColumn")
       check("v3.5.1: the cat control is the only thing to the right of the field",
         Math.abs(gear.mapToItem(stage, 0, 0).x - right) <= 1 && Math.abs(cz.mapToItem(stage, 0, 0).x - right) <= 1 &&
         allButtons(named(stage, "searchRow"), []).filter(function(b) { return b.objectName !== "searchAction" }).length === 0)
@@ -1781,8 +1877,9 @@ ShellRoot {
       })
       check("v3.5.1 addendum: all five menu rows have a leading icon in one aligned slot",
         aligned && rows.every(function(b) { return !!b && b.leadingIconText !== "" }))
-      check("v3.5.1 addendum: Hide pre-orders adds the theatre-masks icon in the new slot and keeps its check in the original slot",
-        !!hide && hide.leadingIconText === "\ueeb6" && hide.selected === svc.hidePreorders &&
+      check("v3.5.4: Hide pre-orders uses the eye-slash glyph in the same leading slot and keeps its check slot unchanged",
+        !!hide && hide.leadingIconText === "\uf070" && hide.selected === svc.hidePreorders &&
+        hide.iconSize === refresh.iconSize && hide.height === refresh.height &&
         (hide.iconText === "\uf00c" || hide.iconText === "\u2003"))
       host.menuShot = null
       host.menuSave = false

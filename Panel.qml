@@ -140,24 +140,27 @@ Panel {
   readonly property real helpViewHeight: Math.max(detailMinTrackRows * detailBaseTrackRowHeight,
     Math.min(detailCapHeight, helpColumns ? helpColumns.implicitHeight + 2 * Style.spacing.sm : 0))
 
-  // v3.5.1 live-look: header geometry. The title band runs from the panel's top
-  // border to the top of the search bar; the cat zone spans that band plus the
-  // search row and starts where the old Collection button began. That start is
-  // rebuilt from the old Collection/gear widths, so the search field keeps
-  // approximately its old length and the freed controls become the mark.
+  // v3.5.4: header geometry. The header is title + search only; the search
+  // field ends at ~72% of the popup's width and the whole remaining column
+  // (top border to the top of the panes) is the cat settings button.
+  //
+  // Bind against `panel.contentWidth`, NOT `panel.width`. In the real shell
+  // KeyboardPanel is a full-screen layer surface, so its `width` is the whole
+  // monitor (1280 px here) while the visible card is only contentWidth (835).
+  // The test stub used to make those two values equal, so `panel.width` worked
+  // there and broke live: the field was computed from 1280 px, ran 103 px past
+  // the card, and the remaining cat column became max(0, 803 - 906) = 0 px.
   readonly property real headerTopInset: panel.padding + Border.top(panel.borderSpec)
   readonly property real headerTitleBandHeight: headerTopInset + controlHeight + contentColumn.spacing
-  readonly property real headerCatZoneWidth: collectionLabelMetrics.advanceWidth
-    + 2 * Style.spacing.controlPaddingX
-    + 2 * Math.max(Style.normalBorderWidth, Style.hoverBorderWidth, Style.selectedBorderWidth, Style.focusBorderWidth)
-    + Style.spacing.sm + controlHeight
-  // v3.5.3: the syncing status row belongs to the header block. While a status
-  // is shown the header grows by this row, and the cat zone grows with it so the
-  // mark stays centred in the whole block instead of being pinned to the top.
-  readonly property bool headerStatusVisible: !!service && service.status !== ""
-  readonly property real headerStatusRowHeight: headerStatusVisible ? Style.space(20) : 0
-  readonly property real headerCatZoneHeight: headerTitleBandHeight + controlHeight
-    + (headerStatusVisible ? contentColumn.spacing + headerStatusRowHeight : 0)
+  readonly property real searchFieldWidth: Math.min(contentColumn.width, Math.max(0,
+    Math.round(panel.contentWidth * 0.72) - headerTopInset))
+  readonly property real headerCatColumnWidth: Math.max(0, contentColumn.width - searchFieldWidth)
+  readonly property real headerCatColumnHeight: headerTopInset + headerStack.height
+    + contentColumn.spacing + controlHeight + contentColumn.spacing
+  // The sync label is only for the "Syncing library..." state; other statuses
+  // keep their existing non-header behaviour (they are not rendered here).
+  readonly property bool syncStatusVisible: !!service
+    && service.status.indexOf("Syncing library") === 0
 
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
@@ -180,9 +183,9 @@ Panel {
   property real contextMenuAnchorY: 0
   readonly property var moreItems: [
     { leadingIcon: "\uf021", icon: "\u2003", label: "Refresh", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
-    // v3.5.1 addendum: the mask is the leading icon. `icon` stays the original
+    // v3.5.4: the eye-slash is the leading icon. `icon` stays the original
     // check slot, so the existing checked-state display is unchanged.
-    { leadingIcon: "\ueeb6", icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
+    { leadingIcon: "\uf070", icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
     { leadingIcon: "\uf11c", icon: "\u2003", label: "Keyboard shortcuts", action: "help" },
     { leadingIcon: "\uf07b", icon: "\u2003", label: "Collection", action: "collection", enabled: root.collectionUrl !== "",
       tooltip: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet" },
@@ -1025,10 +1028,8 @@ Panel {
         id: headerStack
         objectName: "headerStack"
         width: parent.width
-        // v3.5.3: include the syncing status row, so the header block (and the
-        // cat zone) really grows while a sync is reported.
+        // v3.5.4: title + search only, in every state.
         height: root.controlHeight + contentColumn.spacing + root.controlHeight
-          + (root.headerStatusVisible ? contentColumn.spacing + root.headerStatusRowHeight : 0)
 
       // v3.1: the title is the only text in this row. v3.5.1 live-look centres
       // it in the whole band from the panel's top border to the search bar, not
@@ -1082,9 +1083,9 @@ Panel {
           TextField {
             id: searchField
             objectName: "searchField"
-            // The cat zone starts where the old Collection button began, so the
-            // field keeps approximately its previous length.
-            width: Math.max(0, searchRow.width - root.headerCatZoneWidth)
+            // v3.5.4: the field ends at ~72% of the popup width; the remainder
+            // of the header/toolbar width is the cat column.
+            width: root.searchFieldWidth
             height: root.controlHeight
             // A little less vertical padding than the stock 30 px field: the
             // text still fits (asserted by the harness) at the shared 28 px.
@@ -1189,84 +1190,12 @@ Panel {
         }
       }
 
-      // v3.5.3: the sync/status row is part of the header block, immediately
-      // under the search row. The text stops before the cat zone, so it can
-      // never run under the settings button.
-      Item {
-        id: headerStatusRow
-        objectName: "headerStatusRow"
-        visible: root.headerStatusVisible
-        y: root.controlHeight + contentColumn.spacing + root.controlHeight + contentColumn.spacing
-        width: parent.width
-        height: root.headerStatusRowHeight
-
-        Text {
-          objectName: "headerStatus"
-          text: root.service ? root.service.status : ""
-          color: Qt.darker(root.foreground, 1.4)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.rightMargin: root.headerCatZoneWidth + Style.spacing.sm
-          anchors.verticalCenter: parent.verticalCenter
-        }
-      }
-
-      // v3.5.3: the cat-and-flute mark is the settings button. It fills the
-      // right end of the full header block — panel top border to the bottom of
-      // the search row, or past the syncing status row while that is shown —
-      // starts where the old Collection button did, and is borderless at rest.
-      // Hover gets the shell's faint fill; keyboard focus gets the accent outline.
-      Item {
-        id: headerCatZone
-        objectName: "headerCatZone"
-        x: parent.width - width
-        y: -root.headerTopInset
-        width: root.headerCatZoneWidth
-        height: root.headerCatZoneHeight
-
-        BcButton {
-          id: menuButton
-          objectName: "settingsButton"
-          x: 0
-          y: 0
-          width: parent.width
-          height: parent.height
-          text: ""
-          iconText: ""
-          bordered: false
-          focusable: true
-          tooltipText: "Settings"
-          active: root.menuOpen
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          // No static border or background. Keyboard focus is the same accent
-          // token as every other focused control (Item 3).
-          borderSpec: activeFocus ? Border.flat(Color.accent, Style.focusBorderWidth) : Border.none()
-          onClicked: root.toggleMenu()
-          Keys.onPressed: function(event) { root.handleTabKey(event) }
-          Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
-
-          CatMark {
-            id: catStencil
-            objectName: "catStencil"
-            readonly property real fitMargin: Style.space(1)
-            // Fit inside the whole zone with a one-pixel breathing margin,
-            // preserving the stencil's aspect ratio on both axes.
-            width: Math.min(parent.width - 2 * fitMargin,
-              (parent.height - 2 * fitMargin) * (implicitWidth / implicitHeight))
-            height: width * implicitHeight / implicitWidth
-            anchors.centerIn: parent
-            tintColor: Color.accent
-          }
-        }
-      }
       }
 
       // toolbar --------------------------------------------------------------
       Item {
+        id: toolbarRow
+        objectName: "toolbar"
         width: parent.width
         height: root.controlHeight
 
@@ -1340,6 +1269,25 @@ Panel {
             Keys.onPressed: function(event) { root.handleTabKey(event) }
             Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
+        }
+
+        // v3.5.4: the "Syncing library..." label lives in this controls row,
+        // right-aligned to the search field's right edge. It is an overlay, not
+        // a Row child, so showing/hiding it can never shift the controls.
+        Text {
+          id: syncStatusLabel
+          objectName: "syncStatusLabel"
+          visible: root.syncStatusVisible
+          text: root.service ? root.service.status : ""
+          color: Qt.darker(root.foreground, 1.4)
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+          horizontalAlignment: Text.AlignRight
+          x: root.searchFieldWidth - width
+          width: Math.min(implicitWidth, Math.max(0, root.searchFieldWidth
+            - (toolbarLeft.x + sortDirectionButton.x + sortDirectionButton.width + Style.space(8))))
+          anchors.verticalCenter: parent.verticalCenter
         }
       }
 
@@ -2491,6 +2439,62 @@ Panel {
               }
             }
           }
+        }
+      }
+    }
+
+    // v3.5.4: the cat column. From the search field's right edge to the
+    // panel's right inner edge, and from the panel's top border down to the
+    // top of the panes. The whole column is the settings button; the mark is
+    // fitted inside it and positioned by its ink centroid.
+    Item {
+      id: headerCatColumn
+      objectName: "headerCatColumn"
+      x: root.searchFieldWidth
+      y: -root.headerTopInset
+      width: root.headerCatColumnWidth
+      height: root.headerCatColumnHeight
+      z: 10
+
+      BcButton {
+        id: menuButton
+        objectName: "settingsButton"
+        x: 0
+        y: 0
+        width: parent.width
+        height: parent.height
+        text: ""
+        iconText: ""
+        bordered: false
+        focusable: true
+        tooltipText: "Settings"
+        active: root.menuOpen
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        // No static border or background. Keyboard focus is the same accent
+        // token as every other focused control (Item 3).
+        borderSpec: activeFocus ? Border.flat(Color.accent, Style.focusBorderWidth) : Border.none()
+        onClicked: root.toggleMenu()
+        Keys.onPressed: function(event) { root.handleTabKey(event) }
+        Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+
+        CatMark {
+          id: catStencil
+          objectName: "catStencil"
+          readonly property real fitMargin: Style.space(4)
+          // Fit inside the whole column on both axes, preserving the bold
+          // trace's aspect ratio.
+          width: Math.min(parent.width - 2 * fitMargin,
+            (parent.height - 2 * fitMargin) * artAspect)
+          height: width / artAspect
+          // v3.5.4: centre the rendered ink centroid, not the bounding box.
+          // The clamps keep the whole bbox inside the column and the ears
+          // clear of the panel's top border.
+          x: Math.max(0, Math.min(parent.width - width,
+            parent.width / 2 - inkCentroidX * width))
+          y: Math.max(1, Math.min(parent.height - height - 1,
+            parent.height / 2 - inkCentroidY * height))
+          tintColor: Color.accent
         }
       }
     }
