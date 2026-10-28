@@ -61,6 +61,7 @@ launch() {  # launch <label> <home> <phase>
   echo "$out" | grep -E "HARNESS|ERROR" | sed -E 's/\x1b\[[0-9;]*m//g; s/^.*HARNESS /  /'
   local p; p=$(echo "$out" | grep -c "HARNESS PASS")
   passes=$((passes + p))
+  last_out="$out"
   echo "$out" | grep -q "HARNESS FAILS=0" || fail=1
   echo "$out" | grep -q "ERROR" && fail=1
   echo "  -> $label: $p checks passed"
@@ -91,6 +92,54 @@ with wave.open(sys.argv[1], "wb") as w:
 PY
 
 launch "phase 1 (fixture library)" "$home" 1
+
+# v3.5.2: the stencil must render in the theme accent, from the saved real-size
+# PNG (not just from the QML binding). Crop the art's exact panel rect and count
+# pixels equal to Color.accent; also prove no baked white survives.
+shot=/tmp/omatime-v352-header.png
+accent=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.2 pixels: accent=\(#[0-9A-Fa-f]\{6\}\).*/\1/p' | head -1)
+rect=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.2 pixels: accent=#[0-9A-Fa-f]\{6\} art=\([0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*\).*/\1/p' | head -1)
+if [ -n "$accent" ] && [ -n "$rect" ] && [ -f "$shot" ]; then
+  probe=$(python3 - "$shot" "$accent" "$rect" <<'PY'
+import subprocess, sys
+shot, accent, rect = sys.argv[1:4]
+x, y, w, h = (int(v) for v in rect.split(","))
+# The art rect's first rows are the zone's own accent border. Inset it so the
+# probe can only see the stencil itself.
+x, y, w, h = x + 3, y + 3, w - 6, h - 6
+raw = subprocess.check_output(["convert", shot, "-crop", f"{w}x{h}+{x}+{y}", "+repage",
+                               "-depth", "8", "rgb:-"], stderr=subprocess.DEVNULL)
+if len(raw) != w * h * 3:
+    print(f"wrong crop size: {len(raw)} bytes for {w}x{h}")
+    sys.exit(1)
+pixels = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+# Panel background is the most common pixel in the crop.
+from collections import Counter
+bg = Counter(pixels).most_common(1)[0][0]
+want = tuple(bytes.fromhex(accent[1:]))
+ink = [p for p in pixels if max(p) >= max(bg) + 30]
+peak = max(ink, key=sum) if ink else bg
+pure_white = sum(1 for p in pixels if p[0] >= 250 and p[1] >= 250 and p[2] >= 250)
+# Every rendered mark pixel is the accent blended with the background; nothing
+# may be brighter than the accent (that would be baked white).
+over_accent = sum(1 for p in pixels if max(p) > max(want) + 2)
+peak_near_accent = max(abs(peak[i] - want[i]) for i in range(3)) <= 10
+print(f"rect={x},{y},{w},{h} accent={accent} inkPixels={len(ink)} "
+      f"peak=#{peak[0]:02x}{peak[1]:02x}{peak[2]:02x} pureWhitePixels={pure_white} "
+      f"overAccentPixels={over_accent}")
+sys.exit(0 if len(ink) >= 150 and peak_near_accent and pure_white == 0 and
+         (want == (255, 255, 255) or over_accent == 0) else 1)
+PY
+)
+  if [ $? -eq 0 ]; then
+    echo "  PASS the rendered cat stencil is the theme accent, with no baked white ($probe)"; passes=$((passes + 1))
+  else
+    echo "  FAIL the rendered cat stencil does not match the theme accent ($probe)"; fail=1
+  fi
+else
+  echo "  FAIL cat-stencil pixel probe missing (accent='$accent' rect='$rect' shot='$shot')"; fail=1
+fi
+
 if [ -e "$home/.cache/omatimeatbandcamp/cookies.txt" ]; then
   echo "  FAIL confirmed logout did not delete the (decoy) cookies.txt"; fail=1
 else

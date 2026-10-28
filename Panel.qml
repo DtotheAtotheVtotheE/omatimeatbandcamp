@@ -1216,9 +1216,16 @@ Panel {
           Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
 
           CatMark {
+            id: catStencil
+            objectName: "catStencil"
+            readonly property real fitMargin: Style.space(1)
+            // Fit inside the whole zone with a one-pixel breathing margin,
+            // preserving the stencil's aspect ratio on both axes.
+            width: Math.min(parent.width - 2 * fitMargin,
+              (parent.height - 2 * fitMargin) * (implicitWidth / implicitHeight))
+            height: width * implicitHeight / implicitWidth
             anchors.centerIn: parent
-            scale: Math.min(parent.width / implicitWidth, parent.height / implicitHeight)
-            strokeColor: Color.accent
+            tintColor: Color.accent
           }
         }
       }

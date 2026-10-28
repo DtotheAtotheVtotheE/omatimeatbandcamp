@@ -1746,3 +1746,176 @@ No check was weakened or deleted.
    needed; Esc restores the panes, selection, scroll and queue.
 6. Look at `/tmp/omatime-v351-header.png`: it is the full popup at its real
    size, saved by the harness.
+
+## v3.5.2 cat-and-flute stencil (owner-requested, 2026-10-28)
+
+Branch `v2`. v3.5.1 drew the header mark as a hand-traced vector. The owner
+asked for the reference drawing itself instead: a soft-ramp stencil, tinted
+with the live theme accent and fitted to the whole cat zone at the real header
+size (108.86 × 74.00). This section records the resumed-session audit, the
+finished implementation and every changed check.
+
+### Baseline audit (resumed session, before editing)
+
+The previous session was cut off by the provider quota. Its tree was audited,
+not rebuilt:
+
+- `git status`: modified `CatMark.qml`, `Panel.qml`, `tests/qml/run.sh`,
+  `tests/qml/shell.qml`; untracked `assets/cat-flute-mask.png`,
+  `tests/test_cat_mask_asset.py`, and the unrelated research note
+  `docs/radio-spike-2026-10.md`.
+- `git log -3`: `990ce81` v3.5.1 cat-and-flute header settings; `404d330`
+  v3.5.1 Collection/spelling/focus/shortcuts; `251370d` v3.5 interaction pass.
+- `assets/cat-flute-mask.png` already existed: 509 × 346, 8-bit RGBA,
+  33,294 bytes, sha256
+  `7aa57c2944b7e10fa400930a74c9016796f3216f2ff704600701563780314e87`.
+- The QML stencil render, the centred zone-filling geometry, the asset test,
+  the new harness checks and the screenshot pixel probe were already
+  implemented and passing. Only this specification section and the commit
+  remained.
+- Suites as found: Python **99 tests OK, 5 skipped**; QML **573 checks,
+  `FAILS=0`** in all three phases, stencil pixel probe passing.
+
+For the delta, commit `990ce81` was run in a throwaway worktree: **567 checks**
+(phase 1 528 + relaunch 15 + real-data 17 + script-side 7). The older v3.5.1
+section's figure of 560 could not be reproduced from that commit and is stale
+by 7 checks that predate this pass. Against the measured 567, v3.5.2 adds 6:
+5 phase-1 checks and 1 script-side pixel probe. Python goes 97 → 99 with the
+two asset tests.
+
+### The asset — `assets/cat-flute-mask.png`
+
+- Derived from `docs/cat-and-flute-reference.jpg` (kept as provenance), cropped
+  tight to the drawing's ink box: 509 × 346, aspect 1.4711.
+- White RGB with alpha only; no theme colour is baked in. The PNG has 16,865
+  visible pixels, of which **16,833 (99.8%) have partial alpha** and only 32
+  are fully opaque. That soft ramp preserves the JPEG's antialiased line edges
+  instead of hard-thresholding them to 0/255.
+- All four corners are alpha 0 and the visible ink reaches every crop edge
+  (0..508, 0..345), so there is no background card, drop shadow or blank band.
+- No generator script is committed: the PNG is the reviewed asset, the JPEG is
+  the design provenance. Tests decode the PNG with the standard library.
+
+### The render — `CatMark.qml`
+
+- `CatMark` is now an `Item` named `catStencil` with implicit size 509 × 346 and
+  `tintColor: Color.accent` (bound again in `Panel.qml`).
+- A hidden `Image` (`catMaskImage`) loads the PNG, decoded at physical display
+  size (`width × Screen.devicePixelRatio`), so Qt performs one high-quality
+  downscale instead of the Canvas sampler point-sampling the thin strokes.
+- A `Canvas` (`catMaskCanvas`, `renderTarget: Canvas.Image`) draws the mask with
+  `source-over`, then fills the whole canvas with `tintColor` using `source-in`.
+  The result is one flat theme colour whose alpha is the stencil's alpha — an
+  opacity-mask tint, not a recoloured copy of the JPEG.
+- Repaint triggers: image `Ready`, canvas resize, `tintColor` change, plus a
+  short 20 × 50 ms startup burst that stops itself once the header settles.
+- There is no vector `Shape` and no image data embedded in QML; the PNG is the
+  only source.
+
+### Geometry — `Panel.qml`
+
+- The mark keeps `headerCatZoneWidth × headerCatZoneHeight` (the 116.86 × 75.98
+  zone that spans the title band and the search row).
+- Fit rule: `width = min(zoneW - 2*Style.space(1), (zoneH - 2*Style.space(1)) *
+  aspect)`; height follows from the aspect. Width is the limiting axis here.
+- Measured in the harness: art **108.86 × 74.00**, centre **756.56, 78.00**,
+  zone centre **756.06, 78.00** (0.5 px, within 1 px on both axes),
+  height ratio **0.974**. Margins are 4 px left/right and 1 px top/bottom, equal
+  on the vertical axis, so the mark fills the zone instead of floating in it.
+- Aspect is preserved exactly (never stretched), and the old `scale:` transform
+  is gone, so the implicit size and hit target agree.
+
+### Changed checks (enumerated)
+
+Removed/replaced (phase 1), because the owner deliberately inverted the old
+"no bitmap" invariant:
+
+- `v3.5.1: the cat mark is a vector Shape (no bitmap) and every stroke uses the
+  theme accent`.
+
+Added (phase 1, net +5 after the replacement):
+
+- `v3.5.2: the cat mark is the shipped stencil image, not the old vector trace`
+  — asserts `catStencil`, the canvas, `cat-flute-mask.png` in `maskFile`, 509 ×
+  346 implicit size, and the absence of `catMarkShape`.
+- `v3.5.2: the stencil is rendered through its alpha mask in the theme accent`
+  — canvas available, raster target, image `Ready`, `tintColor` and
+  `renderedColor` both `Color.accent`, aspect matches 509/346.
+- `v3.5.2: the stencil's bounding-box centre matches the cat-zone centre on both
+  axes` (≤ 1 px).
+- `v3.5.2: the stencil fills at least 90% of the cat-zone height`.
+- `v3.5.2: the stencil preserves the asset aspect ratio (never stretched)`.
+- `v3.5.2: the stencil sits with equal small top/bottom margins (no blank band
+  under the flute)`.
+
+Renamed only (same assertion, new screenshot):
+
+- `v3.5.1: the header rendered at the real panel size (full popup, no scaling)`
+  → `v3.5.2: …`, now saving `/tmp/omatime-v352-header.png`.
+
+Added (script side, +1), after phase 1 saves the screenshot:
+
+- `PASS the rendered cat stencil is the theme accent, with no baked white` —
+  crops the art rect from the saved PNG (inset 3 px to exclude the zone border),
+  requires ≥ 150 ink pixels, a peak within 10/255 of the QML-reported accent,
+  zero pure-white pixels, and no pixel brighter than the accent.
+
+Added (Python, +2, `tests/test_cat_mask_asset.py`):
+
+- `test_mask_is_white_ink_on_a_transparent_background` — exact 509 × 346 RGBA,
+  white RGB everywhere visible, alpha 0 at all four corners, > 1000 ink pixels.
+- `test_mask_has_a_soft_ramp_and_a_tight_full_drawing_crop` — > 500 partial-alpha
+  pixels (and fewer than half the image), a tight crop that reaches all four
+  edges, and the 509/346 aspect.
+
+No other check was weakened or deleted. The v3.5.1 screenshot check still
+requires a full-popup grab at the panel's exact size.
+
+### Results
+
+- Python: **99 tests OK, 5 skipped** (`97 → 99` with the two asset tests).
+- QML: **573 checks**, `FAILS=0` in all phases (phase 1 533, relaunch 15,
+  real-data 17, script-side 8); `QML tests: OK`.
+- Pixel probe on the saved PNG:
+  `rect=705,4,104,69 accent=#cacccc inkPixels=621 peak=#c3c5c5
+  pureWhitePixels=0 overAccentPixels=0` — the peak rendered pixel is 7/255
+  below the harness accent (thin-line antialiasing after downscaling), and
+  there is no baked white.
+- Harness screenshot: `/tmp/omatime-v352-header.png`, **835 × 570**, the whole
+  popup at its real size (`saved=true`, image `Ready`, dimensions equal to
+  `keyboardPanel()`). The cat mark is at the top right, one tall target from the
+  panel top to the search row's bottom.
+
+### Deviations / owner-visible decisions
+
+- The mark is a raster stencil (Canvas), not a vector Shape. This is the owner's
+  request: the reference's own line work replaces the trace. The PNG is white
+  with alpha, so a theme change needs no asset regeneration.
+- The asset is cropped exactly to the ink box, so the ear tips are the topmost
+  ink. At 108.86 × 74.00 the strokes are inherently about 1 px and the tips are
+  soft; a transparent pad would not add ink. The one-pixel vertical margin keeps
+  the mark inside the zone while filling 97.4% of its height.
+- The Canvas is raster on purpose so `grabToImage` captures it in the harness as
+  well as in the live shell.
+- The Python asset test uses only the standard library, so it runs on a bare
+  system without Pillow.
+- `docs/radio-spike-2026-10.md` is a separate research note found untracked in
+  the tree and is intentionally **not** part of this release.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel. The cat-and-flute mark sits at the
+   top right, spanning the title band and search row; it is tinted with the live
+   theme accent, not white and not a hard-coded colour. Switch theme/accent and
+   reopen: the mark follows without restarting anything else.
+2. Confirm the mark is centred in its zone and fills it: no large blank band
+   under the flute, no drift left or right, and the drawing is not stretched.
+3. Click the mark: the settings menu still opens with Refresh / Hide pre-orders /
+   Keyboard shortcuts / Collection / Log out. Tab focus still lands on the mark
+   and shows the accent outline.
+4. Look at `/tmp/omatime-v352-header.png` (835 × 570): the full popup at real
+   size, with the stencil visible at the header's right end.
+5. Expected live-look caveat: the reference is fine line art, so at header size
+   the strokes are thin and the ear tips are soft. That is the raster stencil at
+   1:1, not a missing crop; the full drawing (face, whiskers, flute, paws, body)
+   is present.

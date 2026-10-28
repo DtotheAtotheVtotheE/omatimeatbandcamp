@@ -379,11 +379,18 @@ ShellRoot {
         !!settingsButton() && settingsButton().iconText === "" && settingsButton().tooltipText === "Settings" &&
         isInside(settingsButton(), named(stage, "headerCatZone")) &&
         isInside(settingsButton(), named(stage, "headerStack")) && !button("\uf141"))
-      var cat = named(stage, "catMark"), catShape = named(stage, "catMarkShape")
-      check("v3.5.1: the cat mark is a vector Shape (no bitmap) and every stroke uses the theme accent",
-        !!cat && !!catShape && catShape.data.length >= 7 &&
-        find(cat, function(it) { return it.hasOwnProperty("source") }) === null &&
-        String(cat.strokeColor) === String(Color.accent))
+      var cat = named(stage, "catStencil"), catCanvas = named(stage, "catMaskCanvas")
+      var catSrc = named(stage, "catMaskImage")
+      check("v3.5.2: the cat mark is the shipped stencil image, not the old vector trace",
+        !!cat && !named(stage, "catMarkShape") && !!catCanvas &&
+        String(cat.maskFile).indexOf("cat-flute-mask.png") >= 0 &&
+        cat.implicitWidth === 509 && cat.implicitHeight === 346)
+      check("v3.5.2: the stencil is rendered through its alpha mask in the theme accent",
+        !!cat && !!catCanvas && catCanvas.available === true &&
+        catCanvas.renderTarget === Canvas.Image && !!catSrc && catSrc.status === Image.Ready &&
+        String(cat.tintColor) === String(Color.accent) &&
+        String(cat.renderedColor) === String(Color.accent) &&
+        Math.abs(cat.artAspect - 509 / 346) < 0.0001)
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
       check("v3.1: the old left-hand search icon is gone", !named(stage, "searchIcon"))
       check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
@@ -414,6 +421,29 @@ ShellRoot {
       log("v3.5.1 geometry: panelY=" + p.y + " catY=" + z.y + " catBottom=" + (z.y + cz.height) + " bandY=" + band.y + " bandBottom=" + (band.y + sb.height) + " titleCenter=" + (t.y + title.height / 2) + " expected=" + (p.y + (band.y - p.y) / 2) + " inset=" + panel.headerTopInset)
       check("v3.5.1: the title is centred in the band above the search row",
         Math.abs((t.y + title.height / 2) - (p.y + (band.y - p.y) / 2)) <= 1)
+      var art = named(stage, "catStencil")
+      var ac = art.mapToItem(stage, art.width / 2, art.height / 2)
+      var zc = cz.mapToItem(stage, cz.width / 2, cz.height / 2)
+      var artTop = art.mapToItem(stage, 0, 0).y
+      log("v3.5.2 geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
+        " centre=" + ac.x.toFixed(2) + "," + ac.y.toFixed(2) + " zoneCentre=" + zc.x.toFixed(2) + "," + zc.y.toFixed(2) +
+        " heightRatio=" + (art.height / cz.height).toFixed(3))
+      // Pixel probe bounds, relative to the panel that the screenshot captures.
+      // The script-side check crops exactly this rect from the saved PNG.
+      var po = keyboardPanel().mapToItem(stage, 0, 0)
+      var ap = art.mapToItem(stage, 0, 0)
+      log("v3.5.2 pixels: accent=" + String(Color.accent) +
+        " art=" + Math.floor(ap.x - po.x) + "," + Math.floor(ap.y - po.y) + "," +
+        (Math.ceil(art.width) + 1) + "," + (Math.ceil(art.height) + 1))
+      check("v3.5.2: the stencil's bounding-box centre matches the cat-zone centre on both axes",
+        Math.abs(ac.x - zc.x) <= 1 && Math.abs(ac.y - zc.y) <= 1)
+      check("v3.5.2: the stencil fills at least 90% of the cat-zone height",
+        art.height >= cz.height * 0.90)
+      check("v3.5.2: the stencil preserves the asset aspect ratio (never stretched)",
+        Math.abs((art.width / art.height) - (509 / 346)) <= 0.01)
+      check("v3.5.2: the stencil sits with equal small top/bottom margins (no blank band under the flute)",
+        Math.abs((artTop - z.y) - ((z.y + cz.height) - (artTop + art.height))) <= 1 &&
+        (artTop - z.y) <= Style.space(2))
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -436,25 +466,25 @@ ShellRoot {
       check("v3.5.1: only the cat settings control is deliberately taller (it spans both header rows)",
         gear.height === cz.height && gear.height > Style.spacing.controlHeight)
     },
-    // v3.5.1: a real-size header screenshot, saved so the result can be quoted
+    // v3.5.2: a real-size header screenshot, saved so the result can be quoted
     // and looked at. Grab the whole popup (not a cropped/scaled preview).
     function() {
       host.headerShot = null
       host.headerSave = false
       headerShotProbe.source = ""
       keyboardPanel().grabToImage(function(result) {
-        host.headerSave = result.saveToFile("/tmp/omatime-v351-header.png")
+        host.headerSave = result.saveToFile("/tmp/omatime-v352-header.png")
         host.headerShot = result
-        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v351-header.png?" + Date.now()
+        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v352-header.png?" + Date.now()
       })
     },
     function() { },
     function() { },
     function() {
-      log("v3.5.1 header shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
+      log("v3.5.2 header shot: saved=" + host.headerSave + " status=" + headerShotProbe.status +
         " " + headerShotProbe.implicitWidth + "x" + headerShotProbe.implicitHeight +
         " panel=" + keyboardPanel().width + "x" + keyboardPanel().height)
-      check("v3.5.1: the header rendered at the real panel size (full popup, no scaling)",
+      check("v3.5.2: the header rendered at the real panel size (full popup, no scaling)",
         !!host.headerShot && host.headerSave === true && headerShotProbe.status === Image.Ready &&
         headerShotProbe.implicitWidth === keyboardPanel().width &&
         headerShotProbe.implicitHeight === keyboardPanel().height)
