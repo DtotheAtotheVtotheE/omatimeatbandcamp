@@ -18,4 +18,22 @@ Button {
   height: Style.spacing.controlHeight
   width: text === "" ? height : implicitWidth
   opacity: enabled ? 1.0 : 0.45
+
+  // Optional second label at the right edge: the current sort arrow on the
+  // selected sort row, and the keyboard hint on a context-menu row. It keeps
+  // `text` (and therefore every existing label lookup) unchanged.
+  property string trailingText: ""
+
+  Text {
+    objectName: "trailingText"
+    textFormat: Text.PlainText
+    visible: root.trailingText !== ""
+    text: root.trailingText
+    anchors.right: parent.right
+    anchors.rightMargin: root.horizontalPadding
+    anchors.verticalCenter: parent.verticalCenter
+    color: Qt.darker(root.foreground, 1.6)
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
 }

@@ -152,6 +152,13 @@ ShellRoot {
     return null
   }
   function named(item, name) { return find(item, function(it) { return it.objectName === name }) }
+  function allNamed(item, name, out) {
+    if (!item) return out
+    if (item.objectName === name) out.push(item)
+    var kids = item.children
+    for (var i = 0; i < kids.length; i++) allNamed(kids[i], name, out)
+    return out
+  }
   function allButtons(item, out) {
     if (!item) return out
     if (item.hasOwnProperty("iconText") && item.hasOwnProperty("bordered") && item.visible) out.push(item)
@@ -235,6 +242,10 @@ ShellRoot {
 
   function key(k) { tc.keyClick(k, Qt.NoModifier) }
   function shiftKey(k) { tc.keyClick(k, Qt.ShiftModifier) }
+  function ctrlKey(k) { tc.keyClick(k, Qt.ControlModifier) }
+  function altKey(k) { tc.keyClick(k, Qt.AltModifier) }
+  function menuKey() { tc.keyClick(Qt.Key_Menu, Qt.NoModifier) }
+  function shiftF10() { tc.keyClick(Qt.Key_F10, Qt.ShiftModifier) }
   function typeText(t) { for (var i = 0; i < t.length; i++) tc.keyClick(t.charAt(i)) }
   // Raw query-text evidence: length plus the actual code points.
   function rawText(t) {
@@ -407,7 +418,7 @@ ShellRoot {
       var hs = {}, ic = {}, bd = {}
       for (var i = 0; i < bs.length; i++) { hs[Math.round(bs[i].height)] = 1; ic[bs[i].iconSize] = 1; bd[bs[i].bordered] = 1 }
       log("buttons=" + bs.length + " heights=" + Object.keys(hs) + " iconSizes=" + Object.keys(ic) + " bordered=" + Object.keys(bd))
-      check("10 buttons in the open window (gear, Collection, 3 toolbar, 4 footer, plus the v3.3.1 in-field clear/magnifier; Play all, Stop, Refresh and Shuffle are gone from the toolbar)", bs.length === 10)
+      check("11 buttons in the open window (gear, Collection, 3 toolbar, direction, 4 footer, plus the v3.3.1 in-field clear/magnifier; Play all, Stop, Refresh and Shuffle are gone from the toolbar)", bs.length === 11)
       check("all buttons share ONE height (controlHeight)", Object.keys(hs).length === 1 && Object.keys(hs)[0] == Style.spacing.controlHeight)
       check("all buttons share ONE icon size (16)", Object.keys(ic).length === 1 && Object.keys(ic)[0] == Style.space(16))
       check("toolbar/footer/header buttons share one bordered style; the in-field clear action stays borderless by design",
@@ -430,8 +441,8 @@ ShellRoot {
     function() { click(settingsButton()) },
     function() {
       check("gear menu opens from its search-row position", panel.menuOpen && panel.menuKind === "more" && isInside(settingsButton(), named(stage, "searchRow")))
-      check("gear menu has exactly Refresh library / Hide pre-orders / Log out, in order",
-        panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh library|Hide pre-orders|Log out / Clear Bandcamp session")
+      check("gear menu has exactly Refresh library / Hide pre-orders / Keyboard shortcuts / Log out, in order",
+        panel.menuItems.map(function(m) { return m.label }).join("|") === "Refresh library|Hide pre-orders|Keyboard shortcuts|Log out / Clear Bandcamp session")
       check("Hide pre-orders is checkable and reflects the persisted state",
         panel.moreItems[1].checked === svc.hidePreorders && !!button("Hide pre-orders") && button("Hide pre-orders").selected === svc.hidePreorders)
       key(Qt.Key_Escape)
@@ -1269,7 +1280,7 @@ ShellRoot {
     function() { click(button("Log out / Clear Bandcamp session")) },
     function() { check("gear menu item opens confirmation (does not log out yet)", panel.logoutConfirmOpen && !panel.menuOpen && svc.status !== "Cleared imported session"); key(Qt.Key_Escape) },
     function() { check("Esc cancels confirmation, window stays, no logout", !panel.logoutConfirmOpen && panel.opened && svc.status !== "Cleared imported session"); openSettings() },
-    function() { key(Qt.Key_Down); key(Qt.Key_Down) },
+    function() { key(Qt.Key_Down); key(Qt.Key_Down); key(Qt.Key_Down) },
     function() { key(Qt.Key_Return) },
     function() { check("Enter on the Log out gear-menu item opens the confirmation", panel.logoutConfirmOpen); key(Qt.Key_Return) },
     function() { check("Enter on confirmation = preselected Cancel: no logout", !panel.logoutConfirmOpen && svc.status !== "Cleared imported session") },
@@ -1392,6 +1403,8 @@ ShellRoot {
       svc.search("")
       panel.focusPane = ""
       panel.listCursor = -1
+      svc.queue = []
+      svc.queueIndex = -1
       prepLists()
       searchField().forceActiveFocus()
     },
@@ -1417,15 +1430,15 @@ ShellRoot {
     },
     function() { key(Qt.Key_Tab) },
     function() {
-      check("v3.3.1: Tab from a focused list moves focus to search and never types U+0009",
-        searchField().activeFocus && searchField().text === "" && svc.searchQuery === "")
+      check("v3.5: Tab from a focused list (empty queue) leaves to the track list and never types U+0009",
+        panel.focusPane === "tracks" && searchField().text === "" && svc.searchQuery === "")
       panel.focusPane = "list"
       named(stage, "listKeyCatcher").forceActiveFocus()
     },
     function() { shiftKey(Qt.Key_Tab) },
     function() {
-      check("v3.3.1: Shift+Tab from a focused list reverses to Sort and never types",
-        named(stage, "sortButton").activeFocus && searchField().text === "" && svc.searchQuery === "")
+      check("v3.5: Shift+Tab from a focused list reverses to the sort direction button and never types",
+        named(stage, "sortDirectionButton").activeFocus && searchField().text === "" && svc.searchQuery === "")
       panel.focusPane = "list"
       named(stage, "listKeyCatcher").forceActiveFocus()
     },
@@ -1491,11 +1504,11 @@ ShellRoot {
       }
     },
     function() {
-      check("v3.3.1: Tab walks search → clear/magnifier → Collection → gear → Albums → Playlists → Sort, then wraps",
-        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|searchField")
-      check("v3.3.1: every chain stop shows the shared focus state",
+      check("v3.5: Tab walks search → clear/magnifier → Collection → gear → Albums → Playlists → Sort → direction",
+        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton")
+      check("v3.5: every chain stop shows the shared focus state",
         host.chainFocus.every(function(x) { return x === true }))
-      searchField().forceActiveFocus()
+      named(stage, "sortDirectionButton").forceActiveFocus()
       host.chain = []
       for (var i = 0; i < 7; i++) {
         shiftKey(Qt.Key_Tab)
@@ -1503,7 +1516,7 @@ ShellRoot {
       }
     },
     function() {
-      check("v3.3.1: Shift+Tab reverses the same chain and wraps",
+      check("v3.5: Shift+Tab reverses the same chain",
         host.chain.join("|") === "sortButton|playlistsButton|albumsButton|settingsButton|link-collection|searchAction|searchField")
       searchField().forceActiveFocus()
     },
@@ -2214,6 +2227,607 @@ ShellRoot {
       panel.trackCursor = -1
     },
 
+    // ======================================== v3.5 ==========================================
+    // Part A: sort direction toggle (Albums full set, Playlists reduced set).
+    function() {
+      if (!panel.opened) panel.open()
+      svc.loadLibrary()
+      resetUserQueueChecks()
+      svc.setHidePreorders(false)
+      svc.activeTab = 0
+      svc.setSortMode("title")
+      svc.setSortDirection("asc")
+      svc.setPlaylistSortMode("title")
+      svc.setPlaylistSortDirection("asc")
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+      panel.queueCursor = -1
+      searchField().text = ""
+      svc.search("")
+      prepLists()
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      showRow("La Dee La La")
+    },
+    function() {
+      var d = named(stage, "sortDirectionButton"), s = sortButton()
+      check("v3.5 A: a direction button sits beside Sort, 28 px tall and button-styled",
+        !!d && d.visible === true && Math.round(d.height) === 28 && d.height === Style.spacing.controlHeight &&
+        d.bordered === true && d.tooltipText === "Reverse sort direction")
+      check("v3.5 A: it sits immediately to the right of Sort, on the same line",
+        Math.abs(d.mapToItem(stage, 0, 0).y - s.mapToItem(stage, 0, 0).y) < 1 &&
+        d.mapToItem(stage, 0, 0).x >= s.mapToItem(stage, 0, 0).x + s.width - 1)
+      check("v3.5 A: the glyph shows the CURRENT direction (up = ascending)",
+        d.iconText === LibraryModel.sortDirectionArrow("asc") && d.iconText === "\uf062")
+    },
+    function() {
+      // Defaults must be exactly the v3 comparators, criterion by criterion.
+      var modes = ["added", "artist", "title", "release"], ok = true, why = ""
+      for (var i = 0; i < modes.length; i++) {
+        var legacy = LibraryModel.sortAlbums(svc.collection, modes[i], false)
+        var explicit = LibraryModel.sortAlbums(svc.collection, modes[i], false,
+          LibraryModel.defaultSortDirection("albums", modes[i]))
+        if (!sameOrder(legacy, explicit)) { ok = false; why = modes[i] }
+      }
+      var legacyPl = LibraryModel.sortPlaylists(svc.playlists, "title")
+      var explicitPl = LibraryModel.sortPlaylists(svc.playlists, "title", "asc")
+      check("v3.5 A: each Albums criterion's default direction reproduces the pre-v3.5 comparator exactly" + (why ? " (" + why + ")" : ""), ok)
+      check("v3.5 A: the Playlist default direction reproduces the pre-v3.5 comparator exactly", sameOrder(legacyPl, explicitPl))
+      check("v3.5 A: documented defaults (Albums added/release descending, artist/title ascending; Playlists ascending)",
+        LibraryModel.defaultSortDirection("albums", "added") === "desc" &&
+        LibraryModel.defaultSortDirection("albums", "release") === "desc" &&
+        LibraryModel.defaultSortDirection("albums", "artist") === "asc" &&
+        LibraryModel.defaultSortDirection("albums", "title") === "asc" &&
+        LibraryModel.defaultSortDirection("playlists", "added") === "asc" &&
+        LibraryModel.defaultSortDirection("playlists", "title") === "asc")
+      check("v3.5 A: untouched Title A–Z starts ascending exactly as before", svc.sortDirection === "asc" && titlesEqual(leftTitles(), expTitle))
+    },
+    function() { click(named(stage, "sortDirectionButton")) },
+    function() {
+      check("v3.5 A: one click on Title A–Z flips to the EXACT reverse, ties included",
+        svc.sortDirection === "desc" && titlesEqual(leftTitles(), expTitle.slice().reverse()))
+      check("v3.5 A: the button and the focused sort row now show the down arrow",
+        named(stage, "sortDirectionButton").iconText === "\uf063")
+      check("v3.5 A: flipping returns focus to the search field", searchField().activeFocus)
+      click(named(stage, "sortDirectionButton"))
+    },
+    function() {
+      check("v3.5 A: clicking again restores the default order and up arrow",
+        svc.sortDirection === "asc" && titlesEqual(leftTitles(), expTitle) &&
+        named(stage, "sortDirectionButton").iconText === "\uf062")
+      svc.setSortMode("release")
+    },
+    function() {
+      check("v3.5 A: Release date still defaults to newest-first",
+        svc.sortDirection === "desc" && titlesEqual(leftTitles(), expRelease))
+      click(named(stage, "sortDirectionButton"))
+    },
+    function() {
+      check("v3.5 A: Release date flips to the exact reverse (oldest-first)",
+        svc.sortDirection === "asc" && titlesEqual(leftTitles(), expRelease.slice().reverse()))
+      click(named(stage, "sortDirectionButton"))
+      svc.setSortMode("added")
+    },
+    function() {
+      check("v3.5 A: Recently added still defaults to newest-first",
+        svc.sortDirection === "desc" && titlesEqual(leftTitles(), expAdded))
+      click(named(stage, "sortDirectionButton"))
+    },
+    function() {
+      check("v3.5 A: Recently added flips to the exact reverse",
+        svc.sortDirection === "asc" && titlesEqual(leftTitles(), expAdded.slice().reverse()))
+      click(named(stage, "sortDirectionButton"))
+      svc.setSortMode("title")
+      svc.setSortDirection("desc")
+    },
+    function() {
+      check("v3.5 A: Title direction desc is remembered while the criterion is unchanged",
+        svc.sortDirection === "desc" && titlesEqual(leftTitles(), expTitle.slice().reverse()))
+      svc.setSortMode("artist")
+    },
+    function() {
+      check("v3.5 A: choosing a NEW criterion resets direction to that criterion's default",
+        svc.sortMode === "artist" && svc.sortDirection === "asc" && titlesEqual(leftTitles(), expArtist))
+      svc.setSortMode("title")
+      svc.setSortDirection("desc")
+      click(sortButton())
+    },
+    function() {
+      check("v3.5 A: sort menu still has exactly the four Albums criteria",
+        panel.menuItems.map(function(m) { return m.label }).join("|") === "Recently added|Artist A–Z|Title A–Z|Release date")
+      check("v3.5 A: the selected sort row shows the same direction arrow",
+        panel.menuItems[2].icon === "\uf00c" && panel.menuItems[2].trailing === "\uf063" &&
+        panel.menuItems.filter(function(m) { return m.trailing && m.trailing !== "" }).length === 1)
+      click(button("Title A–Z"))
+    },
+    function() {
+      check("v3.5 A: choosing the selected criterion again restores its default direction",
+        svc.sortMode === "title" && svc.sortDirection === "asc" && titlesEqual(leftTitles(), expTitle))
+      click(button("Playlists (2)"))
+    },
+    function() {
+      check("v3.5 A: the Playlists tab has its own direction (up by default)",
+        svc.activeTab === 1 && svc.playlistSortDirection === "asc" &&
+        named(stage, "sortDirectionButton").iconText === "\uf062" &&
+        titlesEqual(leftTitles(), ["Postpunky?", "Rock & Roll Faves"]))
+      click(sortButton())
+    },
+    function() {
+      check("v3.5 A: the Playlists sort menu still offers exactly two criteria",
+        panel.menuItems.map(function(m) { return m.label }).join("|") === "Recently added|Title A–Z" && panel.menuItems.length === 2)
+      key(Qt.Key_Escape)
+      click(named(stage, "sortDirectionButton"))
+    },
+    function() {
+      check("v3.5 A: Playlists Title A–Z flips to the exact reverse",
+        svc.playlistSortDirection === "desc" && titlesEqual(leftTitles(), ["Rock & Roll Faves", "Postpunky?"]) &&
+        named(stage, "sortDirectionButton").iconText === "\uf063")
+      check("v3.5 A: flipping Playlists does not touch the Albums direction", svc.sortDirection === "asc" || svc.sortDirection === "desc")
+      svc.setPlaylistSortDirection("asc")
+      svc.setPlaylistSortMode("title")
+      svc.activeTab = 0
+      svc.setSortMode("title")
+      svc.setSortDirection("asc")
+    },
+    // Search groups follow the criterion and the direction.
+    function() {
+      searchField().text = "o"
+      svc.search("o")
+    },
+    function() {
+      host.probe = { albumsAsc: svc.searchResults.albums.map(function(a) { return a.title }).join("|") }
+      svc.setSortDirection("desc")
+    },
+    function() {
+      var albumsDesc = svc.searchResults.albums.map(function(a) { return a.title }).join("|")
+      check("v3.5 A: the search Albums group follows the direction exactly",
+        albumsDesc === host.probe.albumsAsc.split("|").reverse().join("|") && albumsDesc !== host.probe.albumsAsc)
+      svc.setSortDirection("asc")
+      svc.setPlaylistSortMode("title")
+      svc.setPlaylistSortDirection("asc")
+      searchField().text = "o"
+      svc.search("o")
+    },
+    function() {
+      host.probe = { plAsc: svc.searchResults.playlists.map(function(p) { return p.name }).join("|") }
+      svc.setPlaylistSortDirection("desc")
+    },
+    function() {
+      var plDesc = svc.searchResults.playlists.map(function(p) { return p.name }).join("|")
+      check("v3.5 A: the search Playlists group follows its tab's direction exactly",
+        plDesc === host.probe.plAsc.split("|").reverse().join("|") && plDesc !== host.probe.plAsc)
+      searchField().text = ""
+      svc.search("")
+      svc.setPlaylistSortDirection("asc")
+    },
+
+    // Part B: complete Tab traversal, queue control and visible focus.
+    function() {
+      resetUserQueueChecks()
+      svc.activeTab = 0
+      svc.setSortMode("title")
+      svc.setSortDirection("asc")
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.focusPane = ""
+      panel.listCursor = -1
+      panel.trackCursor = -1
+      panel.queueCursor = -1
+      searchField().text = ""
+      svc.search("")
+      prepLists()
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      showRow("La Dee La La")
+      searchField().forceActiveFocus()
+      host.chain = []
+    },
+    function() {
+      for (var i = 0; i < 14; i++) { key(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
+    },
+    function() {
+      log("v3.5 Tab chain (no queue): " + host.chain.join("|"))
+      check("v3.5 B: the full Tab order with NO queue skips the queue frame entirely and wraps",
+        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton|leftList|trackList|footerShuffle|footerPrev|footerPlay|footerNext|searchField")
+      svc.addTrackToQueue(svc.collection[collIndex("La Dee La La")].tracks[0])
+      svc.addTrackToQueue(svc.collection[collIndex("La Dee La La")].tracks[1])
+      searchField().forceActiveFocus()
+      host.chain = []
+    },
+    function() {
+      for (var i = 0; i < 16; i++) { key(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
+    },
+    function() {
+      log("v3.5 Tab chain (queue): " + host.chain.join("|"))
+      check("v3.5 B: with a queue the chain adds Up Next and Clear between the left list and the track list",
+        host.chain.join("|") === "searchAction|link-collection|settingsButton|albumsButton|playlistsButton|sortButton|sortDirectionButton|leftList|upNextList|upNextClear|trackList|footerShuffle|footerPrev|footerPlay|footerNext|searchField")
+      panel.focusPane = ""
+      panel.listCursor = -1
+      named(stage, "sortDirectionButton").forceActiveFocus()
+      key(Qt.Key_Tab)
+    },
+    function() {
+      var rows = panel.listRows, idx = -1
+      for (var i = 0; i < rows.length; i++) if (rows[i].uid === panel.selectedAlbumUid) { idx = i; break }
+      check("v3.5 B: entering the left list focuses the selected/current row with a visible cursor",
+        panel.focusPane === "list" && idx >= 0 && panel.listCursor === idx &&
+        alpha(named(leftList().itemAtIndex(idx), "rowFill")) > 0.1)
+      key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.5 B: Tab from the left list enters Up Next at row 0, visibly focused",
+        panel.focusPane === "queue" && panel.queueCursor === 0 &&
+        alpha(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill")) > 0.1)
+      key(Qt.Key_Down)
+    },
+    function() {
+      check("v3.5 B: arrows move within Up Next and move the visible cursor",
+        panel.queueCursor === 1 &&
+        alpha(named(named(stage, "upNextList").itemAtIndex(0), "upNextFill")) < 0.15 &&
+        alpha(named(named(stage, "upNextList").itemAtIndex(1), "upNextFill")) > 0.1)
+      key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.5 B: Tab leaves Up Next for Clear, which shows its focus ring",
+        named(stage, "upNextClear").activeFocus && named(stage, "upNextClear")._showFocusRing === true)
+      key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.5 B: Tab from Clear enters the track list at the current row",
+        panel.focusPane === "tracks" && panel.trackCursor === 0 &&
+        alpha(named(trackList().itemAtIndex(0), "trackFill")) > 0.1)
+      key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.5 B: Tab from the track list reaches the footer transport (Shuffle)",
+        named(stage, "footerShuffle").activeFocus && named(stage, "footerShuffle")._showFocusRing === true)
+      key(Qt.Key_Tab); key(Qt.Key_Tab); key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.5 B: the footer chain reaches Next (after Shuffle, Previous, Play/Pause)",
+        named(stage, "footerNext").activeFocus)
+      // Activate a footer control by keyboard: Shuffle is the safest (no playback).
+      named(stage, "footerShuffle").forceActiveFocus()
+      var before = panel.shuffleOn
+      key(Qt.Key_Return)
+      check("v3.5 B: Enter activates a focused footer button", panel.shuffleOn === !before)
+      named(stage, "footerShuffle").forceActiveFocus()
+      var mid = panel.shuffleOn
+      key(Qt.Key_Space)
+      check("v3.5 B: Space activates a focused footer button too", panel.shuffleOn === !mid)
+      if (panel.shuffleOn) svc.setShuffle(panel.contextKey, false)
+    },
+    function() {
+      searchField().forceActiveFocus()
+      host.chain = []
+      for (var i = 0; i < 16; i++) { shiftKey(Qt.Key_Tab); host.chain.push(panel.focusControlName()) }
+    },
+    function() {
+      log("v3.5 reverse chain: " + host.chain.join("|"))
+      check("v3.5 B: Shift+Tab reverses the full chain across every boundary, queue included",
+        host.chain.join("|") === "footerNext|footerPlay|footerPrev|footerShuffle|trackList|upNextClear|upNextList|leftList|sortDirectionButton|sortButton|playlistsButton|albumsButton|settingsButton|link-collection|searchAction|searchField")
+    },
+    function() {
+      panel.enterQueueRegion()
+    },
+    function() {
+      check("v3.5 B: Up Next owns focus before the queue vanishes", panel.focusPane === "queue" && named(stage, "listKeyCatcher").activeFocus)
+      svc.clearUserQueue()
+    },
+    function() {
+      check("v3.5 B: a queue vanishing under focus lands on the track list, never on nothing",
+        panel.upNextCount === 0 && panel.focusPane === "tracks" && named(stage, "listKeyCatcher").activeFocus)
+    },
+
+    // Part C: queue keys on the focused list only.
+    function() {
+      resetUserQueueChecks()
+      svc.activeTab = 0
+      searchField().text = ""
+      svc.search("")
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      prepLists()
+      panel.enterTrackRegion()
+    },
+    function() {
+      check("v3.5 C: track list focus starts at row 0", panel.focusPane === "tracks" && panel.trackCursor === 0)
+      ctrlKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Ctrl+Enter in the track list adds the focused track to the queue",
+        svc.userQueue.length === 1 && queueTitles().join("|") === "La Dee La La Song")
+      check("v3.5 C: adding to the queue never starts or changes playback",
+        svc.currentTrack === null && svc.isPlaying === false && svc.playingContextKey === "")
+      key(Qt.Key_Down)
+      altKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Alt+Enter in the track list puts the focused track next",
+        queueTitles().join("|") === "Waiting For Marvin|La Dee La La Song" && svc.currentTrack === null)
+      key(Qt.Key_Down)
+      ctrlKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: further Ctrl+Enter adds append in order",
+        queueTitles().join("|") === "Waiting For Marvin|La Dee La La Song|The White Lady")
+      svc.clearUserQueue()
+      panel.selectedAlbumUid = ""
+      panel.pickAlbum(svc.collection[collIndex(host.fi)])
+      panel.enterTrackRegion()
+    },
+    function() {
+      ctrlKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Ctrl+Enter on an unstreamable track is a no-op",
+        svc.userQueue.length === 0 && svc.notice === "Not yet released")
+      altKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Alt+Enter on an unstreamable track is the same no-op + notice",
+        svc.userQueue.length === 0 && svc.notice === "Not yet released" && svc.currentTrack === null)
+      svc.clearUserQueue()
+      panel.selectedAlbumUid = ""
+      panel.pickAlbum(svc.collection[collIndex("Future Sounds")])
+      panel.listCursor = -1
+      panel.focusToken("leftList")
+    },
+    function() {
+      var rows = panel.listRows, idx = -1
+      for (var i = 0; i < rows.length; i++) if (rows[i].uid === panel.selectedAlbumUid) { idx = i; break }
+      check("v3.5 C: the left list is focused on the whole-item row", panel.focusPane === "list" && panel.listCursor === idx)
+      ctrlKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Ctrl+Enter on an album row adds the WHOLE item, streamable tracks only",
+        queueTitles().join("|") === "Released Single" &&
+        svc.notice === "Added 1 track to queue · 2 skipped (not streamable)")
+      host.probe = { titles: queueTitles().join("|"), notice: svc.notice }
+      altKey(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Alt+Enter on an album row does nothing (albums have no Play Next)",
+        queueTitles().join("|") === host.probe.titles && svc.notice === host.probe.notice)
+      svc.clearUserQueue()
+      svc.activeTab = 0
+      var a = mk("qkctx", 4)
+      svc.playContext("album", "Queue Keys", a, 1, "album:qk")
+      host.probe = { a: mk("qka", 1)[0], b: mk("qkb", 1)[0], c: mk("qkc", 1)[0], queueIndex: svc.queueIndex }
+      svc.addTrackToQueue(host.probe.a)
+      svc.addTrackToQueue(host.probe.b)
+      svc.addTrackToQueue(host.probe.c)
+      panel.queueCursor = -1
+      panel.enterQueueRegion()
+    },
+    function() {
+      key(Qt.Key_Down)
+    },
+    function() {
+      check("v3.5 C: queue cursor starts on the second row", panel.focusPane === "queue" && panel.queueCursor === 1)
+      key(Qt.Key_Delete)
+    },
+    function() {
+      check("v3.5 C: Delete removes the focused queue row and stays on the NEXT row",
+        queueTitles().join("|") === "qka0|qkc0" && panel.queueCursor === 1 && svc.currentTrack !== null)
+      check("v3.5 C: removing a queue row never changes the playback context",
+        svc.queueIndex === host.probe.queueIndex && svc.playingContextKey === "album:qk")
+      key(Qt.Key_Delete)
+    },
+    function() {
+      check("v3.5 C: deleting the LAST row selects the previous one",
+        queueTitles().join("|") === "qka0" && panel.queueCursor === 0)
+      key(Qt.Key_Delete)
+    },
+    function() {
+      check("v3.5 C: deleting the only row lands focus on the track list",
+        svc.userQueue.length === 0 && panel.focusPane === "tracks" && named(stage, "listKeyCatcher").activeFocus)
+      svc.addTrackToQueue(host.probe.a)
+      svc.addTrackToQueue(host.probe.b)
+      svc.addTrackToQueue(host.probe.c)
+      panel.enterQueueRegion()
+    },
+    function() {
+      key(Qt.Key_Down)
+      key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Enter on a queue row plays it NOW with double-click semantics",
+        svc.currentTrack === host.probe.b && queueTitles().join("|") === "qkc0")
+      check("v3.5 C: Enter leaves the underlying context/index untouched",
+        svc.queueIndex === host.probe.queueIndex && svc.playingContextKey === "album:qk")
+      resetUserQueueChecks()
+    },
+    // The search field is a text editor: no queue shortcuts, normal Delete.
+    function() {
+      searchField().text = "abc"
+      searchField().cursorPosition = 1
+      searchField().forceActiveFocus()
+      var before = svc.userQueue.length
+      ctrlKey(Qt.Key_Return)
+      altKey(Qt.Key_Return)
+      check("v3.5 C: Ctrl/Alt+Enter in the search field do nothing (no queue, no activation)",
+        searchField().text === "abc" && svc.userQueue.length === before)
+      key(Qt.Key_Delete)
+    },
+    function() {
+      check("v3.5 C: Delete in the search field deletes text like any editor", searchField().text === "ac")
+      searchField().text = ""
+      searchField().cursorPosition = 0
+      svc.search("")
+    },
+    // Addendum: Menu / Shift+F10, Up/Down, Enter activates, Esc closes, focus returns.
+    function() {
+      resetUserQueueChecks()
+      svc.activeTab = 0
+      searchField().text = ""
+      svc.search("")
+      panel.selectedAlbumUid = ""
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      prepLists()
+      panel.trackCursor = -1
+      panel.enterTrackRegion()
+      menuKey()
+    },
+    function() {
+      check("v3.5 C: Menu on a focused track row opens the same context menu",
+        panel.contextMenuOpen && panel.contextMenuKind === "track" && panel.contextMenuSource === "tracks")
+      check("v3.5 C: menu rows carry the dimmed keyboard hints",
+        button("Play Next").trailingText === "Alt+Enter" && button("Add to Queue").trailingText === "Ctrl+Enter")
+      key(Qt.Key_Down)
+    },
+    function() {
+      check("v3.5 C: Down navigates the context menu", panel.contextMenuIndex === 1)
+      key(Qt.Key_Up)
+      key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Enter activates the highlighted item and closes the menu",
+        !panel.contextMenuOpen && queueTitles().join("|") === "La Dee La La Song" && svc.currentTrack === null)
+      check("v3.5 C: focus returns to the opening row", panel.focusPane === "tracks" && panel.trackCursor === 0 &&
+        named(stage, "listKeyCatcher").activeFocus)
+      host.probe = { titles: queueTitles().join("|") }
+      menuKey()
+    },
+    function() {
+      check("v3.5 C: the context menu reopens on the same row", panel.contextMenuOpen && panel.contextMenuKind === "track")
+      key(Qt.Key_Escape)
+    },
+    function() {
+      check("v3.5 C: Esc closes the menu without acting and returns focus to the row",
+        !panel.contextMenuOpen && queueTitles().join("|") === host.probe.titles &&
+        panel.focusPane === "tracks" && named(stage, "listKeyCatcher").activeFocus)
+      panel.enterQueueRegion()
+      shiftF10()
+    },
+    function() {
+      check("v3.5 C: Shift+F10 opens the queue row's menu with its Delete hint",
+        panel.contextMenuOpen && panel.contextMenuKind === "queue" && panel.contextMenuSource === "queue" &&
+        button("Remove from queue").trailingText === "Del")
+      key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 C: Enter removes the focused queue row and returns focus to the queue",
+        queueTitles().join("|") === "" && panel.focusPane === "tracks" && !panel.contextMenuOpen)
+      resetUserQueueChecks()
+    },
+
+    // Part D: keyboard shortcuts view in the body slot.
+    function() {
+      resetUserQueueChecks()
+      svc.activeTab = 0
+      svc.setSortMode("title")
+      svc.setSortDirection("asc")
+      searchField().text = ""
+      svc.search("")
+      panel.selectedAlbumUid = ""
+      panel.selectedPlaylistUid = ""
+      panel.pickAlbum(svc.collection[collIndex(host.croc)])
+      prepLists()
+      showRow(host.croc)
+      svc.addTrackToQueue(mk("helpq1", 1)[0])
+      svc.addTrackToQueue(mk("helpq2", 1)[0])
+      leftList().contentY = 4
+      trackList().contentY = 3
+      host.probe = {
+        uid: panel.selectedAlbumUid,
+        leftY: leftList().contentY,
+        trackY: trackList().contentY,
+        queue: queueTitles().join("|"),
+        queueIndex: svc.queueIndex,
+        libraryRowY: named(stage, "libraryRow").mapToItem(stage, 0, 0).y,
+        libraryRowH: named(stage, "libraryRow").height
+      }
+    },
+    function() {
+      openSettings()
+      click(button("Keyboard shortcuts"))
+    },
+    function() {
+      var hv = named(stage, "shortcutsView")
+      var groups = allNamed(stage, "shortcutsGroup", []).filter(function(g) { return g.visible })
+      var keys = allNamed(stage, "shortcutsKey", []).filter(function(k) { return k.visible })
+      var descs = allNamed(stage, "shortcutsDesc", []).filter(function(d) { return d.visible })
+      log("v3.5 help: groups=" + groups.length + " rows=" + keys.length + " height=" + hv.height +
+        " content=" + named(stage, "shortcutsFlickable").contentHeight)
+      check("v3.5 D: Keyboard shortcuts opens the shortcuts view in the body slot",
+        panel.helpOpen && hv.visible === true && Math.abs(hv.mapToItem(stage, 0, 0).y - host.probe.libraryRowY) < 0.5 &&
+        Math.abs(hv.width - named(stage, "libraryRow").width) < 0.5)
+      check("v3.5 D: opening moves focus into the view", hv.activeFocus && panel.focusControlName() === "shortcutsView")
+      check("v3.5 D: the four groups appear in order",
+        groups.map(function(g) { return g.text }).join("|") === "Navigation|Playback|Queue|Search & menus")
+      check("v3.5 D: rows use the existing two-column sizes and colours",
+        keys.length === 16 && keys.length === descs.length &&
+        keys[0].width === Style.space(170) && descs[0].x === Style.space(182) &&
+        keys[0].font.pixelSize === Style.font.bodySmall && descs[0].font.pixelSize === Style.font.caption &&
+        String(keys[0].color) === String(named(stage, "searchField").color))
+      check("v3.5 D: the view stays inside the established floor/cap and scrolls internally",
+        hv.height >= 6 * Style.space(30) - 0.5 && hv.height <= Style.space(396) + 0.5 &&
+        named(stage, "shortcutsFlickable").contentHeight > hv.height)
+    },
+    function() {
+      var all = panel.helpRows.map(function(r) { return (r.key || "") + " " + (r.text || "") }).join(" | ")
+      var required = ["Tab / Shift+Tab", "↑ / ↓", "← / →", "Enter", "Space", "Ctrl+Enter", "Alt+Enter",
+        "Delete", "/", "Menu / Shift+F10", "Esc", "sort direction"]
+      var missing = required.filter(function(k) { return all.indexOf(k) < 0 })
+      check("v3.5 D: every Part A–C/addendum shortcut is listed" + (missing.length ? " (missing " + missing.join(", ") + ")" : ""),
+        missing.length === 0)
+      key(Qt.Key_Escape)
+    },
+    function() {
+      check("v3.5 D: Esc closes the view, keeps the window, and returns focus to the gear",
+        !panel.helpOpen && panel.opened && settingsButton().activeFocus)
+      check("v3.5 D: selection, pane scrolling and the queue are restored exactly",
+        panel.selectedAlbumUid === host.probe.uid &&
+        leftList().contentY === host.probe.leftY && trackList().contentY === host.probe.trackY &&
+        queueTitles().join("|") === host.probe.queue && svc.queueIndex === host.probe.queueIndex)
+      openSettings()
+      click(button("Keyboard shortcuts"))
+    },
+    function() {
+      check("v3.5 D: the shortcuts item opens the view again", panel.helpOpen)
+      openSettings()
+      click(button("Keyboard shortcuts"))
+    },
+    function() {
+      check("v3.5 D: selecting Keyboard shortcuts again closes the view (toggle)",
+        !panel.helpOpen && panel.opened && settingsButton().activeFocus)
+    },
+    function() {
+      // Reachable entirely from the keyboard: Tab to the gear, Enter, Down ×2, Enter.
+      searchField().forceActiveFocus()
+      key(Qt.Key_Tab); key(Qt.Key_Tab); key(Qt.Key_Tab)
+    },
+    function() {
+      check("v3.5 D: the keyboard path reaches the gear", settingsButton().activeFocus)
+      key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 D: Enter opens the gear menu from the keyboard", panel.menuOpen && panel.menuKind === "more")
+      key(Qt.Key_Down); key(Qt.Key_Down); key(Qt.Key_Return)
+    },
+    function() {
+      check("v3.5 D: Down ×2 + Enter opens the shortcuts view from the keyboard",
+        panel.helpOpen && named(stage, "shortcutsView").activeFocus)
+      key(Qt.Key_Escape)
+    },
+    function() {
+      check("v3.5 D: Esc from the keyboard path returns focus to the gear", !panel.helpOpen && settingsButton().activeFocus)
+      // Leave non-default directions on disk for the relaunch phase.
+      svc.setSortMode("title")
+      svc.setSortDirection("desc")
+      svc.setPlaylistSortMode("title")
+      svc.setPlaylistSortDirection("desc")
+      svc.setHidePreorders(true)
+    },
+    function() {
+      check("v3.5 A: the final phase-1 directions are persisted for relaunch",
+        svc.sortDirection === "desc" && svc.playlistSortDirection === "desc" && svc.hidePreorders === true)
+      resetUserQueueChecks()
+    },
+
     function() {
       svc.queue = [{ uid: "v32#0", title: host.longTitle + " " + host.longTitle, artist: "Long Title Artist", album: "Long", duration: 200, streamable: true }]
       svc.queueIndex = 0
@@ -2339,6 +2953,20 @@ ShellRoot {
   // ======================================== PHASE 2 ==========================================
   property var steps2: [
     function() { panel.open() },
+    function() {
+      prepLists()
+      check("[relaunch] v3.5: Albums sort direction restored from disk (descending)",
+        svc.sortDirection === "desc" && named(stage, "sortDirectionButton").iconText === "\uf063")
+      check("[relaunch] v3.5: Playlists sort direction restored independently (descending)",
+        svc.playlistSortDirection === "desc" &&
+        LibraryModel.sortPlaylists(svc.playlists, "title", "desc")[0].name === "Rock & Roll Faves")
+      check("[relaunch] v3.5: the restored direction reorders the relaunched Albums list",
+        titlesEqual(leftTitles(), noPre(expTitle).slice().reverse()))
+      // Return to the default directions so the v3.1 sort assertions below keep
+      // their original meaning; the persisted direction was exercised above.
+      svc.setSortDirection("asc")
+      svc.setPlaylistSortDirection("asc")
+    },
     function() {
       prepLists()
       check("[relaunch] sort choice restored from disk (Title A–Z)", svc.sortMode === "title" && !!button("Sort: Title A–Z"))

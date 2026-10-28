@@ -37,6 +37,31 @@ function validPlaylistSort(mode) {
   return false
 }
 
+// v3.5: sort direction. The default for every criterion is exactly the order
+// the v3 comparators produced, so an untouched install keeps today's lists:
+//   Albums  Recently added  descending (newest purchase first)
+//           Artist A–Z      ascending
+//           Title A–Z       ascending
+//           Release date    descending (newest release first, unknown last)
+//   Playlists Recently added ascending (the library's source order)
+//             Title A–Z     ascending
+// Flipping is implemented by reversing the completed default ordering, so a
+// flip is an EXACT reverse (ties included), never a re-sort with a different
+// tie-break.
+function validSortDirection(dir) {
+  return dir === "asc" || dir === "desc"
+}
+
+function defaultSortDirection(scope, mode) {
+  if (scope === "playlists") return "asc"
+  if (mode === "added" || mode === "release") return "desc"
+  return "asc"
+}
+
+function sortDirectionArrow(dir) {
+  return dir === "asc" ? "\uf062" : "\uf063"
+}
+
 // "27 Nov 2026" (UTC, so the date does not shift with the local zone)
 function fmtDate(ts) {
   if (!ts) return ""
@@ -168,7 +193,7 @@ function releaseKey(a) {
   return 0
 }
 
-function sortAlbums(albums, mode, hidePreorders) {
+function sortAlbums(albums, mode, hidePreorders, direction) {
   var out = []
   for (var i = 0; i < albums.length; i++) if (!(hidePreorders && albums[i].isPreorder)) out.push(albums[i])
   var byTitle = function(a, b) { return cmpStr(a.title, b.title) || cmpStr(a.artist, b.artist) || cmpStr(a.uid, b.uid) }
@@ -192,13 +217,16 @@ function sortAlbums(albums, mode, hidePreorders) {
     }
   }
   out.sort(cmp)
+  var def = defaultSortDirection("albums", validSort(mode) ? mode : "added")
+  if ((validSortDirection(direction) ? direction : def) !== def) out.reverse()
   return out
 }
 
 // Playlist sorting. "added" returns a copy in the library's existing source
 // order; "title" sorts by name, case- and accent-insensitively, with the uid
-// as a stable tie-break.
-function sortPlaylists(playlists, mode) {
+// as a stable tie-break. v3.5 adds an optional direction; the default is the
+// order above and a flip is that exact ordering reversed.
+function sortPlaylists(playlists, mode, direction) {
   var out = []
   var list = playlists || []
   for (var i = 0; i < list.length; i++) out.push(list[i])
@@ -207,6 +235,8 @@ function sortPlaylists(playlists, mode) {
       return cmpStr(a.name || a.title, b.name || b.title) || cmpStr(a.id, b.id)
     })
   }
+  var def = defaultSortDirection("playlists", mode === "title" ? "title" : "added")
+  if ((validSortDirection(direction) ? direction : def) !== def) out.reverse()
   return out
 }
 

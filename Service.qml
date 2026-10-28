@@ -146,12 +146,16 @@ Item {
 
   // Sorting and filtering of the Albums list. Persisted in stateDir/ui.json.
   property string sortMode: "added"
+  // v3.5: direction is persisted per tab next to the criterion. Defaults match
+  // the v3 comparators exactly (see LibraryModel.defaultSortDirection).
+  property string sortDirection: "desc"
   // v3.3.1 follow-up: the Playlists tab keeps its own sort (default = the
   // library's source order). Persisted alongside the Albums sort.
   property string playlistSortMode: "added"
+  property string playlistSortDirection: "asc"
   property bool hidePreorders: false
-  readonly property var albumsView: LibraryModel.sortAlbums(collection, sortMode, hidePreorders)
-  readonly property var playlistsView: LibraryModel.sortPlaylists(playlists, playlistSortMode)
+  readonly property var albumsView: LibraryModel.sortAlbums(collection, sortMode, hidePreorders, sortDirection)
+  readonly property var playlistsView: LibraryModel.sortPlaylists(playlists, playlistSortMode, playlistSortDirection)
 
   // True from the moment Refresh starts (browser-session import, then backend sync)
   // until the sync exits; drives the toolbar Refresh button.
@@ -207,6 +211,10 @@ Item {
       var d = JSON.parse(uiFile.text() || "{}")
       if (LibraryModel.validSort(d.sortMode)) sortMode = d.sortMode
       if (LibraryModel.validPlaylistSort(d.playlistSortMode)) playlistSortMode = d.playlistSortMode
+      sortDirection = LibraryModel.validSortDirection(d.sortDirection)
+        ? d.sortDirection : LibraryModel.defaultSortDirection("albums", sortMode)
+      playlistSortDirection = LibraryModel.validSortDirection(d.playlistSortDirection)
+        ? d.playlistSortDirection : LibraryModel.defaultSortDirection("playlists", playlistSortMode)
       hidePreorders = d.hidePreorders === true
     } catch (e) {
     }
@@ -214,21 +222,53 @@ Item {
 
   function saveUi() {
     mkStateDir.running = true
-    uiFile.setText(JSON.stringify({ sortMode: sortMode, playlistSortMode: playlistSortMode, hidePreorders: hidePreorders }) + "\n")
+    uiFile.setText(JSON.stringify({ sortMode: sortMode, sortDirection: sortDirection,
+      playlistSortMode: playlistSortMode, playlistSortDirection: playlistSortDirection,
+      hidePreorders: hidePreorders }) + "\n")
   }
 
   function setSortMode(mode) {
-    if (!LibraryModel.validSort(mode) || mode === sortMode) return
+    if (!LibraryModel.validSort(mode)) return
+    // v3.5: a new criterion starts in its documented default direction. The
+    // direction button then flips from there; that choice is what persists.
+    var dir = LibraryModel.defaultSortDirection("albums", mode)
+    if (mode === sortMode && dir === sortDirection) return
     sortMode = mode
+    sortDirection = dir
     if (searchQuery !== "") search(searchQuery)
     saveUi()
   }
 
   function setPlaylistSortMode(mode) {
-    if (!LibraryModel.validPlaylistSort(mode) || mode === playlistSortMode) return
+    if (!LibraryModel.validPlaylistSort(mode)) return
+    var dir = LibraryModel.defaultSortDirection("playlists", mode)
+    if (mode === playlistSortMode && dir === playlistSortDirection) return
     playlistSortMode = mode
+    playlistSortDirection = dir
     if (searchQuery !== "") search(searchQuery)
     saveUi()
+  }
+
+  function setSortDirection(dir) {
+    if (!LibraryModel.validSortDirection(dir) || dir === sortDirection) return
+    sortDirection = dir
+    if (searchQuery !== "") search(searchQuery)
+    saveUi()
+  }
+
+  function toggleSortDirection() {
+    setSortDirection(sortDirection === "asc" ? "desc" : "asc")
+  }
+
+  function setPlaylistSortDirection(dir) {
+    if (!LibraryModel.validSortDirection(dir) || dir === playlistSortDirection) return
+    playlistSortDirection = dir
+    if (searchQuery !== "") search(searchQuery)
+    saveUi()
+  }
+
+  function togglePlaylistSortDirection() {
+    setPlaylistSortDirection(playlistSortDirection === "asc" ? "desc" : "asc")
   }
 
   function setHidePreorders(on) {
@@ -940,7 +980,7 @@ Item {
     // existing behaviour.
     var ql = String(q || "").toLowerCase()
     if (ql !== "") {
-      var ordered = LibraryModel.sortAlbums(collection, sortMode, false)
+      var ordered = LibraryModel.sortAlbums(collection, sortMode, false, sortDirection)
       var albums = []
       for (var i = 0; i < ordered.length; i++) {
         var a = ordered[i]
@@ -951,7 +991,7 @@ Item {
     // v3.3.1 follow-up: the Playlists group follows the Playlists tab's own
     // sort, the same way Albums follows theirs. Search stays global.
     if (r.playlists.length > 1) {
-      var orderedPl = LibraryModel.sortPlaylists(playlists, playlistSortMode)
+      var orderedPl = LibraryModel.sortPlaylists(playlists, playlistSortMode, playlistSortDirection)
       var matches = {}
       for (var p = 0; p < r.playlists.length; p++) matches[String(r.playlists[p].uid)] = true
       var grouped = []

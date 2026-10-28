@@ -134,6 +134,10 @@ Panel {
     var floorHeight = detailMinTrackRows * detailBaseTrackRowHeight
     return Math.max(floorHeight, Math.min(detailCapHeight, libraryRowContentHeight))
   }
+  // v3.5 Part D: the shortcuts view occupies the same body slot as the two
+  // panes, under the same floor/cap. Longer content scrolls inside it.
+  readonly property real helpViewHeight: Math.max(detailMinTrackRows * detailBaseTrackRowHeight,
+    Math.min(detailCapHeight, helpColumn ? helpColumn.implicitHeight + 2 * Style.spacing.sm : 0))
 
   // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
   // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
@@ -150,11 +154,14 @@ Panel {
   property var contextMenuItem: null
   property int contextMenuQueueIndex: -1
   property var contextMenuEntries: []
+  property int contextMenuIndex: 0
+  property string contextMenuSource: ""     // keyboard-opened: "list", "queue", "tracks"
   property real contextMenuAnchorX: 0
   property real contextMenuAnchorY: 0
   readonly property var moreItems: [
     { icon: "\uf021", label: "Refresh library", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
     { icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
+    { icon: "\uf11c", label: "Keyboard shortcuts", action: "help" },
     { icon: "\uf08b", label: "Log out / Clear Bandcamp session", action: "logout" }
   ]
   // v3.3.1 follow-up: Albums keep the full sort set; Playlists get exactly two
@@ -163,16 +170,47 @@ Panel {
   readonly property string activeSortMode: service
     ? (playlistsTab ? service.playlistSortMode : service.sortMode) : "added"
   readonly property string activeSortLabel: LibraryModel.sortLabel(activeSortMode)
+  // v3.5: the direction button shows the CURRENT direction; its click flips it.
+  readonly property string activeSortDirection: service
+    ? (playlistsTab ? service.playlistSortDirection : service.sortDirection) : "asc"
+  readonly property string sortDirectionArrow: LibraryModel.sortDirectionArrow(activeSortDirection)
   readonly property var sortItems: {
     var out = []
     var modes = playlistsTab ? LibraryModel.PLAYLIST_SORT_MODES : LibraryModel.SORT_MODES
     for (var i = 0; i < modes.length; i++) {
       var m = modes[i]
-      out.push({ icon: activeSortMode === m.id ? "\uf00c" : "\u2003", label: m.label, action: "sort:" + m.id, checked: activeSortMode === m.id })
+      out.push({ icon: activeSortMode === m.id ? "\uf00c" : "\u2003", label: m.label, action: "sort:" + m.id, checked: activeSortMode === m.id,
+        trailing: activeSortMode === m.id ? sortDirectionArrow : "" })
     }
     return out
   }
   readonly property var menuItems: menuKind === "sort" ? sortItems : moreItems
+
+  // v3.5 Part D: the shortcuts view. Groups are in the owner-ordered sequence;
+  // every key implemented by the panel (Parts A–C and the menu addendum) is
+  // listed. Text only — the renderer uses existing type sizes and colours.
+  readonly property var helpRows: [
+    { group: true, title: "Navigation" },
+    { key: "Tab / Shift+Tab", text: "Move through the panel: search, clear, Collection, gear, Albums, Playlists, Sort, sort direction, lists, queue, track list, transport." },
+    { key: "↑ / ↓", text: "Move within the focused list, queue or menu." },
+    { key: "← / →", text: "Switch between the album/playlist list and the track list." },
+    { group: true, title: "Playback" },
+    { key: "Enter", text: "Play the selected album, playlist, search result or track." },
+    { key: "Space", text: "Play/pause when a list is focused; presses the focused button. Types a space in search." },
+    { key: "Super+Alt+B", text: "Show or hide the panel (if you've added the binds from the README)." },
+    { key: "Super+Alt+P", text: "Play/pause from anywhere (if you've added the binds from the README)." },
+    { group: true, title: "Queue" },
+    { key: "Ctrl+Enter", text: "Add the focused track to the queue; on an album or playlist row, add the whole item (streamable tracks only)." },
+    { key: "Alt+Enter", text: "Play the focused track next. Albums and playlists have no Play Next." },
+    { key: "Delete", text: "Remove the focused Up Next row." },
+    { key: "Enter", text: "In Up Next, play the focused row now (it and everything ahead leave the queue)." },
+    { group: true, title: "Search & menus" },
+    { key: "/", text: "Focus the search field." },
+    { key: "Type", text: "Typing while a list is focused returns to search and keeps the text." },
+    { key: "Menu / Shift+F10", text: "Open the focused row's context menu." },
+    { key: "Enter", text: "Activate the highlighted menu item." },
+    { key: "Esc", text: "Close a menu without acting, close this view, or step back one layer." }
+  ]
 
   // v3: one Collection link remains. Its URL is built from the username the
   // backend recorded in the library, so it stays disabled until it is known.
@@ -181,14 +219,18 @@ Panel {
   readonly property string collectionUrl: bandcampUser === ""
     ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser)
 
-  // ---- keyboard (Phase 8) -------------------------------------------------
+  // ---- keyboard (Phase 8 / v3.5) ------------------------------------------
   // Panel-scoped only: no global shortcut is registered, no Hyprland binding is
-  // touched. Focus is either the search field ("") or one of the two lists.
+  // touched. Focus is a named region: "" (a header/footer control or the help
+  // view), "list" (left list), "queue" (Up Next) or "tracks" (detail list).
   // Down/Up from search enters the left list; Left/Right switch lists; `/`
   // returns to search; Esc keeps the Phase 2 layering.
-  property string focusPane: ""       // "", "list", "tracks"
+  property string focusPane: ""       // "", "list", "queue", "tracks"
   property int listCursor: -1
   property int trackCursor: -1
+  property int queueCursor: -1
+  // v3.5 Part D: the shortcuts view replaces the two panes in place.
+  property bool helpOpen: false
   readonly property var playlistRows: service ? service.playlistsView : []
   readonly property var listRows: query !== ""
     ? searchRows
@@ -228,38 +270,120 @@ Panel {
     searchField.forceActiveFocus()
   }
 
-  // v3.3.1: the header focus chain in visual order. Every member is a real
-  // focus target using the shell's shared focus fill/border (TextField or
-  // Button focusable:true). Tab/Shift+Tab only ever move focus; they are never
-  // query text. Hidden controls (Sort on the Playlists tab) are skipped.
-  readonly property var focusChain: [searchField, searchAction, collectionButton,
-    menuButton, albumsButton, playlistsButton, sortButton]
+  // v3.5: the complete Tab chain, in the owner-ordered regions. Entries whose
+  // region does not exist right now (the queue frame) are skipped entirely.
+  readonly property var focusTokens: ["searchField", "searchAction", "link-collection",
+    "settingsButton", "albumsButton", "playlistsButton", "sortButton", "sortDirectionButton",
+    "leftList", "upNextList", "upNextClear", "trackList",
+    "footerShuffle", "footerPrev", "footerPlay", "footerNext"]
 
+  function focusTokensNow() {
+    var out = []
+    for (var i = 0; i < focusTokens.length; i++) {
+      var t = focusTokens[i]
+      if (helpOpen && (t === "leftList" || t === "upNextList" || t === "upNextClear" || t === "trackList")) continue
+      if ((t === "upNextList" || t === "upNextClear") && upNextCount === 0) continue
+      if (t === "link-collection" && !collectionButton.enabled) continue
+      out.push(t)
+    }
+    return out
+  }
+
+  function itemForToken(t) {
+    if (t === "searchField") return searchField
+    if (t === "searchAction") return searchAction
+    if (t === "link-collection") return collectionButton
+    if (t === "settingsButton") return menuButton
+    if (t === "albumsButton") return albumsButton
+    if (t === "playlistsButton") return playlistsButton
+    if (t === "sortButton") return sortButton
+    if (t === "sortDirectionButton") return sortDirectionButton
+    if (t === "upNextClear") return upNextClear
+    if (t === "footerShuffle") return footerShuffle
+    if (t === "footerPrev") return footerPrev
+    if (t === "footerPlay") return footerPlay
+    if (t === "footerNext") return footerNext
+    return null
+  }
+
+  // Header/footer items only; kept for the v3.3.1 focus-ring checks.
   function focusChainItems() {
     var out = []
-    for (var i = 0; i < focusChain.length; i++) {
-      var it = focusChain[i]
+    for (var i = 0; i < focusTokens.length; i++) {
+      var it = itemForToken(focusTokens[i])
       if (it && it.visible && it.enabled) out.push(it)
     }
     return out
   }
 
   function focusControlName() {
+    if (upNextClear && upNextClear.activeFocus) return "upNextClear"
     var items = focusChainItems()
     for (var i = 0; i < items.length; i++) if (items[i].activeFocus) return items[i].objectName
-    if (listKeyCatcher.activeFocus) return "listKeyCatcher"
+    if (listKeyCatcher.activeFocus) {
+      if (focusPane === "queue") return "upNextList"
+      if (focusPane === "tracks") return "trackList"
+      if (focusPane === "list") return "leftList"
+    }
+    if (helpView && helpView.activeFocus) return "shortcutsView"
     return ""
   }
 
-  function moveFocus(step) {
-    var items = focusChainItems()
-    if (items.length === 0) { focusSearch(); return }
-    var current = -1
-    for (var i = 0; i < items.length; i++) if (items[i].activeFocus) current = i
-    var next = current < 0 ? (step > 0 ? 0 : items.length - 1)
-      : (current + step + items.length) % items.length
+  function enterLeftRegion() {
+    var rows = listRows
+    if (listCursor < 0 || listCursor >= rows.length) {
+      var i = -1, uid = selectedPlaylistUid || selectedAlbumUid
+      for (var k = 0; k < rows.length; k++) if (!isHeaderRow(rows[k]) && rows[k].uid === uid) { i = k; break }
+      if (i < 0) {
+        i = 0
+        while (i < rows.length && isHeaderRow(rows[i])) i++
+      }
+      listCursor = i < rows.length ? i : -1
+    }
+    focusPane = "list"
+    if (listCursor >= 0 && listCursor < rows.length) applyListCursor()
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function enterQueueRegion() {
+    focusPane = "queue"
+    if (queueCursor < 0 || queueCursor >= upNextCount) queueCursor = upNextCount > 0 ? 0 : -1
+    if (queueCursor >= 0) upNextList.positionViewAtIndex(queueCursor, ListView.Contain)
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function enterTrackRegion() {
+    focusPane = "tracks"
+    if (detailTrackList.length > 0) {
+      if (trackCursor < 0 || trackCursor >= detailTrackList.length) {
+        var i = -1
+        for (var k = 0; k < detailTrackList.length; k++)
+          if (currentTrack && detailTrackList[k].uid === currentTrack.uid) { i = k; break }
+        trackCursor = i >= 0 ? i : 0
+      }
+      trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+    } else {
+      trackCursor = -1
+    }
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function focusToken(t) {
+    if (t === "leftList") { enterLeftRegion(); return }
+    if (t === "upNextList") { enterQueueRegion(); return }
+    if (t === "trackList") { enterTrackRegion(); return }
     focusPane = ""
-    items[next].forceActiveFocus()
+    var it = itemForToken(t)
+    if (it) it.forceActiveFocus()
+  }
+
+  function moveFocus(step) {
+    var tokens = focusTokensNow()
+    if (tokens.length === 0) { focusSearch(); return }
+    var current = tokens.indexOf(focusControlName())
+    var next = current < 0 ? (step > 0 ? 0 : tokens.length - 1)
+      : (current + step + tokens.length) % tokens.length
+    focusToken(tokens[next])
   }
 
   // Returns true when the event was a focus-only Tab/Shift+Tab. The caller must
@@ -298,8 +422,26 @@ Panel {
     if (logoutConfirmOpen) cancelLogout()
     else if (contextMenuOpen) closeContextMenu()
     else if (menuOpen) closeMenu()
+    else if (helpOpen) closeHelp()
     else if (query !== "" || (searchField && searchField.text !== "")) { clearSearch(); focusSearch() }
     else close()
+  }
+
+  function openHelp() {
+    if (helpOpen) return
+    helpOpen = true
+    helpView.forceActiveFocus()
+  }
+
+  function closeHelp() {
+    if (!helpOpen) return
+    helpOpen = false
+    if (menuButton) menuButton.forceActiveFocus()
+  }
+
+  function toggleHelp() {
+    if (helpOpen) closeHelp()
+    else openHelp()
   }
 
   // Keyboard selection never toggles: moving the cursor onto the already
@@ -358,6 +500,12 @@ Panel {
       if (!detailTrackList.length) return
       trackCursor = clampCursor((trackCursor < 0 ? 0 : trackCursor) + delta, detailTrackList.length)
       trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+      return
+    }
+    if (focusPane === "queue") {
+      if (upNextCount === 0) return
+      queueCursor = clampCursor((queueCursor < 0 ? 0 : queueCursor) + delta, upNextCount)
+      upNextList.positionViewAtIndex(queueCursor, ListView.Contain)
       return
     }
     enterList(delta)
@@ -424,9 +572,11 @@ Panel {
   implicitHeight: showIcon ? barRow.implicitHeight : 0
 
   onOpenedChanged: {
-    if (!opened) { menuKind = ""; logoutConfirmOpen = false; contextMenuOpen = false; focusPane = ""; listCursor = -1; trackCursor = -1 }
+    if (!opened) { menuKind = ""; logoutConfirmOpen = false; contextMenuOpen = false; contextMenuSource = ""; focusPane = ""; listCursor = -1; trackCursor = -1; queueCursor = -1; helpOpen = false }
     else if (service && service.collection.length === 0) service.refresh()
   }
+
+  onUpNextCountChanged: afterQueueCleared()
 
   onMenuKindChanged: if (menuKind !== "") placeMenu()
 
@@ -443,46 +593,85 @@ Panel {
     searchField.forceActiveFocus()
   }
 
-  // ---- v3.4 row context menu ----------------------------------------------
-  function openContextMenu(kind, entries, anchorItem, x, y) {
+  // ---- v3.4/v3.5 row context menu -----------------------------------------
+  function openContextMenu(kind, entries, anchorItem, x, y, source) {
     contextMenuKind = kind
     contextMenuEntries = entries
+    contextMenuSource = source || ""
+    contextMenuIndex = 0
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].enabled !== false) { contextMenuIndex = i; break }
+    }
     contextMenuOpen = true
     var p = anchorItem.mapToItem(contextMenuLayer, x, y)
     contextMenuAnchorX = p.x
     contextMenuAnchorY = p.y
   }
 
-  function openTrackMenu(track, anchorItem, x, y) {
+  function openTrackMenu(track, anchorItem, x, y, source) {
     if (!service || !track) return
     contextMenuTrack = track
     contextMenuItem = null
     contextMenuQueueIndex = -1
     var playable = track.streamable !== false
     openContextMenu("track", [
-      { label: "Play Next", action: "play-next", enabled: playable },
-      { label: "Add to Queue", action: "queue-track", enabled: playable }
-    ], anchorItem, x, y)
+      { label: "Play Next", action: "play-next", enabled: playable, hint: "Alt+Enter" },
+      { label: "Add to Queue", action: "queue-track", enabled: playable, hint: "Ctrl+Enter" }
+    ], anchorItem, x, y, source)
   }
 
-  function openItemMenu(item, anchorItem, x, y) {
+  function openItemMenu(item, anchorItem, x, y, source) {
     if (!service || !item) return
     contextMenuTrack = null
     contextMenuItem = item
     contextMenuQueueIndex = -1
     openContextMenu("item", [
-      { label: "Add to Queue", action: "queue-item", enabled: true }
-    ], anchorItem, x, y)
+      { label: "Add to Queue", action: "queue-item", enabled: true, hint: "Ctrl+Enter" }
+    ], anchorItem, x, y, source)
   }
 
-  function openQueueMenu(index, anchorItem, x, y) {
+  function openQueueMenu(index, anchorItem, x, y, source) {
     if (!service) return
     contextMenuTrack = null
     contextMenuItem = null
     contextMenuQueueIndex = index
     openContextMenu("queue", [
-      { label: "Remove from queue", action: "queue-remove", enabled: true }
-    ], anchorItem, x, y)
+      { label: "Remove from queue", action: "queue-remove", enabled: true, hint: "Del" }
+    ], anchorItem, x, y, source)
+  }
+
+  function moveContextMenu(delta) {
+    if (!contextMenuOpen || contextMenuEntries.length === 0) return
+    var n = contextMenuEntries.length
+    var i = contextMenuIndex
+    for (var guard = 0; guard < n; guard++) {
+      i = (i + delta + n) % n
+      if (contextMenuEntries[i].enabled !== false) { contextMenuIndex = i; return }
+    }
+  }
+
+  function activateContextMenu() {
+    if (!contextMenuOpen) return
+    var e = contextMenuEntries[contextMenuIndex]
+    if (!e || e.enabled === false) return
+    runContextAction(e.action)
+  }
+
+  function restoreFocusAfterContextMenu() {
+    var src = contextMenuSource
+    contextMenuSource = ""
+    if (src === "list") {
+      if (listCursor >= 0 && listCursor < listRows.length) {
+        focusPane = "list"
+        applyListCursor()
+        listKeyCatcher.forceActiveFocus()
+      }
+    } else if (src === "queue") {
+      if (upNextCount > 0) enterQueueRegion()
+      else enterTrackRegion()
+    } else if (src === "tracks") {
+      enterTrackRegion()
+    }
   }
 
   function closeContextMenu() {
@@ -492,6 +681,8 @@ Panel {
     contextMenuTrack = null
     contextMenuItem = null
     contextMenuQueueIndex = -1
+    contextMenuIndex = 0
+    restoreFocusAfterContextMenu()
   }
 
   function runContextAction(action) {
@@ -506,8 +697,70 @@ Panel {
     else if (action === "queue-remove") service.removeUserQueueAt(index)
   }
 
+  // v3.5 Part C addendum: Menu / Shift+F10 on a focused row opens that row's
+  // menu, anchored to the row, with focus coming back to the same list on close.
+  function openFocusedRowMenu() {
+    if (!service || contextMenuOpen) return
+    var region = focusPane
+    if (region === "queue") {
+      if (queueCursor < 0 || queueCursor >= upNextCount) return
+      var qr = upNextList.itemAtIndex(queueCursor)
+      if (qr) openQueueMenu(queueCursor, qr, Style.space(8), qr.height, "queue")
+      return
+    }
+    if (region === "tracks") {
+      var t = detailTrackList[trackCursor]
+      var tr = trackList.itemAtIndex(trackCursor)
+      if (t && tr) openTrackMenu(t, tr, Style.space(8), tr.height, "tracks")
+      return
+    }
+    if (region === "list") {
+      var row = listRows[listCursor]
+      var lr = listColumn.itemAtIndex(listCursor)
+      if (!row || !lr || isHeaderRow(row)) return
+      if (query !== "" && row.rowKind === "track") openTrackMenu(row.item, lr, Style.space(8), lr.height, "list")
+      else openItemMenu(row.item || row, lr, Style.space(8), lr.height, "list")
+    }
+  }
+
   function playQueueRow(index) {
     if (service) service.startUserQueueAt(index)
+  }
+
+  // v3.5 Part C: queue keys (active only while Up Next holds focus).
+  function removeFocusedQueueRow() {
+    if (!service || queueCursor < 0 || queueCursor >= upNextCount) return
+    service.removeUserQueueAt(queueCursor)
+    if (upNextCount === 0) {
+      queueCursor = -1
+      enterTrackRegion()
+      return
+    }
+    if (queueCursor >= upNextCount) queueCursor = upNextCount - 1
+    upNextList.positionViewAtIndex(queueCursor, ListView.Contain)
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function addFocusedTrackToQueue() {
+    var t = detailTrackList[trackCursor]
+    if (t && service) service.addTrackToQueue(t)
+  }
+
+  function playNextFocusedTrack() {
+    var t = detailTrackList[trackCursor]
+    if (t && service) service.playNextTrack(t)
+  }
+
+  function addFocusedItemToQueue() {
+    var row = listRows[listCursor]
+    if (!row || isHeaderRow(row) || !service) return
+    service.addItemToQueue(row.item || row)
+  }
+
+  // Called whenever the queue can have vanished under the keyboard cursor.
+  function afterQueueCleared() {
+    if (upNextCount > 0) return
+    if (focusPane === "queue" || (upNextClear && upNextClear.activeFocus)) enterTrackRegion()
   }
 
   function toggleMenu() {
@@ -533,6 +786,15 @@ Panel {
     }
   }
 
+  // v3.5: flip the active tab's direction and re-sort immediately (setSort*
+  // also refreshes an open search so its groups follow the new direction).
+  function toggleSortDirection() {
+    if (!service) return
+    if (playlistsTab) service.togglePlaylistSortDirection()
+    else service.toggleSortDirection()
+    if (searchField) searchField.forceActiveFocus()
+  }
+
   function runMenuAction(action) {
     var kind = menuKind
     menuKind = ""
@@ -544,6 +806,8 @@ Panel {
     } else if (action === "hide-preorders") {
       if (service) service.setHidePreorders(!service.hidePreorders)
       searchField.forceActiveFocus()
+    } else if (action === "help") {
+      toggleHelp()
     } else if (action.indexOf("sort:") === 0) {
       if (service) {
         if (root.playlistsTab) service.setPlaylistSortMode(action.substring(5))
@@ -820,15 +1084,24 @@ Panel {
                 else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
                 event.accepted = true
               } else if (root.contextMenuOpen) {
-                // The row context menu is mouse-driven; keep keys from acting
-                // underneath it. Esc closes it through handleEscape().
+                // The row context menu owns Up/Down/Enter/Esc; nothing acts
+                // underneath it while it is open.
+                if (event.key === Qt.Key_Down) root.moveContextMenu(1)
+                else if (event.key === Qt.Key_Up) root.moveContextMenu(-1)
+                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.activateContextMenu()
                 event.accepted = true
               } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
                 // Down/Up leave text entry and move through the focused list.
                 root.enterList(event.key === Qt.Key_Down ? 1 : -1)
                 event.accepted = true
               } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                // Enter plays whatever is selected (no-op when nothing is).
+                // v3.5 Part C: the search field is a text editor first. Ctrl/Alt+
+                // Enter are queue shortcuts only while a list holds focus, so
+                // they do nothing here. Plain Enter keeps its existing
+                // "play the selected row" behaviour.
+                if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) {
+                  event.accepted = true; return
+                }
                 if (root.listRows.length > 0 && root.listCursor >= 0) { root.activateCursor(); event.accepted = true }
               }
             }
@@ -932,6 +1205,24 @@ Panel {
             Keys.onPressed: function(event) { root.handleTabKey(event) }
             Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
+
+          // v3.5: direction companion to Sort. It shows the current direction
+          // (up = ascending, down = descending) and flips it in one click. The
+          // criterion itself still comes from the Sort menu; the selected row
+          // carries the same arrow.
+          BcButton {
+            id: sortDirectionButton
+            objectName: "sortDirectionButton"
+            iconText: root.sortDirectionArrow
+            height: root.controlHeight
+            tooltipText: "Reverse sort direction"
+            focusable: true
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.toggleSortDirection()
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+          }
         }
 
         Row {
@@ -958,6 +1249,7 @@ Panel {
       Row {
         id: libraryRow
         objectName: "libraryRow"
+        visible: !root.helpOpen
         width: parent.width
         height: root.libraryRowHeight
         spacing: Style.spacing.md
@@ -1265,12 +1557,18 @@ Panel {
                     objectName: "upNextClear"
                     text: "Clear"
                     height: root.controlHeight
+                    focusable: true
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     tooltipText: "Clear the queue"
-                    onClicked: if (root.service) root.service.clearUserQueue()
+                    onClicked: {
+                      if (root.service) root.service.clearUserQueue()
+                      if (root.upNextCount === 0) root.enterTrackRegion()
+                    }
+                    Keys.onPressed: function(event) { root.handleTabKey(event) }
+                    Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
                   }
                 }
 
@@ -1288,13 +1586,14 @@ Panel {
                     height: root.upNextRowHeight
 
                     readonly property var track: modelData
+                    readonly property bool cursor: root.focusPane === "queue" && index === root.queueCursor
 
                     Rectangle {
                       objectName: "upNextFill"
                       anchors.fill: parent
                       radius: Style.cornerRadius
-                      color: upNextMouse.containsMouse
-                        ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
+                      color: upNextRow.cursor ? Util.alpha(Color.accent, 0.12)
+                        : (upNextMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
                     }
 
                     Column {
@@ -1622,6 +1921,107 @@ Panel {
         }
       }
 
+      // v3.5 Part D: keyboard shortcuts quick reference. It swaps into the
+      // two-pane body slot; the panes and queue stay alive underneath, so
+      // selection, scroll and queue state are untouched when it closes.
+      BorderSurface {
+        id: helpView
+        objectName: "shortcutsView"
+        visible: root.helpOpen
+        width: parent.width
+        height: root.helpViewHeight
+        radius: Style.cornerRadius
+        color: "transparent"
+        borderSpec: root.paneBorderSpec
+        focus: true
+
+        Flickable {
+          id: helpFlickable
+          objectName: "shortcutsFlickable"
+          anchors.fill: parent
+          anchors.margins: Style.spacing.sm
+          contentWidth: width
+          contentHeight: helpColumn.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+          Column {
+            id: helpColumn
+            width: helpFlickable.width
+            spacing: Style.space(4)
+
+            Repeater {
+              model: root.helpRows
+
+              Item {
+                required property var modelData
+                width: helpColumn.width
+                height: modelData.group ? groupText.implicitHeight + Style.space(8)
+                  : Math.max(keyText.implicitHeight, descText.implicitHeight) + Style.space(4)
+
+                Text {
+                  id: groupText
+                  objectName: "shortcutsGroup"
+                  visible: modelData.group === true
+                  textFormat: Text.PlainText
+                  text: modelData.group === true ? (modelData.title || "") : ""
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                Text {
+                  id: keyText
+                  objectName: "shortcutsKey"
+                  visible: modelData.group !== true
+                  width: Style.space(170)
+                  textFormat: Text.PlainText
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  wrapMode: Text.Wrap
+                  text: modelData.group === true ? "" : (modelData.key || "")
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                Text {
+                  id: descText
+                  objectName: "shortcutsDesc"
+                  visible: modelData.group !== true
+                  x: Style.space(182)
+                  width: Math.max(0, parent.width - x)
+                  textFormat: Text.PlainText
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  wrapMode: Text.Wrap
+                  text: modelData.group === true ? "" : (modelData.text || "")
+                  color: Qt.darker(root.foreground, 1.35)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+        }
+
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) { root.closeHelp(); event.accepted = true; return }
+          if (root.handleTabKey(event)) return
+          if (event.key === Qt.Key_Down) {
+            helpFlickable.contentY = Math.min(helpFlickable.contentHeight - helpFlickable.height,
+              helpFlickable.contentY + Style.space(30))
+            event.accepted = true; return
+          }
+          if (event.key === Qt.Key_Up) {
+            helpFlickable.contentY = Math.max(0, helpFlickable.contentY - Style.space(30))
+            event.accepted = true; return
+          }
+        }
+      }
+
       // now playing ----------------------------------------------------------
       // Two-line now-playing text on the left; transport (Shuffle, Prev, Play/Pause,
       // Next) right-justified. Identical BcButton style, no Stop button. A seekable
@@ -1725,9 +2125,12 @@ Panel {
               height: root.controlHeight
               tooltipText: "Shuffle: " + (root.shuffleOn ? "On" : "Off")
               selected: root.shuffleOn
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
 
               // v3.1: a tiny dot centred under the glyph marks this context's
               // Shuffle as On. It lives in the button's bottom padding, so the
@@ -1749,13 +2152,17 @@ Panel {
             // inherit the theme — Unicode media symbols such as U+23F8 fall
             // back to colour-emoji presentation and paint their own background.
             BcButton {
+              id: footerPrev
               objectName: "footerPrev"
               iconText: "\uf048"
               height: root.controlHeight
               tooltipText: "Previous"
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.prev()
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
             }
 
             // One button: Play when idle/paused, Pause while playing. The Stop button is
@@ -1767,6 +2174,7 @@ Panel {
               height: root.controlHeight
               tooltipText: root.playing && !root.paused ? "Pause" : "Play"
               active: root.playing && !root.paused
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: {
@@ -1774,16 +2182,22 @@ Panel {
                 if (root.service.currentTrack) root.service.togglePlay()
                 else root.playContextNow()
               }
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
             }
 
             BcButton {
+              id: footerNext
               objectName: "footerNext"
               iconText: "\uf051"
               height: root.controlHeight
               tooltipText: "Next"
+              focusable: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.next()
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
             }
           }
 
@@ -1902,11 +2316,26 @@ Panel {
       focus: true
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function(event) {
-        // v3.3.1: Tab/Shift+Tab move focus out of the lists. Handled before the
-        // type-to-search branch so U+0009 can never become query text.
+        // v3.5 addendum: while a row context menu is open it owns Up/Down,
+        // Enter and Esc. Focus returns to the row that opened it on close.
+        if (root.contextMenuOpen) {
+          if (event.key === Qt.Key_Escape) root.closeContextMenu()
+          else if (event.key === Qt.Key_Down) root.moveContextMenu(1)
+          else if (event.key === Qt.Key_Up) root.moveContextMenu(-1)
+          else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.activateContextMenu()
+          event.accepted = true
+          return
+        }
+        // v3.3.1/v3.5: Tab/Shift+Tab move focus out of the lists. Handled
+        // before the type-to-search branch so U+0009 can never become query text.
         if (root.handleTabKey(event)) return
         if (event.key === Qt.Key_Escape) {
           root.handleEscape(); event.accepted = true; return
+        }
+        // v3.5 Part C addendum: Menu / Shift+F10 opens the focused row's menu.
+        if (event.key === Qt.Key_Menu
+            || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+          root.openFocusedRowMenu(); event.accepted = true; return
         }
         if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
           root.moveCursor(event.key === Qt.Key_Down ? 1 : -1); event.accepted = true; return
@@ -1914,7 +2343,24 @@ Panel {
         if (event.key === Qt.Key_Left) { root.switchPane(-1); event.accepted = true; return }
         if (event.key === Qt.Key_Right) { root.switchPane(1); event.accepted = true; return }
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          root.activateCursor(); event.accepted = true; return
+          // v3.5 Part C: Ctrl/Alt+Enter are queue actions on the focused track
+          // or album/playlist, never the plain Enter activation. Up Next has
+          // only Delete and Enter (play now).
+          if (event.modifiers & Qt.ControlModifier) {
+            if (root.focusPane === "tracks") root.addFocusedTrackToQueue()
+            else if (root.focusPane === "list") root.addFocusedItemToQueue()
+            event.accepted = true; return
+          }
+          if (event.modifiers & Qt.AltModifier) {
+            if (root.focusPane === "tracks") root.playNextFocusedTrack()
+            event.accepted = true; return
+          }
+          if (root.focusPane === "queue") root.playQueueRow(root.queueCursor)
+          else root.activateCursor()
+          event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Delete && root.focusPane === "queue") {
+          root.removeFocusedQueueRow(); event.accepted = true; return
         }
         if (event.key === Qt.Key_Space) {
           // Only reached when the search field does NOT have focus, so Space
@@ -1984,6 +2430,8 @@ Panel {
               leftAlign: true
               text: modelData.label
               iconText: "\u2003"
+              trailingText: modelData.hint || ""
+              active: root.contextMenuIndex === index
               enabled: modelData.enabled !== false
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -2039,6 +2487,7 @@ Panel {
               leftAlign: true
               text: modelData.label
               iconText: modelData.icon
+              trailingText: modelData.trailing || ""
               selected: modelData.checked === true
               active: root.menuIndex === index
               enabled: modelData.enabled !== false

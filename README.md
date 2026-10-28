@@ -52,8 +52,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - The search row has the flexible search field (with a click-to-clear ×, or a magnifier
   when empty, inside its right end), the single Collection link built from the username in the library cache
   (`xdg-open`; disabled until the username is known), and the gear button.
-- The gear menu holds Refresh library, Hide pre-orders (checkable, remembered) and
-  Log out / Clear Bandcamp session (with confirmation).
+- The gear menu holds Refresh library, Hide pre-orders (checkable, remembered), Keyboard shortcuts
+  (a scrollable quick reference in the body) and Log out / Clear Bandcamp session (with confirmation).
 - Panel has tabs for Albums and Playlists, a search box, and a now-playing bar.
 - **Keyboard (panel-scoped only):** these shortcuts work only while the popup is open and focused.
   The plugin registers no global shortcut; optional user binds are in
@@ -64,7 +64,12 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
   - `Space` toggles play/pause when a list is focused; while typing in search it types a space.
   - `/` returns focus to search. Typing while a list is focused also returns to search and keeps
     the character.
-  - `Tab` / `Shift+Tab` walk the header in visual order (search → ×/magnifier → Collection → gear → Albums → Playlists → Sort); click the × (or press Enter/Space on it) to clear the search.
+  - `Tab` / `Shift+Tab` walk the whole panel in visual order: search → ×/magnifier → Collection →
+    gear → Albums → Playlists → Sort → sort direction → album/playlist list → Up Next (only when the
+    queue exists) → its Clear button → track list → Shuffle → Previous → Play/Pause → Next → wrap.
+    Entering a list focuses its current/selected row; arrows move inside it.
+  - `Enter` / `Space` activate a focused button. The 28 px arrow beside Sort flips the active tab's
+    sort direction (up = ascending, down = descending); the same arrow marks the selected Sort row.
   - `Esc` backs out one layer: cancel confirmation, close menu, clear search, close window.
 - **Media keys:** the plugin publishes MPRIS (`org.mpris.MediaPlayer2.omatimeatbandcamp`), so the
   laptop's Play/Pause, Next and Previous keys work through Omarchy's existing
@@ -72,15 +77,23 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 
 ## Queue
 
-- Right-click a track row for **Play Next** (front of the queue) or **Add to Queue** (end).
-  Duplicates are allowed; unstreamable/unreleased tracks cannot be queued and both actions are
-  disabled on them. Right-click an album or playlist row to append its streamable tracks.
+- Right-click a track row (or focus it and press `Menu` / `Shift+F10`) for **Play Next** (front of
+  the queue, `Alt+Enter`) or **Add to Queue** (end, `Ctrl+Enter`). Duplicates are allowed;
+  unstreamable/unreleased tracks cannot be queued and both actions are disabled on them
+  (keyboard actions are harmless no-ops with the same notice). On an album or playlist row,
+  `Ctrl+Enter` (or right-click → Add to Queue) appends its streamable tracks; `Alt+Enter` does
+  nothing there.
 - A non-empty queue appears as **Up Next (n)** above the current album/playlist/search contents,
-  in the order you added it. Double-click a row to play it immediately (dropping it and the rows
-  ahead of it), right-click for **Remove from queue**, or use **Clear** to drop all pending rows.
+  in the order you added it. With a queue row focused: `Enter` plays it immediately (dropping it
+  and the rows ahead of it), `Delete` removes it (selecting the next row, or the previous one if it
+  was last), `Menu` / `Shift+F10` opens Remove from queue, and `Clear` drops all pending rows.
+  Right-click and double-click keep the same behaviour.
+- The search field stays a normal text editor: `Delete` edits text, and `Ctrl+Enter` / `Alt+Enter`
+  do nothing there.
 - The queue is **session-only**: it is never written to disk, so a shell restart starts empty. It
   is also cleared when you start something in a different context (another album, playlist or
   search result set, or a single track). Starting another track in the same context keeps it.
+  Queueing or removing rows never starts or changes the playing context.
 - Queued tracks keep their added order even with Shuffle On (Shuffle reorders only the context).
   When the queue drains, the context resumes with the track after the one that was interrupted.
   Previous steps back through what actually played (queued track, then the interrupted track).
@@ -152,15 +165,25 @@ bind = SUPER ALT, RIGHT, exec, omarchy-shell omatimeatbandcamp next
 
 These work only while the popup is open and focused:
 
-- `↓` / `↑` from search enters the focused list and moves the cursor; `Enter`
-  plays the selected album, playlist, search result or track.
+- `Tab` / `Shift+Tab` walk the whole panel: search → ×/magnifier → Collection → gear → Albums →
+  Playlists → Sort → sort direction → list → Up Next + Clear (when a queue exists) → track list →
+  Shuffle → Previous → Play/Pause → Next, then wrap. Lists open on their current/selected row.
+- `↓` / `↑` from search enter the focused list and move the cursor; `Enter` plays the selected
+  album, playlist, search result or track.
 - `←` / `→` switch between the album/playlist list and the track list.
-- `Space` toggles play/pause when a list is focused; while typing in search it
-  types a space.
-- `/` returns focus to search. Typing while a list is focused also returns to
-  search and keeps the character.
-- `Esc` backs out one layer: cancel confirmation, close menu, clear search,
-  close window.
+- `Space` toggles play/pause when a list is focused; while typing in search it types a space.
+  On a focused button, `Enter` and `Space` both activate it.
+- `/` returns focus to search. Typing while a list is focused also returns to search and keeps
+  the character.
+- `Ctrl+Enter` / `Alt+Enter` on a focused track add it to the queue / play it next. On an album
+  or playlist row, `Ctrl+Enter` adds the whole item (streamable tracks only) and `Alt+Enter`
+  does nothing. In Up Next, `Delete` removes the focused row and `Enter` plays it now.
+- `Menu` or `Shift+F10` opens the focused row's context menu; `↑` / `↓` navigate, `Enter`
+  activates, `Esc` closes without acting, and focus returns to the opening row.
+- `Esc` backs out one layer: cancel confirmation, close menu, close the shortcuts view, clear
+  search, close window.
+- The gear menu's **Keyboard shortcuts** item opens the same list in the body, replacing the two
+  panes while it is open. `Esc` (or selecting the item again) closes it and returns focus to the gear.
 
 ## Features
 
@@ -171,8 +194,10 @@ These work only while the popup is open and focused:
   "Play available" when partially released) in the header; unreleased tracks greyed and
   non-playable by any gesture; only streamable tracks are ever queued
 - Two-line rows (titles wrap, artist on a dimmed second line); selected row and playing track highlighted
-- Sort (Recently added, Artist A–Z, Title A–Z, Release date) from the toolbar and a Hide pre-orders
-  filter in the gear menu; both are remembered (`~/.local/state/omatimeatbandcamp/ui.json`)
+- Sort (Recently added, Artist A–Z, Title A–Z, Release date) from the toolbar, the arrow beside
+  Sort for direction (remembered per tab; the selected Sort row shows the same arrow), and a Hide
+  pre-orders filter in the gear menu; all are remembered
+  (`~/.local/state/omatimeatbandcamp/ui.json`)
 - Shuffle: one On/Off icon in the footer transport, remembered per context (each album, each playlist,
   search results, whole library), with a small dot under the glyph while the current context is On;
   click the selected row again to deselect it and get back to the whole-library context
@@ -181,9 +206,13 @@ These work only while the popup is open and focused:
   text, and a visible notice plus automatic skip when a stream fails. Track rows select on single-click
   and play on double-click; Enter and the footer also start playback. The detail header has no Play
   button (v3).
-- Session-only Up Next queue: right-click for Play Next / Add to Queue (tracks) or Add to Queue
-  (albums/playlists), shown above the context with Clear / Remove / play-now, and cleared by a shell
+- Session-only Up Next queue: right-click or `Menu` / `Shift+F10` for Play Next / Add to Queue
+  (tracks, `Alt+Enter` / `Ctrl+Enter`) or Add to Queue (albums/playlists, `Ctrl+Enter`), shown
+  above the context with Clear / Remove (`Delete`) / play-now (`Enter`), and cleared by a shell
   restart or a new context; see [Queue](#queue).
+- Keyboard shortcuts view: the gear menu's Keyboard shortcuts item swaps the two panes for a
+  grouped, scrollable reference of every built-in key, then restores the exact panes, scroll and
+  queue when closed.
 - Refresh runs the backend sync in the background from the gear menu (cached library stays on screen);
   streams for Subsonic tracks are resolved by the backend (`backend play`), so stream URLs/credentials
   never appear in argv or logs

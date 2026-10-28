@@ -1231,3 +1231,262 @@ Item 2:
 4. Look at the bottom edges: both panes still end on exactly the same line.
 5. Clear the queue: the frame disappears completely, with no leftover gap
    above the album header.
+
+## v3.5 interaction pass (owner-decided, 2026-10-28)
+
+Branch `v2`. Implements the complete keyboard/interaction pass: sort direction,
+full Tab traversal, queue keyboard control, keyboard-accessible row menus, and
+an in-body keyboard-shortcuts view.
+
+### Baseline (fresh session, before editing)
+
+- `python3 -m unittest discover -s tests -t .`: 97 tests OK, 5 skipped.
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: 5 tests OK.
+- `tests/qml/run.sh`: 472 checks passed, `FAILS=0` in every phase.
+- Values matched the expected baseline exactly, so editing proceeded.
+
+### Part A — sort direction
+
+- `LibraryModel` gains `validSortDirection`, `defaultSortDirection(scope, mode)`
+  and `sortDirectionArrow(dir)`. Defaults are exactly the pre-v3.5 comparator
+  results: Albums `added`/`release` descending, `artist`/`title` ascending;
+  Playlists `added`/`title` ascending.
+- Flipping is implemented by **reversing the completed default ordering**, not
+  by re-sorting with an inverted comparator. A flip is therefore an exact
+  reverse, ties included, and the default path is byte-for-byte the old order.
+- `Service` holds `sortDirection` and `playlistSortDirection`, persists both in
+  `ui.json`, and validates them on load. Choosing a new criterion resets that
+  tab to the criterion's default; flipping alone keeps the criterion. Search
+  re-runs through the same direction, so the Albums/Playlists result groups
+  follow it.
+- `Panel` adds a 28 px icon-only button immediately right of Sort, tooltip
+  "Reverse sort direction", showing the current direction (`\uf062` up /
+  `\uf063` down). One click flips and re-sorts. The selected Sort menu row
+  carries the same arrow through `BcButton.trailingText`, which leaves every
+  existing `text`/label lookup unchanged. Option sets are untouched: four
+  Albums criteria, two Playlists criteria.
+
+### Part B — complete Tab traversal
+
+- One ordered token list drives focus:
+  `searchField, searchAction, link-collection, settingsButton, albumsButton,
+  playlistsButton, sortButton, sortDirectionButton, leftList, upNextList,
+  upNextClear, trackList, footerShuffle, footerPrev, footerPlay, footerNext`.
+- `upNextList`/`upNextClear` are skipped entirely when the queue is empty, so
+  Tab goes straight from the left list to the track list. The help view removes
+  the four body regions from the chain while it is open.
+- Entering the left list focuses the selected/current row; entering Up Next
+  focuses its current cursor; entering the track list focuses the playing row
+  or row 0. Each region shows a cursor tint or focus ring. Buttons activate on
+  Enter and Space. Tab/Shift+Tab never become text.
+- If the queue vanishes while it owns focus (Clear, removal, or service state),
+  `afterQueueCleared()` moves focus to the track list.
+
+### Part C — queue keys and keyboard menus
+
+- Only with a named list focused: track list `Ctrl+Enter` = Add to Queue,
+  `Alt+Enter` = Play Next; left list `Ctrl+Enter` = add the whole item
+  (streamable tracks only, with added/skipped counts), `Alt+Enter` = nothing;
+  queue list `Delete` removes the focused row (next row, previous if last,
+  track list when it empties) and `Enter` plays it now with double-click
+  semantics. Adding/removing never starts or changes the playback context.
+- Unstreamable rows are no-ops with the same notice as the pointer menu.
+- The search field remains a normal editor: `Delete` deletes text;
+  `Ctrl+Enter`/`Alt+Enter` do nothing.
+- Context-menu rows carry dimmed hints via `BcButton.trailingText`
+  (`Add to Queue · Ctrl+Enter`, `Play Next · Alt+Enter`, `Remove ·
+  Del`). `Menu` or `Shift+F10` on a focused list row opens the identical menu;
+  `↑`/`↓` navigate, `Enter` activates and closes, `Esc` closes without acting,
+  and focus returns to the opening row.
+
+### Part D — keyboard shortcuts view
+
+- Gear order is now Refresh library / Hide pre-orders / Keyboard shortcuts /
+  Log out. Selecting the new item replaces only the two-pane body slot with a
+  shortcuts view; header, search, gear, toolbar and footer remain.
+- Groups are Navigation, Playback, Queue, Search & menus. Rows are two-column
+  (`shortcutsKey` 170 px, `shortcutsDesc` at 182 px) using the existing
+  `bodySmall`/`caption` sizes and body/dimmed colours. The view respects the
+  same floor/cap as the panes and scrolls internally.
+- The two panes and the queue stay alive underneath, so selection, both scroll
+  positions and queue contents are restored exactly on close. Opening moves
+  focus into the view; `Esc` closes and returns focus to the gear; selecting
+  Keyboard shortcuts again toggles it closed. The item is reachable by the
+  keyboard (Tab to gear, Enter, Down ×2, Enter).
+
+### Tests (raw counts)
+
+After the pass:
+
+- `python3 -m unittest discover -s tests -t .`: **97 tests OK, 5 skipped**
+  (unchanged).
+- `OMATIME_LIVE=1 python3 -m unittest tests.test_live_fixtures`: **5 tests OK**
+  (unchanged).
+- `tests/qml/run.sh`: **558 checks passed**. Phase 1 520, relaunch 15,
+  real-data 17, shell-script 6; `FAILS=0` in every phase.
+- `node --test tests/user_queue.test.js`: pass (unchanged model behaviour).
+- `/usr/lib/qt6/bin/qmllint Panel.qml Service.qml BcButton.qml`: exit 0, only
+  the pre-existing import/unqualified-access warnings.
+- `/usr/lib/qt6/bin/qmllint tests/qml/shell.qml`: exit 0.
+- `omarchy plugin validate .`: exit 0.
+
+Baseline 472 → final 558 QML checks (+86). All Phase 8, v3.3.1, v3.4 queue
+and sort assertions still run; the intentionally superseded checks are listed
+below, none weakened.
+
+### Harness checks updated (and why)
+
+1. Window button count 10 → 11: the new direction button is a real control.
+2. Gear menu exact order gains `Keyboard shortcuts`.
+3. The keyboard logout test presses Down three times instead of two, because
+   the help item now sits before Log out.
+4. Two v3.3.1 header-chain checks now include the direction button; the header
+   walk is seven stops from search to direction (and reversed from direction to
+   search).
+5. The v3.3.1 "Tab from a focused list returns to search" check now asserts
+   the v3.5 order: the next region (track list when no queue; Up Next when a
+   queue exists), still proving Tab never types U+0009.
+6. The v3.3.1 "Shift+Tab from a list goes to Sort" check now targets the sort
+   direction button, the actual previous stop.
+
+No other assertion was relaxed or removed.
+
+### New harness coverage
+
+Part A (phase 1):
+
+1. Direction button exists beside Sort, 28 px, button style, correct tooltip.
+2. Placement and glyph show the current direction.
+3. Every Albums criterion's default exactly reproduces the old comparator.
+4. The Playlists default reproduces the old comparator.
+5. Documented per-criterion defaults.
+6. Untouched Title A–Z still ascending.
+7. One click flips Title A–Z to the exact reverse (ties included).
+8. Arrow updates and focus returns to search.
+9. Second click restores the default.
+10. Release date defaults descending.
+11. Release date flip is the exact reverse.
+12. Recently added defaults descending.
+13. Recently added flip is the exact reverse.
+14. Descending survives while the criterion is unchanged.
+15. A new criterion resets to its default.
+16. The Albums menu still has exactly four rows.
+17. The selected row carries the same direction arrow.
+18. Re-choosing the selected criterion restores its default.
+19. Playlists has its own direction, up by default.
+20. The Playlists menu still has exactly two rows.
+21. Playlists Title flips to the exact reverse.
+22. Flipping Playlists does not touch Albums.
+23. Search Albums group follows direction.
+24. Search Playlists group follows its tab's direction.
+25–27. Relaunch: both directions restored independently and the relaunched
+   Albums list is ordered by the restored direction.
+
+Part B:
+
+28. Full Tab chain with no queue skips the queue frame and wraps.
+29. Full Tab chain with a queue includes Up Next then Clear.
+30. Entering the left list focuses the selected row with a visible cursor.
+31. Tab from the left list enters Up Next row 0 with a visible cursor.
+32. Arrows move inside Up Next and move the visible cursor.
+33. Tab leaves Up Next for Clear, with its focus ring.
+34. Tab from Clear enters the track list at the current row.
+35. Tab from the track list reaches the footer.
+36. The chain reaches Next.
+37. Enter activates a focused footer button.
+38. Space activates it too.
+39. Shift+Tab reverses the full chain across every boundary, queue included.
+40. Queue focus is established before it vanishes.
+41. A vanished queue lands focus on the track list.
+
+Part C:
+
+42. Track-list focus starts at row 0.
+43. Ctrl+Enter adds the focused track.
+44. Adding never starts/changes playback.
+45. Alt+Enter inserts the focused track next.
+46. Further Ctrl+Enter appends in order.
+47. Ctrl+Enter on an unstreamable track is a no-op with notice.
+48. Alt+Enter on it is the same no-op.
+49. The whole-item row is focused in the left list.
+50. Ctrl+Enter adds the whole album, streamable only, with counts.
+51. Alt+Enter on an album row does nothing.
+52. Queue cursor reaches the second row.
+53. Delete removes that row and stays on the next.
+54. Removing never changes the playback context.
+55. Deleting the last row selects the previous.
+56. Deleting the only row lands on the track list.
+57. Enter on a queue row plays it now.
+58. The underlying context/index stay untouched.
+59. Ctrl/Alt+Enter in search do nothing.
+60. Delete in search edits text.
+61. Menu on a track row opens the same menu.
+62. Menu rows carry the dimmed hints.
+63. Down navigates the context menu.
+64. Enter activates the highlighted item and closes.
+65. Focus returns to the opening row.
+66. The menu reopens on the same row.
+67. Esc closes without acting and restores row focus.
+68. Shift+F10 opens the queue row's menu with its Delete hint.
+69. Enter removes the row and returns focus.
+
+Part D:
+
+70. The shortcuts view opens in the body slot.
+71. Opening moves focus into the view.
+72. The four groups appear in order.
+73. Rows use the existing two-column sizes and colours.
+74. The view stays inside the floor/cap and scrolls internally.
+75. Every Part A–C/addendum shortcut is listed.
+76. Esc closes, keeps the window and returns focus to the gear.
+77. Selection, both scroll positions and the queue are restored exactly.
+78. The item opens the view again.
+79. Selecting it again closes (toggle).
+80. The keyboard path reaches the gear.
+81. Enter opens the gear menu from the keyboard.
+82. Down ×2 + Enter opens the view from the keyboard.
+83. Esc from that path returns focus to the gear.
+84. The final phase-1 directions are persisted for relaunch.
+
+### Deviations / owner-visible decisions
+
+- **Criterion change resets direction**, flip keeps it. This makes each
+  criterion's documented default observable and avoids surprising reversals
+  when switching criteria. Persisted direction is per tab.
+- **The direction glyph is the state, not a second menu**: Sort still owns the
+  criterion. The selected Sort row repeats the arrow so the state is visible
+  inside the menu.
+- **`BcButton.trailingText`** was added instead of appending the hint/arrow to
+  `text`, so all existing exact-label checks and lookups keep working.
+- **The shortcuts view overlays only the pane body**. The panes and queue are
+  not destroyed, which is what makes exact restoration of selection, scroll and
+  queue possible without extra state.
+- **Addendum keys use the same context menu**: no second menu implementation,
+  and the pointer hints are the keyboard hints.
+- **`--load-scripts=no` unchanged**. No credential or stream URL was opened,
+  read, printed or stored by this work.
+
+### Owner live check
+
+1. Open the panel on Albums. The arrow beside Sort points up for Title A–Z.
+   Click it: the list reverses exactly and the arrow points down; the arrow is
+   also shown on the selected Title A–Z row in the Sort menu.
+2. Switch to Playlists, change direction, switch back: each tab keeps its own
+   direction. Restart the shell: both directions come back.
+3. Press Tab repeatedly from search: the focus walks search → clear →
+   Collection → gear → Albums → Playlists → Sort → direction → album list →
+   Up Next + Clear (if queued) → track list → Shuffle → Prev → Play/Pause →
+   Next → search. Shift+Tab walks it backwards. Every stop is visibly focused.
+4. Add two tracks to Up Next. Tab into the queue, press `Enter` on one (it plays
+   now), `Delete` on another (it disappears and focus moves to the next row).
+   Delete the last row: focus lands in the track list.
+5. Focus an album track, press `Ctrl+Enter` and `Alt+Enter`; focus an album row
+   and press `Ctrl+Enter` (whole album, streamable only); press `Alt+Enter` on
+   the row (nothing). The search field still edits normally, including Delete.
+6. Focus a track or queue row and press `Menu` (or `Shift+F10`): the context
+   menu opens on that row with its dimmed key hints. `↑`/`↓`, `Enter`, `Esc`
+   behave as listed, and focus returns to the row.
+7. Gear → Keyboard shortcuts: the two panes are replaced by the grouped list.
+   Scroll it, press `Esc`: the exact panes, selection, scroll and queue return,
+   with focus back on the gear. Open it again and select the item again: it
+   closes.
