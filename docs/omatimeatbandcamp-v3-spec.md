@@ -3511,3 +3511,8 @@ cookie jar (`cookies.txt*`), credentials, backups, caches and logs.
 - `--load-scripts=no` is unchanged; no credential or cookie value was read or
   printed during release preparation. No history rewrite, no visibility change,
   and nothing was published beyond the requested branch and tag push.
+- Wording pass (docs only): MPRIS is now stated as the plugin's own bridge that
+  publishes only playback state and track title/artist, does not use mpv-mpris
+  and never puts stream URLs on the bus; reader-facing prose now says "kitty
+  logo" instead of "cat mark"/"cat logo" (code identifiers such as
+  `CatMark.qml` are unchanged).

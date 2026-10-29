@@ -12,7 +12,8 @@ including purchases whose album pages Bandcamp no longer lists, and pre-orders
 release day).
 
 - Panel built for the Omarchy shell (Quickshell): albums, playlists, search,
-  queue, keyboard navigation, MPRIS media keys.
+  queue, keyboard navigation, MPRIS media keys through the plugin's own bridge
+  (not mpv-mpris).
 - Playback through mpv; no browser tab, no downloads, no separate music app.
 - Session import from the browser you already use, or a manual cookie file.
 - Your data stays local; the only network destinations are Bandcamp hosts.
@@ -136,7 +137,7 @@ chmod 700 ~/.config/omatimeatbandcamp
 chmod 600 ~/.config/omatimeatbandcamp/credentials.toml
 ```
 
-Open the panel and press the cat mark → **Refresh**. The first sync can take a
+Open the panel and press the kitty logo → **Refresh**. The first sync can take a
 while on a large collection; later syncs are incremental and keep the cached
 library on screen. The status line above the panes shows progress.
 
@@ -155,6 +156,10 @@ library on screen. The status line above the panes shows progress.
   sent to Bandcamp's own Subsonic endpoint (as the API requires) and nowhere
   else. Auth uses a fresh random salt per session; the values are never printed
   in normal output or written into the library cache.
+- **MPRIS is the plugin's own bridge, not mpv-mpris.** `backend/mpris.py`
+  publishes only playback state and the current track's title and artist (plus
+  the local cover file). It does not use mpv-mpris, and stream URLs never appear
+  on the D-Bus bus.
 - **What lives where:**
   - `~/.config/omatimeatbandcamp/credentials.toml` — Subsonic user/password
     (`0600`; directory `0700`). Required for streaming.
@@ -196,13 +201,13 @@ global shortcuts** itself.
   current contents. With a queue row focused, `Enter` plays it now and `Delete`
   removes it; the **Clear** button empties the queue. Up Next survives a shell
   restart and is cleared when you start a new context.
-- **Shortcuts view:** open the settings menu with the cat mark and choose
+- **Shortcuts view:** open the settings menu with the kitty logo and choose
   **Keyboard shortcuts**. It replaces the two panes with a two-column reference
   of every built-in key. `Esc` closes it and returns to the panel.
 - **Full focus order:** `Tab` / `Shift+Tab` walk search → clear/magnifier →
-  settings (cat) → Albums → Playlists → Sort → sort direction → list → Up Next
-  and Clear → tracks → Shuffle → Previous → Play/Pause → Next. Every focused
-  control shows the theme accent.
+  settings (kitty logo) → Albums → Playlists → Sort → sort direction → list →
+  Up Next and Clear → tracks → Shuffle → Previous → Play/Pause → Next. Every
+  focused control shows the theme accent.
 - **Menus:** `Menu` or `Shift+F10` opens the focused row's context menu; arrows
   navigate, `Enter` activates, `Esc` closes without acting. `Esc` backs out one
   layer at a time (confirmation, menu, shortcuts view, search, panel).
@@ -254,7 +259,7 @@ editable from the standard Omarchy plugin settings form.
 | `mpvFlags` | empty | Extra flags passed to mpv (video is always disabled). |
 | `autoPlayOnSelect` | `false` | Reserved; currently no effect. |
 
-The settings menu (cat mark) holds **Refresh**, **Hide pre-orders**
+The settings menu (kitty logo) holds **Refresh**, **Hide pre-orders**
 (remembered), **Keyboard shortcuts**, **Collection** (opens your collection page
 with `xdg-open`) and **Log out** (with confirmation).
 
@@ -276,7 +281,10 @@ with `xdg-open`) and **Log out** (with confirmation).
 - Session-persistent Up Next queue with Play Next / Add to Queue, Clear and
   Remove.
 - MPRIS (`org.mpris.MediaPlayer2.omatimeatbandcamp`), so laptop media keys and
-  Omarchy's media bindings control playback.
+  Omarchy's media bindings control playback. The plugin ships its own MPRIS
+  bridge: it publishes only playback state and the current track's title and
+  artist (plus the local cover file). It does **not** use mpv-mpris, and stream
+  URLs never appear on the bus.
 
 ## Data and files
 
@@ -330,7 +338,8 @@ omarchy-shell omatimeatbandcamp clearCookies
 - Validate the plugin folder: `omarchy plugin validate .`
 
 `backend/subsonic.py` is the Subsonic client, `backend/library.py` the cache and
-sync, `backend/mpris.py` the MPRIS bridge, `mpvctl.py` the player process and
+sync, `backend/mpris.py` the plugin's own MPRIS bridge (not mpv-mpris),
+`mpvctl.py` the player process and
 `cookies.py` the browser-session importer. Measurements and API findings live in
 `spike/SUBSONIC-REPORT.md`; the versioned design history is in
 `docs/omatimeatbandcamp-v3-spec.md`.

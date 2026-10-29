@@ -19,7 +19,9 @@ is now looking for testing across real desktops, screens and libraries.
   artist, title or release date; optional hide-pre-orders filter.
 - Persistent Up Next queue with **Play Next** and **Add to Queue**, plus a full
   keyboard workflow and an in-panel shortcuts reference.
-- MPRIS support for media keys, and an optional pair of user-installed global
+- MPRIS support for media keys through the plugin's own bridge — it publishes
+  only playback state and track title/artist, does not use mpv-mpris, and never
+  puts stream URLs on the bus — plus an optional pair of user-installed global
   binds (not shipped).
 - Local-first credentials and cookies: nothing is sent anywhere except Bandcamp
   hosts, and no credential or cookie value is shown in the UI or logs.
