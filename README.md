@@ -24,7 +24,7 @@ omarchy pkg add python-cryptography python-secretstorage
 Install straight from this repository's GitHub URL:
 
 ```bash
-omarchy plugin add https://github.com/gy9cd2bvr7-svg/omatimeatbandcamp.git --enable
+omarchy plugin add https://github.com/dtotheatothevtothee/omatimeatbandcamp.git --enable
 ```
 
 The command clones the plugin into `~/.config/omarchy/plugins/com.github.dtotheatothevtothee.omatimeatbandcamp`, validates its manifest, rescans the shell and asks where to put the bar widget. Choose **Right** (the plugin's default), or any other bar section you prefer.
