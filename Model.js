@@ -63,7 +63,10 @@ function flattenTracks(collection, playlists) {
 
 function searchIndex(collection, playlists, query) {
   var q = (query || "").toLowerCase();
-  var results = {albums: [], tracks: []};
+  // v3.3: names are findable too. Albums (title or artist) and playlists (name)
+  // are grouped results; track matching is unchanged from v2/v3 (it still
+  // includes the album and playlist names in the track haystack).
+  var results = {albums: [], playlists: [], tracks: []};
   if (!q) return results;
   if (collection) {
     for (var i = 0; i < collection.length; i++) {
@@ -81,6 +84,7 @@ function searchIndex(collection, playlists, query) {
   if (playlists) {
     for (var p = 0; p < playlists.length; p++) {
       var pl = playlists[p];
+      if ((pl.name || pl.title || "").toLowerCase().indexOf(q) >= 0) results.playlists.push(pl);
       var pt = pl.tracks || [];
       for (var k = 0; k < pt.length; k++) {
         var tt = pt[k];

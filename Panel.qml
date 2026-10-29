@@ -2,8 +2,9 @@ import QtQuick
 import Quickshell
 import qs.Commons
 import qs.Ui
+import "LibraryModel.js" as LibraryModel
 
-// OmaTimeAtBandCamp popup.
+// OmaTimeAtBandcamp popup.
 //
 // This file is the plugin's only entry point (kinds: service + bar-widget): it
 // draws the bar icon and the popup anchored beneath it. Library data and
@@ -20,52 +21,909 @@ Panel {
     var v = setting("showIcon", true)
     return !(v === false || v === "false" || v === 0 || v === "0")
   }
+  // v3: the bar text is plain "BC" in every playback state. The separate
+  // bar-art widget is gone; backend cover art is kept for MPRIS.
+  readonly property string barLabel: "BC"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  readonly property var albums: service ? service.collection : []
+  // `albums` is what the Albums list shows (sorted, optionally without pre-orders).
+  readonly property var albums: service ? service.albumsView : []
   readonly property var playlists: service ? service.playlists : []
   readonly property string query: service ? service.searchQuery : ""
   readonly property var searchTracks: service ? service.searchResults.tracks : []
+  readonly property var searchAlbums: service ? service.searchResults.albums : []
+  readonly property var searchPlaylists: service ? service.searchResults.playlists : []
+  // v3.3: grouped search rows. Empty query keeps the old library/playlist list
+  // (no section headers). A non-empty query renders Albums, then Playlists, then
+  // Tracks, each under a header and only when that section has matches. The
+  // header rows are part of the list model (so they scroll and count towards the
+  // content-driven height) but are skipped by keyboard navigation.
+  readonly property var searchRows: buildSearchRows()
   readonly property var currentTrack: service ? service.currentTrack : null
-  readonly property var trackCache: service ? service.trackCache : ({})
   readonly property bool playing: service ? service.isPlaying : false
   readonly property bool paused: service ? service.isPaused : false
+  readonly property bool refreshing: service ? service.refreshing : false
+  readonly property real position: service ? service.position : 0
+  readonly property real duration: service ? service.duration : 0
+  readonly property string playbackError: service ? service.playbackError : ""
+  // v3.4: the session-only user queue shown above the context content.
+  readonly property var userQueue: service ? service.userQueue : []
+  readonly property int upNextCount: userQueue ? userQueue.length : 0
 
   readonly property string tooltip: currentTrack && currentTrack.title
     ? (currentTrack.title + (currentTrack.artist ? " — " + currentTrack.artist : ""))
-    : "OmaTimeAtBandCamp"
+    : "OmaTimeAtBandcamp"
 
-  property var selectedAlbum: null
-  property var selectedPlaylist: null
+  // Selection is kept as a uid and resolved against the live library, so it survives
+  // a background sync replacing the library objects. Clicking the selected row again
+  // clears it (back to the whole-library context).
+  property string selectedAlbumUid: ""
+  property string selectedPlaylistUid: ""
+  readonly property var selectedAlbum: LibraryModel.findByUid(service ? service.collection : [], selectedAlbumUid)
+  readonly property var selectedPlaylist: LibraryModel.findByUid(playlists, selectedPlaylistUid)
 
-  implicitWidth: showIcon ? button.implicitWidth : 0
-  implicitHeight: showIcon ? button.implicitHeight : 0
+  // The playback/shuffle context is whatever the detail pane is showing: search
+  // results, the selected playlist, the selected album, or (nothing selected) the
+  // whole library. Shuffle is remembered per context.
+  readonly property string contextKey: query !== "" ? "search"
+    : selectedPlaylist ? "playlist:" + selectedPlaylist.id
+    : selectedAlbum ? "album:" + selectedAlbum.id
+    : "library"
+  readonly property bool shuffleOn: service ? service.isShuffled(contextKey) : false
 
-  onOpenedChanged: if (opened && service && service.collection.length === 0) service.refresh()
+  // What the right pane is about.
+  readonly property var detailItem: query !== "" ? null : (selectedPlaylist || selectedAlbum)
+  readonly property bool detailIsAlbum: query === "" && !selectedPlaylist && !!selectedAlbum
+  readonly property var detailTrackList: detailTracks()
+  readonly property int detailTotal: detailTrackList.length
+  readonly property int detailStreamable: {
+    var n = 0
+    for (var i = 0; i < detailTrackList.length; i++) if (detailTrackList[i].streamable !== false) n++
+    return n
+  }
 
+  // v3: one border colour for the album list, the detail pane and the footer.
+  // It is the detail pane's existing theme-accent border, now shared by all three.
+  readonly property var paneBorderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
+
+  // v3.1: one control height for every named control (search field, gear,
+  // Albums/Playlists/Sort and the four footer transport buttons).
+  // The token is BcButton's existing height, so the buttons and the field
+  // cannot drift apart.
+  readonly property int controlHeight: Style.spacing.controlHeight
+
+  // v3.2: the list/detail row is content-driven. Nothing selected keeps the
+  // old fixed browsing height (the cap); a selection or search result sizes
+  // itself by the detail header plus the track rows actually shown, with a
+  // floor of six 30 px track rows. Long lists still stop at the cap and scroll.
+  readonly property real detailCapHeight: Style.space(396)
+  readonly property int detailMinTrackRows: 6
+  readonly property real detailBaseTrackRowHeight: Style.space(30)
+  // v3.4: Up Next rows are content like any other. They are counted in the
+  // detail row height under the same floor/cap. The section shows up to six
+  // rows at once (the same six-row unit as the floor) and scrolls beyond that;
+  // the context's own track list keeps the remaining space.
+  readonly property real upNextRowHeight: Style.space(30)
+  readonly property int upNextMaxVisibleRows: detailMinTrackRows
+  readonly property real upNextListHeight: upNextCount === 0 ? 0
+    : Math.min(upNextCount, upNextMaxVisibleRows) * upNextRowHeight
+  // v3.3.1 follow-up: Up Next gets its own bordered sub-frame. The frame's
+  // border + padding are counted in the section height, so the v3.2 floor/cap
+  // math and the equal pane heights stay honest.
+  readonly property real upNextFramePadding: Style.spacing.sm
+  readonly property real upNextFrameChrome: 2 * (Style.normalBorderWidth + upNextFramePadding)
+  readonly property real upNextSectionHeight: upNextCount === 0 ? 0
+    : controlHeight + Style.space(2) + upNextListHeight + upNextFrameChrome
+  readonly property bool detailContextActive: query !== "" || !!selectedPlaylist || !!selectedAlbum
+  readonly property real detailRowContentHeight: detailHeader.height + Style.spacing.sm
+    + (upNextCount > 0 ? upNextSectionHeight + Style.spacing.sm : 0)
+    + (trackList ? trackList.contentHeight : 0)
+  // v3.3: in the grouped search state the left list contains section headers as
+  // well as items. The row must be tall enough for every rendered row, not just
+  // the right-hand track list, so use the taller of the two panes under the same
+  // floor/cap. The left pane's 1 px inner margins are included so the last row
+  // is fully visible rather than needing a 2 px scroll. The two panes still bind
+  // to the one row height.
+  readonly property real searchListContentHeight: query !== "" && listColumn
+    ? listColumn.contentHeight + Style.space(2) : 0
+  readonly property real libraryRowContentHeight: Math.max(detailRowContentHeight, searchListContentHeight)
+  readonly property real libraryRowHeight: {
+    if (!detailContextActive) return detailCapHeight
+    var floorHeight = detailMinTrackRows * detailBaseTrackRowHeight
+    return Math.max(floorHeight, Math.min(detailCapHeight, libraryRowContentHeight))
+  }
+  // v3.5.1: the shortcuts view occupies the same body slot as the two panes,
+  // under the same floor/cap. The four groups are reflowed into two balanced
+  // columns; the internal scroll remains only as a fallback.
+  readonly property real helpViewHeight: Math.max(detailMinTrackRows * detailBaseTrackRowHeight,
+    Math.min(detailCapHeight, helpColumns ? helpColumns.implicitHeight + 2 * Style.spacing.sm : 0))
+
+  // v3.5.4: header geometry. The header is title + search only; the search
+  // field ends at ~72% of the popup's width and the whole remaining column
+  // (top border to the top of the panes) is the cat settings button.
+  //
+  // Bind against `panel.contentWidth`, NOT `panel.width`. In the real shell
+  // KeyboardPanel is a full-screen layer surface, so its `width` is the whole
+  // monitor (1280 px here) while the visible card is only contentWidth (835).
+  // The test stub used to make those two values equal, so `panel.width` worked
+  // there and broke live: the field was computed from 1280 px, ran 103 px past
+  // the card, and the remaining cat column became max(0, 803 - 906) = 0 px.
+  readonly property real headerTopInset: panel.padding + Border.top(panel.borderSpec)
+  readonly property real headerTitleBandHeight: headerTopInset + controlHeight + contentColumn.spacing
+  readonly property real searchFieldWidth: Math.min(contentColumn.width, Math.max(0,
+    Math.round(panel.contentWidth * 0.72) - headerTopInset))
+  readonly property real headerCatColumnWidth: Math.max(0, contentColumn.width - searchFieldWidth)
+  readonly property real headerCatColumnHeight: headerTopInset + headerStack.height
+    + contentColumn.spacing + controlHeight + contentColumn.spacing
+  // v3.5.4.1: the slim trace renders at 95% of the old fit, and its ink centroid
+  // is nudged 3 px below the column centre so the ears sit >= 6 px below the
+  // panel's top border in both the harness and the live-path instantiation.
+  readonly property real catFitScale: 0.95
+  readonly property real catCentreNudgeY: 3
+  // The sync label is only for the "Syncing library..." state; other statuses
+  // keep their existing non-header behaviour (they are not rendered here).
+  readonly property bool syncStatusVisible: !!service
+    && service.status.indexOf("Syncing library") === 0
+
+  // Overflow (gear) menu and Sort menu share one card (menuKind: "", "more", "sort").
+  // New gear entries go in moreItems; destructive ones must go through a ConfirmDialog.
+  // Refresh and the Hide pre-orders filter live here in v3, not in the toolbar.
+  property string menuKind: ""
+  readonly property bool menuOpen: menuKind !== ""
+  property int menuIndex: 0
+  property bool logoutConfirmOpen: false
+  // v3.4 row context menu. It is a separate overlay from the gear/sort menu so
+  // right-clicking a row never disturbs the toolbar menus.
+  property bool contextMenuOpen: false
+  property string contextMenuKind: ""       // "track", "item", "queue"
+  property var contextMenuTrack: null
+  property var contextMenuItem: null
+  property int contextMenuQueueIndex: -1
+  property var contextMenuEntries: []
+  property int contextMenuIndex: 0
+  property string contextMenuSource: ""     // keyboard-opened: "list", "queue", "tracks"
+  property real contextMenuAnchorX: 0
+  property real contextMenuAnchorY: 0
+  readonly property var moreItems: [
+    { leadingIcon: "\uf021", icon: "\u2003", label: "Refresh", action: "refresh", enabled: !root.refreshing, spinning: root.refreshing },
+    // v3.5.4: the eye-slash is the leading icon. `icon` stays the original
+    // check slot, so the existing checked-state display is unchanged.
+    { leadingIcon: "\uf070", icon: root.service && root.service.hidePreorders ? "\uf00c" : "\u2003", label: "Hide pre-orders", action: "hide-preorders", checked: root.service ? root.service.hidePreorders : false },
+    { leadingIcon: "\uf11c", icon: "\u2003", label: "Keyboard shortcuts", action: "help" },
+    { leadingIcon: "\uf07b", icon: "\u2003", label: "Collection", action: "collection", enabled: root.collectionUrl !== "",
+      tooltip: root.collectionUrl !== "" ? root.collectionUrl : "Username not known yet" },
+    { leadingIcon: "\uf08b", icon: "\u2003", label: "Log out", action: "logout" }
+  ]
+  // v3.3.1 follow-up: Albums keep the full sort set; Playlists get exactly two
+  // choices. The two tabs own independent, persisted choices.
+  readonly property bool playlistsTab: !!service && service.activeTab === 1
+  readonly property string activeSortMode: service
+    ? (playlistsTab ? service.playlistSortMode : service.sortMode) : "added"
+  readonly property string activeSortLabel: LibraryModel.sortLabel(activeSortMode)
+  // v3.5: the direction button shows the CURRENT direction; its click flips it.
+  readonly property string activeSortDirection: service
+    ? (playlistsTab ? service.playlistSortDirection : service.sortDirection) : "asc"
+  readonly property string sortDirectionArrow: LibraryModel.sortDirectionArrow(activeSortDirection)
+  readonly property var sortItems: {
+    var out = []
+    var modes = playlistsTab ? LibraryModel.PLAYLIST_SORT_MODES : LibraryModel.SORT_MODES
+    for (var i = 0; i < modes.length; i++) {
+      var m = modes[i]
+      out.push({ icon: activeSortMode === m.id ? "\uf00c" : "\u2003", label: m.label, action: "sort:" + m.id, checked: activeSortMode === m.id,
+        trailing: activeSortMode === m.id ? sortDirectionArrow : "" })
+    }
+    return out
+  }
+  readonly property var menuItems: menuKind === "sort" ? sortItems : moreItems
+
+  // v3.5 Part D: the shortcuts view. Groups are in the owner-ordered sequence;
+  // every key implemented by the panel (Parts A–C and the menu addendum) is
+  // listed. Text only — the renderer uses existing type sizes and colours.
+  readonly property var helpRows: [
+    { group: true, title: "Navigation" },
+    { key: "Tab / Shift+Tab", text: "Move through the panel: search, clear, settings (cat), Albums, Playlists, Sort, sort direction, lists, queue, track list, transport." },
+    { key: "↑ / ↓", text: "Move within the focused list, queue or menu." },
+    { key: "← / →", text: "Switch between the album/playlist list and the track list." },
+    { group: true, title: "Playback" },
+    { key: "Enter", text: "Play the selected album, playlist, search result or track." },
+    { key: "Space", text: "Play/pause when a list is focused; presses the focused button. Types a space in search." },
+    { key: "Super+Alt+B", text: "Show or hide the panel (if you've added the binds from the README)." },
+    { key: "Super+Alt+P", text: "Play/pause from anywhere (if you've added the binds from the README)." },
+    { group: true, title: "Queue" },
+    { key: "Ctrl+Enter", text: "Add the focused track to the queue; on an album or playlist row, add the whole item (streamable tracks only)." },
+    { key: "Alt+Enter", text: "Play the focused track next. Albums and playlists have no Play Next." },
+    { key: "Delete", text: "Remove the focused Up Next row." },
+    { key: "Enter", text: "In Up Next, play the focused row now (it and everything ahead leave the queue)." },
+    { group: true, title: "Search & menus" },
+    { key: "/", text: "Focus the search field." },
+    { key: "Type", text: "Typing while a list is focused returns to search and keeps the text." },
+    { key: "Menu / Shift+F10", text: "Open the focused row's context menu." },
+    { key: "Enter", text: "Activate the highlighted menu item." },
+    { key: "Esc", text: "Close a menu without acting, close this view, or step back one layer." }
+  ]
+  // v3.5.1 Part D: group the flat list above for the two-column reflow. Left
+  // column is Navigation then Playback; right column is Queue then Search & menus.
+  readonly property var helpGroups: {
+    var out = [], current = null
+    for (var i = 0; i < helpRows.length; i++) {
+      var row = helpRows[i]
+      if (row.group === true) {
+        current = { title: row.title || "", rows: [] }
+        out.push(current)
+      } else if (current) {
+        current.rows.push(row)
+      }
+    }
+    return out
+  }
+  readonly property var helpLeftGroups: helpGroups.slice(0, 2)
+  readonly property var helpRightGroups: helpGroups.slice(2)
+
+  // v3.5.1: Collection now lives in the gear menu. Its URL is built from the
+  // username the backend recorded in the library, so the item stays disabled
+  // until it is known. Verified live on 2026-10-23 (V2-NOTES Phase 7).
+  readonly property string bandcampUser: service ? String(service.detectedUser || "") : ""
+  readonly property string collectionUrl: bandcampUser === ""
+    ? "" : "https://bandcamp.com/" + encodeURIComponent(bandcampUser)
+
+  // ---- keyboard (Phase 8 / v3.5) ------------------------------------------
+  // Panel-scoped only: no global shortcut is registered, no Hyprland binding is
+  // touched. Focus is a named region: "" (a header/footer control or the help
+  // view), "list" (left list), "queue" (Up Next) or "tracks" (detail list).
+  // Down/Up from search enters the left list; Left/Right switch lists; `/`
+  // returns to search; Esc keeps the Phase 2 layering.
+  property string focusPane: ""       // "", "list", "queue", "tracks"
+  property int listCursor: -1
+  property int trackCursor: -1
+  property int queueCursor: -1
+  // v3.5 Part D: the shortcuts view replaces the two panes in place.
+  property bool helpOpen: false
+  readonly property var playlistRows: service ? service.playlistsView : []
+  readonly property var listRows: query !== ""
+    ? searchRows
+    : (service && service.activeTab === 1 ? playlistRows : albums)
+
+  function buildSearchRows() {
+    var out = []
+    if (query === "") return out
+    if (searchAlbums.length > 0) {
+      out.push({ rowKind: "header", section: "albums", title: "Albums (" + searchAlbums.length + ")", count: searchAlbums.length })
+      for (var a = 0; a < searchAlbums.length; a++) {
+        var alb = searchAlbums[a]
+        out.push({ rowKind: "album", item: alb, uid: alb.uid, title: alb.title || "", name: alb.title || "" })
+      }
+    }
+    if (searchPlaylists.length > 0) {
+      out.push({ rowKind: "header", section: "playlists", title: "Playlists (" + searchPlaylists.length + ")", count: searchPlaylists.length })
+      for (var p = 0; p < searchPlaylists.length; p++) {
+        var pl = searchPlaylists[p]
+        out.push({ rowKind: "playlist", item: pl, uid: pl.uid, title: pl.name || pl.title || "Playlist", name: pl.name || pl.title || "Playlist" })
+      }
+    }
+    if (searchTracks.length > 0) {
+      out.push({ rowKind: "header", section: "tracks", title: "Tracks (" + searchTracks.length + ")", count: searchTracks.length })
+      for (var t = 0; t < searchTracks.length; t++) {
+        var tr = searchTracks[t]
+        out.push({ rowKind: "track", item: tr, uid: tr.uid, title: tr.title || "" })
+      }
+    }
+    return out
+  }
+
+  function isHeaderRow(row) { return !!row && row.rowKind === "header" }
+
+  function focusSearch() {
+    focusPane = ""
+    searchField.forceActiveFocus()
+  }
+
+  // v3.5: the complete Tab chain, in the owner-ordered regions. Entries whose
+  // region does not exist right now (the queue frame) are skipped entirely.
+  readonly property var focusTokens: ["searchField", "searchAction",
+    "settingsButton", "albumsButton", "playlistsButton", "sortButton", "sortDirectionButton",
+    "leftList", "upNextList", "upNextClear", "trackList",
+    "footerShuffle", "footerPrev", "footerPlay", "footerNext"]
+
+  function focusTokensNow() {
+    var out = []
+    for (var i = 0; i < focusTokens.length; i++) {
+      var t = focusTokens[i]
+      if (helpOpen && (t === "leftList" || t === "upNextList" || t === "upNextClear" || t === "trackList")) continue
+      if ((t === "upNextList" || t === "upNextClear") && upNextCount === 0) continue
+      out.push(t)
+    }
+    return out
+  }
+
+  function itemForToken(t) {
+    if (t === "searchField") return searchField
+    if (t === "searchAction") return searchAction
+    if (t === "settingsButton") return menuButton
+    if (t === "albumsButton") return albumsButton
+    if (t === "playlistsButton") return playlistsButton
+    if (t === "sortButton") return sortButton
+    if (t === "sortDirectionButton") return sortDirectionButton
+    if (t === "upNextClear") return upNextClear
+    if (t === "footerShuffle") return footerShuffle
+    if (t === "footerPrev") return footerPrev
+    if (t === "footerPlay") return footerPlay
+    if (t === "footerNext") return footerNext
+    return null
+  }
+
+  // Header/footer items only; kept for the v3.3.1 focus-ring checks.
+  function focusChainItems() {
+    var out = []
+    for (var i = 0; i < focusTokens.length; i++) {
+      var it = itemForToken(focusTokens[i])
+      if (it && it.visible && it.enabled) out.push(it)
+    }
+    return out
+  }
+
+  function focusControlName() {
+    if (upNextClear && upNextClear.activeFocus) return "upNextClear"
+    var items = focusChainItems()
+    for (var i = 0; i < items.length; i++) if (items[i].activeFocus) return items[i].objectName
+    if (listKeyCatcher.activeFocus) {
+      if (focusPane === "queue") return "upNextList"
+      if (focusPane === "tracks") return "trackList"
+      if (focusPane === "list") return "leftList"
+    }
+    if (helpView && helpView.activeFocus) return "shortcutsView"
+    return ""
+  }
+
+  function enterLeftRegion() {
+    var rows = listRows
+    if (listCursor < 0 || listCursor >= rows.length) {
+      var i = -1, uid = selectedPlaylistUid || selectedAlbumUid
+      for (var k = 0; k < rows.length; k++) if (!isHeaderRow(rows[k]) && rows[k].uid === uid) { i = k; break }
+      if (i < 0) {
+        i = 0
+        while (i < rows.length && isHeaderRow(rows[i])) i++
+      }
+      listCursor = i < rows.length ? i : -1
+    }
+    focusPane = "list"
+    if (listCursor >= 0 && listCursor < rows.length) applyListCursor()
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function enterQueueRegion() {
+    focusPane = "queue"
+    if (queueCursor < 0 || queueCursor >= upNextCount) queueCursor = upNextCount > 0 ? 0 : -1
+    if (queueCursor >= 0) upNextList.positionViewAtIndex(queueCursor, ListView.Contain)
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function enterTrackRegion() {
+    focusPane = "tracks"
+    if (detailTrackList.length > 0) {
+      if (trackCursor < 0 || trackCursor >= detailTrackList.length) {
+        var i = -1
+        for (var k = 0; k < detailTrackList.length; k++)
+          if (currentTrack && detailTrackList[k].uid === currentTrack.uid) { i = k; break }
+        trackCursor = i >= 0 ? i : 0
+      }
+      trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+    } else {
+      trackCursor = -1
+    }
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function focusToken(t) {
+    if (t === "leftList") { enterLeftRegion(); return }
+    if (t === "upNextList") { enterQueueRegion(); return }
+    if (t === "trackList") { enterTrackRegion(); return }
+    focusPane = ""
+    var it = itemForToken(t)
+    if (it) it.forceActiveFocus()
+  }
+
+  function moveFocus(step) {
+    var tokens = focusTokensNow()
+    if (tokens.length === 0) { focusSearch(); return }
+    var current = tokens.indexOf(focusControlName())
+    var next = current < 0 ? (step > 0 ? 0 : tokens.length - 1)
+      : (current + step + tokens.length) % tokens.length
+    focusToken(tokens[next])
+  }
+
+  // Returns true when the event was a focus-only Tab/Shift+Tab. The caller must
+  // stop here: no Tab key may reach text entry or the type-to-search branch.
+  function handleTabKey(event) {
+    if (event.key === Qt.Key_Backtab
+        || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
+      moveFocus(-1)
+      event.accepted = true
+      return true
+    }
+    if (event.key === Qt.Key_Tab) {
+      moveFocus(1)
+      event.accepted = true
+      return true
+    }
+    return false
+  }
+
+  // Type-to-search accepts one genuine printable character only. Control
+  // characters (Tab U+0009, newlines, DEL/C1, ...) and empty event.text are
+  // never appended to the query.
+  function isPrintableText(text) {
+    if (!text || text.length !== 1) return false
+    var c = text.charCodeAt(0)
+    return c >= 0x20 && c !== 0x7f && !(c >= 0x80 && c <= 0x9f)
+  }
+
+  function clearSearch() {
+    if (searchField) searchField.text = ""
+    if (service) service.search("")
+    listCursor = -1
+  }
+
+  function handleEscape() {
+    if (logoutConfirmOpen) cancelLogout()
+    else if (contextMenuOpen) closeContextMenu()
+    else if (menuOpen) closeMenu()
+    else if (helpOpen) closeHelp()
+    else if (query !== "" || (searchField && searchField.text !== "")) { clearSearch(); focusSearch() }
+    else close()
+  }
+
+  function openHelp() {
+    if (helpOpen) return
+    helpOpen = true
+    helpView.forceActiveFocus()
+  }
+
+  function closeHelp() {
+    if (!helpOpen) return
+    helpOpen = false
+    if (menuButton) menuButton.forceActiveFocus()
+  }
+
+  function toggleHelp() {
+    if (helpOpen) closeHelp()
+    else openHelp()
+  }
+
+  // Keyboard selection never toggles: moving the cursor onto the already
+  // selected row must not deselect it (clicking still toggles, Phase 4.0).
+  function selectAlbum(alb) { if (!alb) return; selectedPlaylistUid = ""; selectedAlbumUid = alb.uid }
+  function selectPlaylist(pl) { if (!pl) return; selectedAlbumUid = ""; selectedPlaylistUid = pl.uid }
+
+  function clampCursor(i, n) { return Math.max(0, Math.min(n - 1, i)) }
+
+  function enterList(delta) {
+    var rows = listRows
+    if (!rows.length) return
+    focusPane = "list"
+    if (listCursor < 0 || listCursor >= rows.length) {
+      var i = -1, uid = selectedPlaylistUid || selectedAlbumUid
+      for (var k = 0; k < rows.length; k++) if (!isHeaderRow(rows[k]) && rows[k].uid === uid) { i = k; break }
+      if (i < 0) {
+        i = delta > 0 ? 0 : rows.length - 1
+        while (i >= 0 && i < rows.length && isHeaderRow(rows[i])) i += delta
+      }
+      listCursor = i
+    } else {
+      var next = listCursor + delta
+      while (next >= 0 && next < rows.length && isHeaderRow(rows[next])) next += delta
+      if (next >= 0 && next < rows.length) listCursor = next
+    }
+    if (listCursor < 0 || listCursor >= rows.length) return
+    applyListCursor()
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function applyListCursor() {
+    var rows = listRows
+    if (listCursor < 0 || listCursor >= rows.length) return
+    listColumn.positionViewAtIndex(listCursor, ListView.Contain)
+    if (query !== "") return                  // search results: cursor only
+    if (service && service.activeTab === 1) selectPlaylist(rows[listCursor])
+    else selectAlbum(rows[listCursor])
+  }
+
+  function focusTracks() {
+    if (detailTrackList.length === 0) return
+    focusPane = "tracks"
+    if (trackCursor < 0 || trackCursor >= detailTrackList.length) {
+      var i = -1
+      for (var k = 0; k < detailTrackList.length; k++)
+        if (currentTrack && detailTrackList[k].uid === currentTrack.uid) { i = k; break }
+      trackCursor = i >= 0 ? i : 0
+    }
+    trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function moveCursor(delta) {
+    if (focusPane === "tracks") {
+      if (!detailTrackList.length) return
+      trackCursor = clampCursor((trackCursor < 0 ? 0 : trackCursor) + delta, detailTrackList.length)
+      trackList.positionViewAtIndex(trackCursor, ListView.Contain)
+      return
+    }
+    if (focusPane === "queue") {
+      if (upNextCount === 0) return
+      queueCursor = clampCursor((queueCursor < 0 ? 0 : queueCursor) + delta, upNextCount)
+      upNextList.positionViewAtIndex(queueCursor, ListView.Contain)
+      return
+    }
+    enterList(delta)
+  }
+
+  function switchPane(direction) {
+    if (direction > 0) focusTracks()
+    else if (detailTrackList.length > 0) {
+      focusPane = "list"
+      if (listCursor < 0 || listCursor >= listRows.length || isHeaderRow(listRows[listCursor])) {
+        listCursor = -1
+        for (var i = 0; i < listRows.length; i++) if (!isHeaderRow(listRows[i])) { listCursor = i; break }
+      }
+      applyListCursor()
+      listKeyCatcher.forceActiveFocus()
+    }
+  }
+
+  function activateCursor() {
+    if (focusPane === "tracks") {
+      var t = detailTrackList[trackCursor]
+      if (!t) return
+      if (t.streamable !== false) playTrackNow(t, detailTrackList)
+      else if (service) service.notify(service.unavailableMessage(t))
+      return
+    }
+    var row = listRows[listCursor]
+    if (!row || isHeaderRow(row)) return
+    if (query !== "") {
+      if (row.rowKind === "album") { activateSearchAlbum(row.item); return }
+      if (row.rowKind === "playlist") { activateSearchPlaylist(row.item); return }
+      playTrackNow(row.item || row, searchTracks)
+      return
+    }
+    if (service && service.activeTab === 1) { selectPlaylist(row); service.playPlaylist(row) }
+    else { selectAlbum(row); service.playAlbum(row) }
+  }
+
+  // v3.3: activating a grouped album/playlist row is navigation, not playback.
+  // Leave search, switch to the matching tab, select the named thing and show its
+  // tracks — the same end state as clicking that row in the normal list.
+  function activateSearchAlbum(alb) {
+    if (!alb) return
+    clearSearch()
+    if (service) service.activeTab = 0
+    selectedPlaylistUid = ""
+    selectedAlbumUid = alb.uid
+    focusSearch()
+  }
+
+  function activateSearchPlaylist(pl) {
+    if (!pl) return
+    clearSearch()
+    if (service) service.activeTab = 1
+    selectedAlbumUid = ""
+    selectedPlaylistUid = pl.uid
+    focusSearch()
+  }
+
+  function noteListClick(index) { listCursor = index; focusPane = "list"; listKeyCatcher.forceActiveFocus() }
+  function noteTrackClick(index) { trackCursor = index; focusPane = "tracks"; listKeyCatcher.forceActiveFocus() }
+
+  implicitWidth: showIcon ? barRow.implicitWidth : 0
+  implicitHeight: showIcon ? barRow.implicitHeight : 0
+
+  onOpenedChanged: {
+    if (!opened) { menuKind = ""; logoutConfirmOpen = false; contextMenuOpen = false; contextMenuSource = ""; focusPane = ""; listCursor = -1; trackCursor = -1; queueCursor = -1; helpOpen = false }
+    else if (service && service.collection.length === 0) service.refresh()
+  }
+
+  onUpNextCountChanged: afterQueueCleared()
+
+  onMenuKindChanged: if (menuKind !== "") placeMenu()
+
+  function placeMenu() {
+    var b = menuKind === "sort" ? sortButton : menuButton
+    var p = b.mapToItem(menuLayer, 0, 0)
+    var x = menuKind === "sort" ? p.x : p.x + b.width - menuCard.width
+    menuCard.x = Math.max(0, Math.min(menuLayer.width - menuCard.width, x))
+    menuCard.y = p.y + b.height + Style.space(4)
+  }
+
+  function closeMenu() {
+    menuKind = ""
+    searchField.forceActiveFocus()
+  }
+
+  // ---- v3.4/v3.5 row context menu -----------------------------------------
+  function openContextMenu(kind, entries, anchorItem, x, y, source) {
+    contextMenuKind = kind
+    contextMenuEntries = entries
+    contextMenuSource = source || ""
+    contextMenuIndex = 0
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].enabled !== false) { contextMenuIndex = i; break }
+    }
+    contextMenuOpen = true
+    var p = anchorItem.mapToItem(contextMenuLayer, x, y)
+    contextMenuAnchorX = p.x
+    contextMenuAnchorY = p.y
+  }
+
+  function openTrackMenu(track, anchorItem, x, y, source) {
+    if (!service || !track) return
+    contextMenuTrack = track
+    contextMenuItem = null
+    contextMenuQueueIndex = -1
+    var playable = track.streamable !== false
+    openContextMenu("track", [
+      { label: "Play Next", action: "play-next", enabled: playable, hint: "Alt+Enter" },
+      { label: "Add to Queue", action: "queue-track", enabled: playable, hint: "Ctrl+Enter" }
+    ], anchorItem, x, y, source)
+  }
+
+  function openItemMenu(item, anchorItem, x, y, source) {
+    if (!service || !item) return
+    contextMenuTrack = null
+    contextMenuItem = item
+    contextMenuQueueIndex = -1
+    openContextMenu("item", [
+      { label: "Add to Queue", action: "queue-item", enabled: true, hint: "Ctrl+Enter" }
+    ], anchorItem, x, y, source)
+  }
+
+  function openQueueMenu(index, anchorItem, x, y, source) {
+    if (!service) return
+    contextMenuTrack = null
+    contextMenuItem = null
+    contextMenuQueueIndex = index
+    openContextMenu("queue", [
+      { label: "Remove from queue", action: "queue-remove", enabled: true, hint: "Del" }
+    ], anchorItem, x, y, source)
+  }
+
+  function moveContextMenu(delta) {
+    if (!contextMenuOpen || contextMenuEntries.length === 0) return
+    var n = contextMenuEntries.length
+    var i = contextMenuIndex
+    for (var guard = 0; guard < n; guard++) {
+      i = (i + delta + n) % n
+      if (contextMenuEntries[i].enabled !== false) { contextMenuIndex = i; return }
+    }
+  }
+
+  function activateContextMenu() {
+    if (!contextMenuOpen) return
+    var e = contextMenuEntries[contextMenuIndex]
+    if (!e || e.enabled === false) return
+    runContextAction(e.action)
+  }
+
+  function restoreFocusAfterContextMenu() {
+    var src = contextMenuSource
+    contextMenuSource = ""
+    if (src === "list") {
+      if (listCursor >= 0 && listCursor < listRows.length) {
+        focusPane = "list"
+        applyListCursor()
+        listKeyCatcher.forceActiveFocus()
+      }
+    } else if (src === "queue") {
+      if (upNextCount > 0) enterQueueRegion()
+      else enterTrackRegion()
+    } else if (src === "tracks") {
+      enterTrackRegion()
+    }
+  }
+
+  function closeContextMenu() {
+    contextMenuOpen = false
+    contextMenuKind = ""
+    contextMenuEntries = []
+    contextMenuTrack = null
+    contextMenuItem = null
+    contextMenuQueueIndex = -1
+    contextMenuIndex = 0
+    restoreFocusAfterContextMenu()
+  }
+
+  function runContextAction(action) {
+    var track = contextMenuTrack
+    var item = contextMenuItem
+    var index = contextMenuQueueIndex
+    closeContextMenu()
+    if (!service) return
+    if (action === "play-next") service.playNextTrack(track)
+    else if (action === "queue-track") service.addTrackToQueue(track)
+    else if (action === "queue-item") service.addItemToQueue(item)
+    else if (action === "queue-remove") service.removeUserQueueAt(index)
+  }
+
+  // v3.5 Part C addendum: Menu / Shift+F10 on a focused row opens that row's
+  // menu, anchored to the row, with focus coming back to the same list on close.
+  function openFocusedRowMenu() {
+    if (!service || contextMenuOpen) return
+    var region = focusPane
+    if (region === "queue") {
+      if (queueCursor < 0 || queueCursor >= upNextCount) return
+      var qr = upNextList.itemAtIndex(queueCursor)
+      if (qr) openQueueMenu(queueCursor, qr, Style.space(8), qr.height, "queue")
+      return
+    }
+    if (region === "tracks") {
+      var t = detailTrackList[trackCursor]
+      var tr = trackList.itemAtIndex(trackCursor)
+      if (t && tr) openTrackMenu(t, tr, Style.space(8), tr.height, "tracks")
+      return
+    }
+    if (region === "list") {
+      var row = listRows[listCursor]
+      var lr = listColumn.itemAtIndex(listCursor)
+      if (!row || !lr || isHeaderRow(row)) return
+      if (query !== "" && row.rowKind === "track") openTrackMenu(row.item, lr, Style.space(8), lr.height, "list")
+      else openItemMenu(row.item || row, lr, Style.space(8), lr.height, "list")
+    }
+  }
+
+  function playQueueRow(index) {
+    if (service) service.startUserQueueAt(index)
+  }
+
+  // v3.5 Part C: queue keys (active only while Up Next holds focus).
+  function removeFocusedQueueRow() {
+    if (!service || queueCursor < 0 || queueCursor >= upNextCount) return
+    service.removeUserQueueAt(queueCursor)
+    if (upNextCount === 0) {
+      queueCursor = -1
+      enterTrackRegion()
+      return
+    }
+    if (queueCursor >= upNextCount) queueCursor = upNextCount - 1
+    upNextList.positionViewAtIndex(queueCursor, ListView.Contain)
+    listKeyCatcher.forceActiveFocus()
+  }
+
+  function addFocusedTrackToQueue() {
+    var t = detailTrackList[trackCursor]
+    if (t && service) service.addTrackToQueue(t)
+  }
+
+  function playNextFocusedTrack() {
+    var t = detailTrackList[trackCursor]
+    if (t && service) service.playNextTrack(t)
+  }
+
+  function addFocusedItemToQueue() {
+    var row = listRows[listCursor]
+    if (!row || isHeaderRow(row) || !service) return
+    service.addItemToQueue(row.item || row)
+  }
+
+  // Called whenever the queue can have vanished under the keyboard cursor.
+  function afterQueueCleared() {
+    if (upNextCount > 0) return
+    if (focusPane === "queue" || (upNextClear && upNextClear.activeFocus)) enterTrackRegion()
+  }
+
+  function toggleMenu() {
+    menuIndex = 0
+    if (menuKind === "more") {
+      closeMenu()
+    } else {
+      menuKind = "more"
+      // The menu's own Up/Down/Enter handling lives on the search field (it owns
+      // the window's keyboard). The gear is now a Tab stop too, so hand focus
+      // back to the field when the menu opens; v3.3.1 keeps both behaviours.
+      focusSearch()
+    }
+  }
+
+  function toggleSortMenu() {
+    menuIndex = 0
+    if (menuKind === "sort") {
+      closeMenu()
+    } else {
+      menuKind = "sort"
+      focusSearch()
+    }
+  }
+
+  // v3.5: flip the active tab's direction and re-sort immediately (setSort*
+  // also refreshes an open search so its groups follow the new direction).
+  function toggleSortDirection() {
+    if (!service) return
+    if (playlistsTab) service.togglePlaylistSortDirection()
+    else service.toggleSortDirection()
+    if (searchField) searchField.forceActiveFocus()
+  }
+
+  function runMenuAction(action) {
+    var kind = menuKind
+    menuKind = ""
+    if (action === "logout") {
+      logoutConfirmOpen = true
+    } else if (action === "refresh") {
+      if (service && !service.refreshing) service.refresh()
+      searchField.forceActiveFocus()
+    } else if (action === "hide-preorders") {
+      if (service) service.setHidePreorders(!service.hidePreorders)
+      searchField.forceActiveFocus()
+    } else if (action === "help") {
+      toggleHelp()
+    } else if (action === "collection") {
+      if (service && collectionUrl !== "") service.openExternal(collectionUrl)
+      searchField.forceActiveFocus()
+    } else if (action.indexOf("sort:") === 0) {
+      if (service) {
+        if (root.playlistsTab) service.setPlaylistSortMode(action.substring(5))
+        else service.setSortMode(action.substring(5))
+      }
+      searchField.forceActiveFocus()
+    }
+  }
+
+  function cancelLogout() {
+    logoutConfirmOpen = false
+    searchField.forceActiveFocus()
+  }
+
+  function confirmLogout() {
+    logoutConfirmOpen = false
+    if (service) service.clearCookies()
+    searchField.forceActiveFocus()
+  }
+
+  // Clicking the selected row again deselects it; clicking another row moves the selection.
   function pickAlbum(alb) {
-    selectedPlaylist = null
-    selectedAlbum = alb
-    if (service) service.requestTracks(alb)
+    if (service) service.notice = ""     // a stale "Not yet released" must not follow you to another album
+    selectedPlaylistUid = ""
+    selectedAlbumUid = selectedAlbumUid === alb.uid ? "" : alb.uid
   }
 
   function pickPlaylist(pl) {
-    selectedAlbum = null
-    selectedPlaylist = pl
-    if (service && (!pl.tracks || pl.tracks.length === 0)) service.requestTracks(pl)
+    if (service) service.notice = ""
+    selectedAlbumUid = ""
+    selectedPlaylistUid = selectedPlaylistUid === pl.uid ? "" : pl.uid
   }
 
   function playTrackNow(track, list) {
     if (!service) return
     var tracks = list || [track]
-    service.playContext("list", "Selection", tracks, tracks.indexOf(track))
+    service.playContext("list", detailTitle(), tracks, service.indexOfTrack(tracks, track), contextKey)
   }
 
-  function cycleShuffle() {
-    if (service) service.setShuffle(((service.shuffleMode || 0) + 1) % 4)
+  // Footer Play with nothing loaded, and the detail pane's Play button: play the
+  // current context from its start (shuffled if that context's Shuffle is On).
+  function playContextNow() {
+    if (!service) return
+    if (query !== "") {
+      if (searchTracks.length > 0) service.playContext("search", "Search results", searchTracks, undefined, "search")
+    } else if (selectedPlaylist) {
+      service.playPlaylist(selectedPlaylist)
+    } else if (selectedAlbum) {
+      service.playAlbum(selectedAlbum)
+    } else {
+      service.playLibrary()
+    }
   }
+
+  // Progress shown in the footer: the drag preview while dragging, the player otherwise.
+  function shownProgress() {
+    var r = seekMouse.preview >= 0 ? seekMouse.preview : (service ? service.progress : 0)
+    return Math.max(0, Math.min(1, r))
+  }
+
+  function shownSeconds() {
+    if (seekMouse.preview >= 0) return seekMouse.preview * root.duration
+    return root.position
+  }
+
+  function fmtTime(sec) { return LibraryModel.fmtClock(sec) }
 
   function detailTracks() {
     if (query !== "") return searchTracks
@@ -77,23 +935,75 @@ Panel {
   function detailTitle() {
     if (query !== "") return "Search results"
     if (selectedPlaylist) return selectedPlaylist.name || selectedPlaylist.title || "Playlist"
-    if (selectedAlbum) return (selectedAlbum.title || "") + (selectedAlbum.artist ? " — " + selectedAlbum.artist : "")
+    if (selectedAlbum) return selectedAlbum.title || ""
     return "Pick an album or playlist"
   }
 
+  function detailSubtitle() {
+    if (query !== "") return searchTracks.length + (searchTracks.length === 1 ? " track" : " tracks")
+    if (selectedPlaylist) return detailTotal + (detailTotal === 1 ? " track" : " tracks")
+    if (selectedAlbum) return selectedAlbum.artist || ""
+    return ""
+  }
+
+  function preorderLine() {
+    if (!detailIsAlbum || !selectedAlbum.isPreorder) return ""
+    var d = LibraryModel.fmtDate(selectedAlbum.releaseTs)
+    return "PRE-ORDER" + (d ? " · releases " + d : "")
+  }
+
+  function availabilityLine() {
+    if (!detailItem || query !== "") return ""
+    if (detailIsAlbum && !selectedAlbum.tracksLoaded) return ""
+    if (detailStreamable < detailTotal || (detailIsAlbum && selectedAlbum.isPreorder)) {
+      var line = detailStreamable + " of " + detailTotal + " tracks available"
+      // v3: the old detail-pane "Play available" button is gone. Preserve the
+      // information in the availability line for partially released contexts.
+      if (detailStreamable > 0 && detailStreamable < detailTotal) line += " · Play available"
+      return line
+    }
+    return ""
+  }
+
+  function partialLine() {
+    if (!detailIsAlbum || !selectedAlbum.tracksLoaded) return ""
+    var declared = selectedAlbum.declaredCount
+    return declared > detailTotal && detailTotal > 0
+      ? "Showing " + detailTotal + " of " + declared + " tracks (the source returned fewer)" : ""
+  }
+
+  function emptyLine() {
+    if (query !== "") {
+      if (searchAlbums.length + searchPlaylists.length + searchTracks.length === 0) return "No results"
+      if (searchTracks.length === 0) return "No matching tracks"
+      return ""
+    }
+    if (!detailItem || detailTotal > 0) return ""
+    if (detailIsAlbum && !selectedAlbum.tracksLoaded) return "Tracks are still loading — the library is syncing"
+    return "No tracks in this " + (detailIsAlbum ? "album" : "playlist")
+  }
+
   // ---- bar icon -----------------------------------------------------------
-  BarIconButton {
-    id: button
+  // The BC click target of record. v3 removed the companion art widget and the
+  // play/pause suffix, so the bar always reads plain BC; cover art is still
+  // cached for MPRIS.
+  Row {
+    id: barRow
     visible: root.showIcon
-    anchors.fill: parent
-    bar: root.bar
-    text: root.playing && !root.paused ? "\uf04c" : "BC"
-    tooltipText: root.tooltip
-    onPressed: function(b) {
-      if (b === Qt.MiddleButton) {
-        if (root.service) root.service.togglePlay()
-      } else {
-        root.toggle()
+
+    WidgetButton {
+      id: button
+      objectName: "barButton"
+      bar: root.bar
+      text: root.barLabel
+      fontFamily: root.fontFamily
+      fixedWidth: -1
+      tooltipText: root.tooltip
+      onPressed: function(b) {
+        if (!root.service) return
+        if (b === Qt.RightButton) root.service.togglePlay()
+        else if (b === Qt.MiddleButton) root.service.next()
+        else root.toggle()             // left: open/close the window
       }
     }
   }
@@ -106,336 +1016,1223 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: searchField
-    contentWidth: panel.fittedContentWidth(Style.space(920))
+    contentWidth: panel.fittedContentWidth(Style.space(835))
     contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, Style.space(660))
 
     Column {
       id: contentColumn
       anchors.fill: parent
-      spacing: Style.spacing.md
+      // v3 compact pass: sections sit a little closer together. Wrapping and
+      // the 660 px popup cap are unchanged.
+      spacing: Style.spacing.sm
 
       // header ---------------------------------------------------------------
+      // v3.5.1 live-look: one header stack so the cat zone can overlay the
+      // title band and the search row while the Column still flows normally.
       Item {
+        id: headerStack
+        objectName: "headerStack"
         width: parent.width
-        height: Style.spacing.controlHeight
+        // v3.5.4: title + search only, in every state.
+        height: root.controlHeight + contentColumn.spacing + root.controlHeight
 
-        Text {
-          textFormat: Text.PlainText
-          text: "OmaTimeAtBandCamp"
-          color: root.foreground
+      // v3.1: the title is the only text in this row. v3.5.1 live-look centres
+      // it in the whole band from the panel's top border to the search bar, not
+      // just in this row.
+      Item {
+        id: headerRow
+        objectName: "headerRow"
+        y: 0
+        width: parent.width
+        height: root.controlHeight
+
+        TextMetrics {
+          id: collectionLabelMetrics
           font.family: root.fontFamily
-          font.pixelSize: Style.font.subtitle
-          font.bold: true
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
+          font.pixelSize: Style.font.body
+          text: "Collection"
         }
 
-        Row {
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.sm
-
-          PanelActionButton {
-            iconText: "\u21BB"
-            tooltipText: "Refresh library"
-            foreground: root.foreground
-            size: Style.spacing.controlHeight
-            onClicked: if (root.service) root.service.refresh()
-          }
-
-          PanelActionButton {
-            iconText: "\uF08B"
-            tooltipText: "Clear imported Bandcamp session"
-            foreground: root.foreground
-            size: Style.spacing.controlHeight
-            onClicked: if (root.service) root.service.clearCookies()
-          }
-
-          PanelActionButton {
-            iconText: "\u2715"
-            tooltipText: "Close"
-            foreground: root.foreground
-            size: Style.spacing.controlHeight
-            onClicked: root.close()
-          }
+        Text {
+          objectName: "headerTitle"
+          textFormat: Text.PlainText
+          text: "OmaTimeAtBandcamp"
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.subtitle + 2
+          font.bold: true
+          anchors.left: parent.left
+          y: (root.headerTitleBandHeight - implicitHeight) / 2 - root.headerTopInset
         }
       }
 
       // search ---------------------------------------------------------------
-      TextField {
-        id: searchField
+      // v3.5.1 live-look: the field ends exactly at the cat zone's left edge.
+      // The mark occupies the whole right end of the header (see below).
+      Item {
+        id: searchBand
+        objectName: "searchBand"
+        y: root.controlHeight + contentColumn.spacing
         width: parent.width
-        placeholderText: "Search albums, playlists, tracks…"
-        foreground: root.foreground
-        font.family: root.fontFamily
-        onTextChanged: if (root.service) root.service.search(text)
-        Keys.onEscapePressed: function(event) {
-          if (text !== "") { text = ""; root.service.search("") }
-          else root.close()
-          event.accepted = true
+        height: root.controlHeight
+
+        Row {
+          id: searchRow
+          objectName: "searchRow"
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          height: root.controlHeight
+          spacing: Style.spacing.sm
+
+          TextField {
+            id: searchField
+            objectName: "searchField"
+            // v3.5.4: the field ends at ~72% of the popup width; the remainder
+            // of the header/toolbar width is the cat column.
+            width: root.searchFieldWidth
+            height: root.controlHeight
+            // A little less vertical padding than the stock 30 px field: the
+            // text still fits (asserted by the harness) at the shared 28 px.
+            verticalPadding: Style.spacing.sm
+            // Leave room inside the right edge for the clear/magnifier control.
+            rightPadding: horizontalPadding + root.controlHeight + Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            placeholderText: "Search albums, playlists, tracks…"
+            foreground: root.foreground
+            font.family: root.fontFamily
+            // v3.5.1: the focused border is the theme accent at full strength
+            // (the same Color.accent the rest of the panel uses). Unfocused and
+            // hover states are the shell's existing tokens unchanged.
+            background: BorderSurface {
+              color: Style.controlFill(searchField.activeFocus, searchField.hovered, root.foreground, Color.accent)
+              borderSpec: searchField.activeFocus
+                ? Border.flat(Color.accent, Style.focusBorderWidth)
+                : Border.controlSpec(searchField.hovered ? "hover-cursor" : "normal", root.foreground, Color.accent)
+              radius: Style.cornerRadius
+            }
+            onTextChanged: {
+              if (root.service) root.service.search(text)
+              root.listCursor = -1
+            }
+
+            // v3.3.1: the right-end icon is a real control in the focus chain.
+            // Empty field: magnifier, click focuses (as before). With text: a ×
+            // with tooltip "Clear search"; click (or Enter/Space when focused)
+            // clears and returns focus to the field. Same icon font/size and
+            // shared focus fill/border as every other BcButton.
+            BcButton {
+              id: searchAction
+              objectName: "searchAction"
+              text: ""
+              iconText: searchField.text !== "" ? "\uf00d" : "\uf002"
+              iconSize: Style.space(16)
+              height: root.controlHeight
+              width: height
+              bordered: false
+              focusable: true
+              tooltipText: searchField.text !== "" ? "Clear search" : ""
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              anchors.right: parent.right
+              anchors.rightMargin: 0
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: {
+                if (searchField.text !== "") root.clearSearch()
+                root.focusSearch()
+              }
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+            }
+
+            // The search field owns keyboard focus for the whole window, so the
+            // overlays are handled here, before its own text entry. While the
+            // logout confirmation or the menu is open it owns the keyboard.
+            // (Qt fires Keys.onEscapePressed before Keys.onPressed, so Esc is
+            // handled in its own handler below.)
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              // v3.3.1: Tab/Shift+Tab are ALWAYS focus movement, in every state,
+              // so they can never reach text entry as a U+0009 character.
+              if (root.handleTabKey(event)) return
+              if (root.logoutConfirmOpen) {
+                logoutConfirm.handleKey(event)
+                event.accepted = true
+              } else if (root.menuOpen) {
+                if (event.key === Qt.Key_Down) root.menuIndex = Math.min(root.menuItems.length - 1, root.menuIndex + 1)
+                else if (event.key === Qt.Key_Up) root.menuIndex = Math.max(0, root.menuIndex - 1)
+                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.runMenuAction(root.menuItems[root.menuIndex].action)
+                event.accepted = true
+              } else if (root.contextMenuOpen) {
+                // The row context menu owns Up/Down/Enter/Esc; nothing acts
+                // underneath it while it is open.
+                if (event.key === Qt.Key_Down) root.moveContextMenu(1)
+                else if (event.key === Qt.Key_Up) root.moveContextMenu(-1)
+                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.activateContextMenu()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Up) {
+                // Down/Up leave text entry and move through the focused list.
+                root.enterList(event.key === Qt.Key_Down ? 1 : -1)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                // v3.5 Part C: the search field is a text editor first. Ctrl/Alt+
+                // Enter are queue shortcuts only while a list holds focus, so
+                // they do nothing here. Plain Enter keeps its existing
+                // "play the selected row" behaviour.
+                if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) {
+                  event.accepted = true; return
+                }
+                if (root.listRows.length > 0 && root.listCursor >= 0) { root.activateCursor(); event.accepted = true }
+              }
+            }
+            // Esc backs out one layer at a time: confirmation, menu, search text, window.
+            Keys.onEscapePressed: function(event) {
+              root.handleEscape()
+              event.accepted = true
+            }
+          }
+
         }
       }
 
-      // tabs + status --------------------------------------------------------
+      }
+
+      // toolbar --------------------------------------------------------------
       Item {
+        id: toolbarRow
+        objectName: "toolbar"
         width: parent.width
-        height: Style.spacing.controlHeight
+        height: root.controlHeight
 
         Row {
+          id: toolbarLeft
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
           spacing: Style.spacing.sm
 
-          Button {
+          BcButton {
+            id: albumsButton
+            objectName: "albumsButton"
             text: "Albums (" + root.albums.length + ")"
-            bordered: true
+            height: root.controlHeight
             selected: (root.service ? root.service.activeTab : 0) === 0
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
             onClicked: if (root.service) root.service.activeTab = 0
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
-          Button {
+          BcButton {
+            id: playlistsButton
+            objectName: "playlistsButton"
             text: "Playlists (" + root.playlists.length + ")"
-            bordered: true
+            height: root.controlHeight
             selected: (root.service ? root.service.activeTab : 0) === 1
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
             onClicked: if (root.service) root.service.activeTab = 1
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
-          Button {
-            text: "Play all"
-            bordered: true
+          // v3.3.1 follow-up: Sort is present on BOTH tabs. Albums keep the
+          // full option set; Playlists offer Recently added / Title A–Z.
+          // Shuffle moved to the footer transport in v3; Refresh/Hide
+          // pre-orders moved to the gear menu.
+          BcButton {
+            id: sortButton
+            objectName: "sortButton"
+            height: root.controlHeight
+            text: "Sort: " + root.activeSortLabel
+            iconText: "\uf0d7"
+            active: root.menuKind === "sort"
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
-            onClicked: if (root.service) root.service.playAll()
+            onClicked: root.toggleSortMenu()
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
 
-          Button {
-            text: root.service ? root.service.shuffleLabel : "Shuffle: Off"
-            bordered: true
-            selected: root.service && root.service.shuffleMode > 0
+          // v3.5: direction companion to Sort. It shows the current direction
+          // (up = ascending, down = descending) and flips it in one click. The
+          // criterion itself still comes from the Sort menu; the selected row
+          // carries the same arrow.
+          BcButton {
+            id: sortDirectionButton
+            objectName: "sortDirectionButton"
+            iconText: root.sortDirectionArrow
+            height: root.controlHeight
+            tooltipText: "Reverse sort direction"
+            focusable: true
             foreground: root.foreground
             fontFamily: root.fontFamily
-            height: Style.spacing.controlHeight
-            onClicked: root.cycleShuffle()
+            onClicked: root.toggleSortDirection()
+            Keys.onPressed: function(event) { root.handleTabKey(event) }
+            Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
           }
         }
 
+        // v3.5.4: the "Syncing library..." label lives in this controls row,
+        // right-aligned to the search field's right edge. It is an overlay, not
+        // a Row child, so showing/hiding it can never shift the controls.
         Text {
-          visible: root.service && root.service.status !== ""
+          id: syncStatusLabel
+          objectName: "syncStatusLabel"
+          visible: root.syncStatusVisible
           text: root.service ? root.service.status : ""
           color: Qt.darker(root.foreground, 1.4)
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          anchors.right: parent.right
+          // v3.5.6.1: one pixel below caption. On the real library toolbar the
+          // live gap is 122.78 px (688 albums / 33 playlists widen the Sort
+          // row); caption-sized "100%" is 126.00 px, so the live label elided
+          // it even though the fixture font fitted. This keeps every string's
+          // live-font margin >= 6 px without changing the text format.
+          font.pixelSize: Math.max(1, Style.font.caption - 1)
+          elide: Text.ElideRight
+          horizontalAlignment: Text.AlignRight
+          // v3.5.4.1: use the full gap from Sort direction's right edge + 8 px
+          // to the search field's right edge. Keeping a fixed full-width label
+          // means the measured gap cannot shrink to fit an elided string.
+          x: toolbarLeft.x + sortDirectionButton.x + sortDirectionButton.width + Style.space(8)
+          width: Math.max(0, root.searchFieldWidth - x)
           anchors.verticalCenter: parent.verticalCenter
         }
       }
 
       // library + detail -----------------------------------------------------
+      // v3.2: the row height is content-driven (see libraryRowHeight). Both
+      // panes are always exactly this tall, so their bottom edges coincide.
       Row {
+        id: libraryRow
+        objectName: "libraryRow"
+        visible: !root.helpOpen
         width: parent.width
-        height: Style.space(430)
+        height: root.libraryRowHeight
         spacing: Style.spacing.md
 
-        ListView {
-          id: listColumn
-          width: parent.width * 0.38
-          height: parent.height
-          clip: true
-          model: root.query !== ""
-            ? root.searchTracks
-            : (root.service && root.service.activeTab === 1 ? root.playlists : root.albums)
-          delegate: Rectangle {
-            width: listColumn.width
-            height: Style.space(40)
-            color: "transparent"
-            radius: Style.cornerRadius
-
-            readonly property bool isSearch: root.query !== ""
-            readonly property bool isPlaylist: !isSearch && root.service && root.service.activeTab === 1
-            readonly property var item: modelData
-            readonly property bool selected: (!isSearch && !isPlaylist && root.selectedAlbum === item)
-              || (isPlaylist && root.selectedPlaylist === item)
-
-            Rectangle {
-              anchors.fill: parent
-              radius: parent.radius
-              color: parent.selected ? Style.selectedFillFor(root.foreground, Color.accent)
-                : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
-            }
-
-            Text {
-              textFormat: Text.PlainText
-              anchors.fill: parent
-              anchors.leftMargin: Style.spacing.sm
-              anchors.rightMargin: Style.spacing.sm
-              verticalAlignment: Text.AlignVCenter
-              elide: Text.ElideRight
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              text: {
-                var it = modelData
-                if (!it) return ""
-                if (parent.isSearch) return (it.title || "") + (it.artist ? "  ·  " + it.artist : "")
-                if (parent.isPlaylist) return it.name || it.title || "Playlist"
-                return (it.title || "") + (it.artist ? "  ·  " + it.artist : "")
-              }
-            }
-
-            MouseArea {
-              id: mouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                var it = parent.item
-                if (!it) return
-                if (root.query !== "") { root.playTrackNow(it, root.searchTracks); return }
-                if (root.service && root.service.activeTab === 1) root.pickPlaylist(it)
-                else root.pickAlbum(it)
-              }
-            }
-          }
-        }
-
         BorderSurface {
-          width: parent.width - listColumn.width - Style.spacing.md
+          id: leftPane
+          objectName: "leftPane"
+          // v3.2: keep list/detail proportions close to the old 38/62, while
+          // giving the narrower list enough width that no title truncates
+          // that fitted at the v3.1 width (verified against the real library).
+          width: parent.width * 0.422
           height: parent.height
           radius: Style.cornerRadius
           color: "transparent"
-          // Frame the detail pane with the theme's brightest colour so it
-          // reads as its own surface, distinct from the list on the left.
-          borderSpec: Border.flat(Util.alpha(Color.accent, 0.75), Style.normalBorderWidth)
+          borderSpec: root.paneBorderSpec
 
-          Column {
+          Item {
             anchors.fill: parent
-            anchors.margins: Style.spacing.sm
-            spacing: Style.spacing.sm
-
-            Text {
-            textFormat: Text.PlainText
-            width: parent.width
-            height: Style.space(24)
-            text: root.detailTitle()
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: true
-            elide: Text.ElideRight
-            verticalAlignment: Text.AlignVCenter
-          }
+            anchors.margins: Style.space(1)
 
           ListView {
-            id: trackList
-            width: parent.width
-            height: parent.height - Style.space(24) - parent.spacing
+            id: listColumn
+            objectName: "leftList"
+            anchors.fill: parent
             clip: true
-            model: root.detailTracks()
-            delegate: Rectangle {
-              width: ListView.view.width
-              height: Style.space(34)
-              color: "transparent"
-              radius: Style.cornerRadius
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.listRows
 
-              readonly property var track: modelData
-              readonly property bool current: root.service && root.currentTrack === track
+            // v3.3: search rows are grouped by section. Header rows are small,
+            // non-interactive labels with the section count; item rows keep the
+            // existing two-line treatment. Empty-query rows are unchanged.
+            delegate: Item {
+              id: rowItem
+              width: listColumn.width
+              height: rowItem.isHeader
+                ? sectionHeader.implicitHeight + Style.space(6)
+                : rowCol.implicitHeight + Style.space(10)
 
-              Rectangle {
-                anchors.fill: parent
-                radius: parent.radius
-                color: parent.current ? Style.selectedFillFor(root.foreground, Color.accent)
-                  : (tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+              readonly property var raw: modelData
+              readonly property bool isSearch: root.query !== ""
+              readonly property bool isHeader: isSearch && !!raw && raw.rowKind === "header"
+              readonly property bool isPlaylist: !isSearch && root.service && root.service.activeTab === 1
+              readonly property var item: (isSearch && raw && raw.item !== undefined) ? raw.item : raw
+              readonly property string rowKind: isSearch && raw ? (raw.rowKind || "track") : (isPlaylist ? "playlist" : "album")
+              readonly property bool selected: !!item && !isSearch
+                && (isPlaylist ? root.selectedPlaylistUid === item.uid : root.selectedAlbumUid === item.uid)
+              readonly property bool cursor: root.focusPane === "list" && index === root.listCursor
+              readonly property bool preorder: !!item && !isSearch && !isPlaylist && item.isPreorder === true
+
+              Text {
+                id: sectionHeader
+                objectName: "sectionHeader"
+                visible: rowItem.isHeader
+                textFormat: Text.PlainText
+                x: Style.space(11)
+                width: parent.width - Style.space(19)
+                anchors.verticalCenter: parent.verticalCenter
+                horizontalAlignment: Text.AlignLeft
+                LayoutMirroring.enabled: false
+                elide: Text.ElideRight
+                text: rowItem.isHeader && rowItem.raw ? (rowItem.raw.title || "") : ""
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
               }
 
-              Row {
+              Rectangle {
+                objectName: "rowFill"
+                visible: !rowItem.isHeader
                 anchors.fill: parent
-                anchors.leftMargin: Style.spacing.sm
-                anchors.rightMargin: Style.spacing.sm
-                spacing: Style.spacing.sm
+                radius: Style.cornerRadius
+                color: rowItem.selected ? Util.alpha(Color.accent, 0.22)
+                  : (rowItem.cursor ? Util.alpha(Color.accent, 0.12)
+                    : (mouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"))
+                // v3.5.1: a focused row carries the theme accent ring.
+                border.color: rowItem.cursor ? Color.accent : "transparent"
+                border.width: rowItem.cursor ? Style.focusBorderWidth : 0
+              }
+
+              Rectangle {
+                objectName: "rowBar"
+                visible: rowItem.selected
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.topMargin: Style.space(3)
+                anchors.bottomMargin: Style.space(3)
+                width: Style.space(3)
+                radius: width / 2
+                color: Color.accent
+              }
+
+              Column {
+                id: rowCol
+                visible: !rowItem.isHeader
+                x: Style.space(11)
+                width: parent.width - Style.space(19)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
 
                 Text {
+                  objectName: "rowTitle"
                   textFormat: Text.PlainText
-                  text: (track.track_num ? track.track_num + "." : "")
-                  width: Style.space(28)
-                  color: Qt.darker(root.foreground, 1.4)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                  textFormat: Text.PlainText
-                  text: track.title || ""
-                  width: parent.width - Style.space(90)
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
                   elide: Text.ElideRight
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
-                  anchors.verticalCenter: parent.verticalCenter
+                  font.bold: rowItem.selected
+                  text: rowItem.isHeader ? "" : (rowItem.item
+                    ? (rowItem.rowKind === "playlist" ? (rowItem.item.name || rowItem.item.title || "Playlist") : (rowItem.item.title || ""))
+                    : "")
                 }
+
                 Text {
+                  objectName: "rowSub"
                   textFormat: Text.PlainText
-                  text: track.duration
-                    ? Math.floor(track.duration / 60) + ":" + ("0" + Math.floor(track.duration % 60)).slice(-2)
-                    : ""
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
                   color: Qt.darker(root.foreground, 1.5)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  anchors.verticalCenter: parent.verticalCenter
+                  text: {
+                    if (rowItem.isHeader) return ""
+                    var it = rowItem.item
+                    if (!it) return ""
+                    if (rowItem.isSearch) {
+                      if (rowItem.rowKind === "album") return it.artist || ""
+                      if (rowItem.rowKind === "playlist") {
+                        var n = it.totalCount !== undefined ? it.totalCount : (it.tracks ? it.tracks.length : 0)
+                        return n + (n === 1 ? " track" : " tracks")
+                      }
+                      return (it.artist || "") + (it.album ? "  ·  " + it.album : "")
+                    }
+                    if (rowItem.isPlaylist) return it.totalCount + (it.totalCount === 1 ? " track" : " tracks")
+                    return it.artist || ""
+                  }
+                }
+
+                Row {
+                  objectName: "rowPill"
+                  visible: rowItem.preorder
+                  spacing: Style.space(6)
+
+                  BorderSurface {
+                    height: Style.space(16)
+                    width: pillText.implicitWidth + Style.space(10)
+                    radius: Style.space(3)
+                    color: Util.alpha(Color.accent, 0.18)
+                    borderSpec: Border.flat(Color.accent, 1)
+
+                    Text {
+                      id: pillText
+                      objectName: "pillText"
+                      textFormat: Text.PlainText
+                      anchors.centerIn: parent
+                      horizontalAlignment: Text.AlignLeft
+                      LayoutMirroring.enabled: false
+                      text: "PRE-ORDER"
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  Text {
+                    objectName: "pillDate"
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
+                    visible: text !== ""
+                    text: rowItem.item && rowItem.item.releaseTs ? LibraryModel.fmtDate(rowItem.item.releaseTs) : ""
+                    color: Qt.darker(root.foreground, 1.3)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
                 }
               }
 
               MouseArea {
-                id: tMouse
+                id: mouse
                 anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.playTrackNow(track, root.detailTracks())
+                enabled: !rowItem.isHeader
+                hoverEnabled: !rowItem.isHeader
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                cursorShape: rowItem.isHeader ? Qt.ArrowCursor : Qt.PointingHandCursor
+                onClicked: function(ev) {
+                  // v3: a single click only selects. Search rows wait for a
+                  // double-click before acting: tracks play, album/playlist rows
+                  // navigate to their normal tab. Right-click opens the v3.4
+                  // queue menu for the row without changing the selection.
+                  var it = rowItem.item
+                  if (!it || rowItem.isHeader) return
+                  if (ev.button === Qt.RightButton) {
+                    if (rowItem.isSearch && rowItem.rowKind === "track") root.openTrackMenu(it, mouse, ev.x, ev.y)
+                    else root.openItemMenu(it, mouse, ev.x, ev.y)
+                    return
+                  }
+                  root.noteListClick(index)
+                  if (rowItem.isSearch) return
+                  if (rowItem.isPlaylist) root.pickPlaylist(it)
+                  else root.pickAlbum(it)
+                }
+                onDoubleClicked: function(ev) {
+                  if (ev.button !== Qt.LeftButton) return
+                  var it = rowItem.item
+                  if (!it || rowItem.isHeader || !rowItem.isSearch) return
+                  root.noteListClick(index)
+                  if (rowItem.rowKind === "album") root.activateSearchAlbum(it)
+                  else if (rowItem.rowKind === "playlist") root.activateSearchPlaylist(it)
+                  else root.playTrackNow(it, root.searchTracks)
+                }
+              }
+            }
+          }
+
+          Text {
+            objectName: "leftEmpty"
+            anchors.centerIn: parent
+            width: parent.width - Style.space(24)
+            horizontalAlignment: Text.AlignHCenter
+            LayoutMirroring.enabled: false
+            wrapMode: Text.Wrap
+            visible: listColumn.count === 0
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            text: root.query !== "" ? "No results"
+              : (root.service && root.service.activeTab === 1 ? "No playlists yet"
+                : (root.service && root.service.hidePreorders && root.service.collection.length > 0 ? "Only pre-orders here — turn off Hide pre-orders"
+                  : "No library yet — press Refresh"))
+          }
+          }
+        }
+
+        BorderSurface {
+          objectName: "detailPane"
+          width: parent.width - leftPane.width - Style.spacing.md
+          height: parent.height
+          radius: Style.cornerRadius
+          color: "transparent"
+          // v3: same shared border as the album list and the footer.
+          borderSpec: root.paneBorderSpec
+
+          Column {
+            id: detailColumn
+            anchors.fill: parent
+            anchors.margins: Style.spacing.sm
+            spacing: Style.spacing.sm
+
+            // v3.4: Up Next sits ABOVE the context's own header/content. It is
+            // the session-only user queue, in added order. Rows select nothing:
+            // double-click plays a row immediately (dropping it and everything
+            // ahead); right-click removes it. Clear only empties the queue.
+            BorderSurface {
+              id: upNextSection
+              objectName: "upNext"
+              visible: root.upNextCount > 0
+              width: parent.width
+              height: root.upNextSectionHeight
+              radius: Style.cornerRadius
+              color: "transparent"
+              // Same shared border as the panes and controls; no new colour.
+              borderSpec: root.paneBorderSpec
+              padding: root.upNextFramePadding
+
+              Column {
+                anchors.fill: parent
+                anchors.topMargin: upNextSection.contentTopInset
+                anchors.rightMargin: upNextSection.contentRightInset
+                anchors.bottomMargin: upNextSection.contentBottomInset
+                anchors.leftMargin: upNextSection.contentLeftInset
+                spacing: Style.space(2)
+
+                Item {
+                  id: upNextHeaderRow
+                  width: parent.width
+                  height: root.controlHeight
+
+                  Text {
+                    id: upNextHeader
+                    objectName: "upNextHeader"
+                    textFormat: Text.PlainText
+                    text: "Up Next (" + root.upNextCount + ")"
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  BcButton {
+                    id: upNextClear
+                    objectName: "upNextClear"
+                    text: "Clear"
+                    height: root.controlHeight
+                    focusable: true
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    tooltipText: "Clear the queue"
+                    onClicked: {
+                      if (root.service) root.service.clearUserQueue()
+                      if (root.upNextCount === 0) root.enterTrackRegion()
+                    }
+                    Keys.onPressed: function(event) { root.handleTabKey(event) }
+                    Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+                  }
+                }
+
+                ListView {
+                  id: upNextList
+                  objectName: "upNextList"
+                  width: parent.width
+                  height: root.upNextListHeight
+                  clip: true
+                  boundsBehavior: Flickable.StopAtBounds
+                  model: root.userQueue
+                  delegate: Item {
+                    id: upNextRow
+                    width: ListView.view.width
+                    height: root.upNextRowHeight
+
+                    readonly property var track: modelData
+                    readonly property bool cursor: root.focusPane === "queue" && index === root.queueCursor
+
+                    Rectangle {
+                      objectName: "upNextFill"
+                      anchors.fill: parent
+                      radius: Style.cornerRadius
+                      color: upNextRow.cursor ? Util.alpha(Color.accent, 0.12)
+                        : (upNextMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent")
+                      // v3.5.1: a focused row carries the theme accent ring.
+                      border.color: upNextRow.cursor ? Color.accent : "transparent"
+                      border.width: upNextRow.cursor ? Style.focusBorderWidth : 0
+                    }
+
+                    Column {
+                      x: Style.space(8)
+                      width: parent.width - Style.space(16)
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: 0
+
+                      Text {
+                        objectName: "upNextTitle"
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        elide: Text.ElideRight
+                        text: upNextRow.track ? (upNextRow.track.title || "") : ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+
+                      Text {
+                        objectName: "upNextSub"
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        elide: Text.ElideRight
+                        text: upNextRow.track
+                          ? (upNextRow.track.artist || "")
+                            + (upNextRow.track.album ? " · " + upNextRow.track.album : "")
+                          : ""
+                        color: Qt.darker(root.foreground, 1.5)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+
+                    MouseArea {
+                      id: upNextMouse
+                      objectName: "upNextMouse"
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      acceptedButtons: Qt.LeftButton | Qt.RightButton
+                      cursorShape: Qt.PointingHandCursor
+                      onDoubleClicked: root.playQueueRow(index)
+                      onClicked: function(mouse) {
+                        if (mouse.button === Qt.RightButton)
+                          root.openQueueMenu(index, upNextRow, mouse.x, mouse.y)
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            // Header: same two-line treatment as the rows (title wraps, artist or count
+            // on its own dimmed line), plus pre-order state and track availability.
+            // v3: no Play button here; playback starts from a double-click, Enter or
+            // the footer. "Play available" is carried by the availability line.
+            Item {
+              id: detailHeader
+              width: parent.width
+              height: headerCol.implicitHeight
+
+              Column {
+                id: headerCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                spacing: Style.space(2)
+
+                Text {
+                  objectName: "detailTitle"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  text: root.detailTitle()
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                }
+                Text {
+                  objectName: "detailSub"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  text: root.detailSubtitle()
+                  color: Qt.darker(root.foreground, 1.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  objectName: "detailPreorder"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  text: root.preorderLine()
+                  color: Color.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+                Text {
+                  objectName: "detailAvail"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  text: root.availabilityLine()
+                  color: Qt.darker(root.foreground, 1.2)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  objectName: "detailPartial"
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  visible: text !== ""
+                  wrapMode: Text.Wrap
+                  text: root.partialLine()
+                  color: Qt.darker(root.foreground, 1.5)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+
+            Item {
+              width: parent.width
+              height: Math.max(0, parent.height - detailHeader.height - root.upNextSectionHeight
+                - (root.upNextCount > 0 ? 2 : 1) * parent.spacing)
+
+              ListView {
+                id: trackList
+                objectName: "trackList"
+                anchors.fill: parent
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: root.detailTrackList
+
+                // Track titles wrap. Tracks that cannot be streamed (unreleased) are dimmed,
+                // have no hover and show "—" instead of a duration. v3: a single click only
+                // selects; a double-click starts playback at that track. Unreleased tracks
+                // cannot start playback by any gesture.
+                delegate: Item {
+                  id: trackRow
+                  width: ListView.view.width
+                  height: Math.max(Style.space(30), trackTitle.implicitHeight + Style.space(10))
+
+                  readonly property var track: modelData
+                  readonly property bool playable: !!track && track.streamable !== false
+                  readonly property bool current: !!track && !!track.uid && !!root.currentTrack && root.currentTrack.uid === track.uid
+                  readonly property bool cursor: root.focusPane === "tracks" && index === root.trackCursor
+                  opacity: playable ? 1.0 : 0.45
+
+                  Rectangle {
+                    objectName: "trackFill"
+                    anchors.fill: parent
+                    radius: Style.cornerRadius
+                    color: trackRow.current ? Util.alpha(Color.accent, 0.22)
+                      : (trackRow.cursor ? Util.alpha(Color.accent, 0.12)
+                        : (trackRow.playable && tMouse.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"))
+                    // v3.5.1: a focused row carries the theme accent ring.
+                    border.color: trackRow.cursor ? Color.accent : "transparent"
+                    border.width: trackRow.cursor ? Style.focusBorderWidth : 0
+                  }
+
+                  Rectangle {
+                    objectName: "trackBar"
+                    visible: trackRow.current
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.topMargin: Style.space(3)
+                    anchors.bottomMargin: Style.space(3)
+                    width: Style.space(3)
+                    radius: width / 2
+                    color: Color.accent
+                  }
+
+                  Text {
+                    objectName: "playingIndicator"
+                    textFormat: Text.PlainText
+                    visible: trackRow.current
+                    x: Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "\uf04b"
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Text {
+                    objectName: "trackNum"
+                    textFormat: Text.PlainText
+                    x: Style.space(22)
+                    width: Style.space(26)
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
+                    text: trackRow.track && trackRow.track.track_num ? trackRow.track.track_num + "." : ""
+                    color: Qt.darker(root.foreground, 1.4)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Text {
+                    id: trackTitle
+                    objectName: "trackTitle"
+                    textFormat: Text.PlainText
+                    x: Style.space(50)
+                    width: parent.width - Style.space(50) - Style.space(58)
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignLeft
+                    LayoutMirroring.enabled: false
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                    text: trackRow.track ? (trackRow.track.title || "") : ""
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: trackRow.current
+                  }
+
+                  Text {
+                    objectName: "trackDuration"
+                    textFormat: Text.PlainText
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(8)
+                    anchors.verticalCenter: parent.verticalCenter
+                    horizontalAlignment: Text.AlignRight
+                    LayoutMirroring.enabled: false
+                    text: trackRow.playable ? LibraryModel.fmtDuration(trackRow.track ? trackRow.track.duration : 0) : "—"
+                    color: Qt.darker(root.foreground, 1.5)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  MouseArea {
+                    id: tMouse
+                    objectName: "trackMouse"
+                    anchors.fill: parent
+                    hoverEnabled: trackRow.playable
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    cursorShape: trackRow.playable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: function(mouse) {
+                      if (!trackRow.track) return
+                      if (mouse.button === Qt.RightButton) {
+                        // Unstreamable rows still open the menu, with both
+                        // queue actions disabled.
+                        root.openTrackMenu(trackRow.track, tMouse, mouse.x, mouse.y)
+                        return
+                      }
+                      // Selection only. Audio starts on double-click (or Enter/footer).
+                      root.noteTrackClick(index)
+                      if (!trackRow.playable && root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
+                    }
+                    onDoubleClicked: {
+                      if (!trackRow.track) return
+                      root.noteTrackClick(index)
+                      if (trackRow.playable) root.playTrackNow(trackRow.track, root.detailTrackList)
+                      else if (root.service) root.service.notify(root.service.unavailableMessage(trackRow.track))
+                    }
+                  }
+                }
+              }
+
+              Text {
+                objectName: "detailEmpty"
+                anchors.centerIn: parent
+                width: parent.width - Style.space(24)
+                horizontalAlignment: Text.AlignHCenter
+                LayoutMirroring.enabled: false
+                wrapMode: Text.Wrap
+                visible: text !== ""
+                text: root.emptyLine()
+                color: Qt.darker(root.foreground, 1.4)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              // Short-lived message (e.g. "Not yet released"); floats so nothing shifts.
+              BorderSurface {
+                objectName: "noticePill"
+                visible: !!root.service && root.service.notice !== ""
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(8)
+                width: noticeText.implicitWidth + Style.space(24)
+                height: noticeText.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: Color.popups.background
+                borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
+
+                Text {
+                  id: noticeText
+                  objectName: "noticeText"
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  horizontalAlignment: Text.AlignLeft
+                  LayoutMirroring.enabled: false
+                  text: root.service ? root.service.notice : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
               }
             }
           }
         }
+      }
+
+      // v3.5 Part D: keyboard shortcuts quick reference. It swaps into the
+      // two-pane body slot; the panes and queue stay alive underneath, so
+      // selection, scroll and queue state are untouched when it closes.
+      BorderSurface {
+        id: helpView
+        objectName: "shortcutsView"
+        visible: root.helpOpen
+        width: parent.width
+        height: root.helpViewHeight
+        radius: Style.cornerRadius
+        color: "transparent"
+        borderSpec: root.paneBorderSpec
+        focus: true
+
+        Flickable {
+          id: helpFlickable
+          objectName: "shortcutsFlickable"
+          anchors.fill: parent
+          anchors.margins: Style.spacing.sm
+          contentWidth: width
+          contentHeight: helpColumns.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+          // v3.5.1: two side-by-side columns. Left: Navigation then Playback.
+          // Right: Queue then Search & menus. Same rows, text and type sizes.
+          Row {
+            id: helpColumns
+            width: helpFlickable.width
+            spacing: Style.spacing.md
+
+            Column {
+              id: helpLeftColumn
+              width: (helpColumns.width - helpColumns.spacing) / 2
+              spacing: Style.space(6)
+
+              Repeater {
+                model: root.helpLeftGroups
+
+                Column {
+                  required property var modelData
+                  width: helpLeftColumn.width
+                  spacing: Style.space(1)
+
+                  Text {
+                    objectName: "shortcutsGroup"
+                    textFormat: Text.PlainText
+                    text: modelData.title || ""
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  Repeater {
+                    model: modelData.rows
+
+                    Item {
+                      required property var modelData
+                      width: helpLeftColumn.width
+                      height: Math.max(keyText.implicitHeight, descText.implicitHeight) + Style.space(2)
+
+                      Text {
+                        id: keyText
+                        objectName: "shortcutsKey"
+                        width: Style.space(108)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.key || ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: true
+                      }
+
+                      Text {
+                        id: descText
+                        objectName: "shortcutsDesc"
+                        x: Style.space(112)
+                        width: Math.max(0, parent.width - x)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.text || ""
+                        color: Qt.darker(root.foreground, 1.35)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            Column {
+              id: helpRightColumn
+              width: (helpColumns.width - helpColumns.spacing) / 2
+              spacing: Style.space(6)
+
+              Repeater {
+                model: root.helpRightGroups
+
+                Column {
+                  required property var modelData
+                  width: helpRightColumn.width
+                  spacing: Style.space(1)
+
+                  Text {
+                    objectName: "shortcutsGroup"
+                    textFormat: Text.PlainText
+                    text: modelData.title || ""
+                    color: Color.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  Repeater {
+                    model: modelData.rows
+
+                    Item {
+                      required property var modelData
+                      width: helpRightColumn.width
+                      height: Math.max(keyText.implicitHeight, descText.implicitHeight) + Style.space(2)
+
+                      Text {
+                        id: keyText
+                        objectName: "shortcutsKey"
+                        width: Style.space(108)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.key || ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: true
+                      }
+
+                      Text {
+                        id: descText
+                        objectName: "shortcutsDesc"
+                        x: Style.space(112)
+                        width: Math.max(0, parent.width - x)
+                        textFormat: Text.PlainText
+                        horizontalAlignment: Text.AlignLeft
+                        LayoutMirroring.enabled: false
+                        wrapMode: Text.Wrap
+                        text: modelData.text || ""
+                        color: Qt.darker(root.foreground, 1.35)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Escape) { root.closeHelp(); event.accepted = true; return }
+          if (root.handleTabKey(event)) return
+          if (event.key === Qt.Key_Down) {
+            helpFlickable.contentY = Math.min(helpFlickable.contentHeight - helpFlickable.height,
+              helpFlickable.contentY + Style.space(30))
+            event.accepted = true; return
+          }
+          if (event.key === Qt.Key_Up) {
+            helpFlickable.contentY = Math.max(0, helpFlickable.contentY - Style.space(30))
+            event.accepted = true; return
+          }
         }
       }
 
       // now playing ----------------------------------------------------------
+      // Two-line now-playing text on the left; transport (Shuffle, Prev, Play/Pause,
+      // Next) right-justified. Identical BcButton style, no Stop button. A seekable
+      // progress bar with elapsed/total labels. A failed stream replaces the
+      // Artist · Album line with a visible error notice.
       BorderSurface {
+        id: footer
+        objectName: "footer"
         width: parent.width
-        height: Style.space(64)
+        // v3.1: the blank band between the now-playing text and the progress
+        // bar is halved. The footer's v3 inner height (84 - 2*5) left
+        // 54 - nowPlaying.height between them; half of that is used here, so
+        // the popup is shorter by the saving in every now-playing state and
+        // the two-line case still has positive space (nothing is clipped).
+        readonly property real footerGap: Math.max(0,
+          (Style.space(54) - nowPlaying.implicitHeight) / 2)
+        // v3.2: stopped/idle hides the progress row and drops the gap that was
+        // measured from it. Playing/paused keep exactly the v3.1 layout. The
+        // error line lives in nowPlaying, so an idle error still renders even
+        // though the bar is gone.
+        readonly property bool showProgress: root.playing || root.paused
+        height: Math.round(Style.space(5) + Math.max(nowPlaying.implicitHeight, transportRow.height)
+          + (showProgress ? footerGap + progressRow.height : 0) + Style.space(5))
         radius: Style.cornerRadius
         color: Style.normalFillFor(root.foreground, Color.accent)
-        borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+        // v3: the album list, detail pane and footer share one border colour.
+        borderSpec: root.paneBorderSpec
 
         Item {
           anchors.fill: parent
           anchors.leftMargin: Style.spacing.md
           anchors.rightMargin: Style.spacing.md
+          anchors.topMargin: Style.space(5)
+          anchors.bottomMargin: Style.space(5)
 
           Column {
+            id: nowPlaying
             anchors.left: parent.left
-            anchors.right: controls.left
-            anchors.rightMargin: Style.spacing.md
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.top: parent.top
+            width: Math.max(0, transportRow.x - Style.spacing.md)
             spacing: Style.space(2)
 
             Text {
+              objectName: "footerTitle"
               textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
               text: root.currentTrack ? (root.currentTrack.title || "") : "Nothing playing"
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
               font.bold: true
-              elide: Text.ElideRight
               width: parent.width
+              wrapMode: Text.Wrap
+              maximumLineCount: 2
+              elide: Text.ElideRight
             }
             Text {
+              objectName: "footerSub"
               textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
+              visible: root.playbackError === ""
               text: root.currentTrack
                 ? ((root.currentTrack.artist || "") + (root.currentTrack.album ? "  ·  " + root.currentTrack.album : ""))
                 : ""
@@ -446,8 +2243,12 @@ Panel {
               width: parent.width
             }
             Text {
-              visible: root.service && root.service.playbackError !== ""
-              text: root.service ? root.service.playbackError : ""
+              objectName: "footerError"
+              textFormat: Text.PlainText
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
+              visible: root.playbackError !== ""
+              text: root.playbackError
               color: Color.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -457,76 +2258,473 @@ Panel {
           }
 
           Row {
-            id: controls
+            id: transportRow
+            objectName: "transportRow"
             anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.top: parent.top
             spacing: Style.spacing.sm
+
+            // Per-context shuffle moved here from the toolbar in v3. Same state
+            // model as v2; highlighted while the current context is On.
+            BcButton {
+              id: footerShuffle
+              objectName: "footerShuffle"
+              iconText: "\uf074"
+              height: root.controlHeight
+              tooltipText: "Shuffle: " + (root.shuffleOn ? "On" : "Off")
+              selected: root.shuffleOn
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: if (root.service) root.service.toggleShuffle(root.contextKey)
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+
+              // v3.1: a tiny dot centred under the glyph marks this context's
+              // Shuffle as On. It lives in the button's bottom padding, so the
+              // button's height/layout never change.
+              Rectangle {
+                objectName: "shuffleDot"
+                visible: root.shuffleOn
+                width: Style.space(4)
+                height: width
+                radius: width / 2
+                color: Color.accent
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Style.space(2)
+              }
+            }
 
             // Nerd Font glyphs (PUA range) so the icons stay monochrome and
             // inherit the theme — Unicode media symbols such as U+23F8 fall
             // back to colour-emoji presentation and paint their own background.
-            Button {
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
+            BcButton {
+              id: footerPrev
+              objectName: "footerPrev"
               iconText: "\uf048"
+              height: root.controlHeight
               tooltipText: "Previous"
+              focusable: true
               foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.prev()
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
             }
 
-            // Primary play/pause: persistent fill built from the active theme's
-            // accent colour so it matches the theme rather than a fixed hue.
-            BorderSurface {
-              id: playButton
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
-              radius: Style.cornerRadius
-              color: Util.alpha(Color.accent, playMouse.containsMouse ? 0.5 : 0.3)
-              Behavior on color { ColorAnimation { duration: 100 } }
-
-              Text {
-                textFormat: Text.PlainText
-                anchors.centerIn: parent
-                text: root.playing && !root.paused ? "\uf04c" : "\uf04b"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.iconLarge
-              }
-
-              MouseArea {
-                id: playMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (root.service) root.service.togglePlay()
-              }
-
-              PanelToolTip {
-                visible: playMouse.containsMouse
-                text: root.playing && !root.paused ? "Pause" : "Play"
-                fontFamily: root.fontFamily
-              }
-            }
-
-            Button {
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
-              iconText: "\uf04d"
-              tooltipText: "Stop"
+            // One button: Play when idle/paused, Pause while playing. The Stop button is
+            // gone (mpv needs no stop to release a stream; loading replaces it).
+            BcButton {
+              id: footerPlay
+              objectName: "footerPlay"
+              iconText: root.playing && !root.paused ? "\uf04c" : "\uf04b"
+              height: root.controlHeight
+              tooltipText: root.playing && !root.paused ? "Pause" : "Play"
+              active: root.playing && !root.paused
+              focusable: true
               foreground: root.foreground
-              onClicked: if (root.service) root.service.stop()
+              fontFamily: root.fontFamily
+              onClicked: {
+                if (!root.service) return
+                if (root.service.currentTrack) root.service.togglePlay()
+                else root.playContextNow()
+              }
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
             }
-            Button {
-              width: Style.spacing.controlHeight
-              height: Style.spacing.controlHeight
+
+            BcButton {
+              id: footerNext
+              objectName: "footerNext"
               iconText: "\uf051"
+              height: root.controlHeight
               tooltipText: "Next"
+              focusable: true
               foreground: root.foreground
+              fontFamily: root.fontFamily
               onClicked: if (root.service) root.service.next()
+              Keys.onPressed: function(event) { root.handleTabKey(event) }
+              Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+            }
+          }
+
+          Item {
+            id: progressRow
+            objectName: "progressRow"
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: Style.space(20)
+            visible: footer.showProgress
+
+            Text {
+              id: elapsedLabel
+              objectName: "elapsedLabel"
+              textFormat: Text.PlainText
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignLeft
+              LayoutMirroring.enabled: false
+              text: root.fmtTime(root.shownSeconds())
+              color: Qt.darker(root.foreground, 1.3)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              id: totalLabel
+              objectName: "totalLabel"
+              textFormat: Text.PlainText
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignRight
+              LayoutMirroring.enabled: false
+              text: root.fmtTime(root.duration)
+              color: Qt.darker(root.foreground, 1.3)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Item {
+              id: seekArea
+              objectName: "seekArea"
+              anchors.left: elapsedLabel.right
+              anchors.right: totalLabel.left
+              anchors.leftMargin: Style.space(8)
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              height: parent.height
+
+              Rectangle {
+                id: progressTrack
+                objectName: "progressTrack"
+                anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                height: Style.space(4)
+                radius: height / 2
+                color: Util.alpha(root.foreground, 0.25)
+              }
+
+              Rectangle {
+                id: progressFill
+                objectName: "progressFill"
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: progressTrack.width * root.shownProgress()
+                height: progressTrack.height
+                radius: progressTrack.radius
+                color: Color.accent
+              }
+
+              Rectangle {
+                id: seekHandle
+                objectName: "seekHandle"
+                visible: root.duration > 0
+                width: Style.space(10)
+                height: width
+                radius: width / 2
+                color: Color.accent
+                anchors.verticalCenter: parent.verticalCenter
+                x: Math.max(0, Math.min(progressTrack.width - width, progressTrack.width * root.shownProgress() - width / 2))
+              }
+
+              // Click to seek, drag to scrub: the fill follows the pointer while the
+              // button is down and the seek is sent on release.
+              MouseArea {
+                id: seekMouse
+                objectName: "seekMouse"
+                anchors.fill: parent
+                enabled: root.duration > 0
+                hoverEnabled: true
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                property real preview: -1
+                function ratioAt(x) { return width > 0 ? Math.max(0, Math.min(1, x / width)) : 0 }
+                onPressed: function(mouse) { preview = ratioAt(mouse.x) }
+                onPositionChanged: function(mouse) { if (pressed) preview = ratioAt(mouse.x) }
+                onReleased: function(mouse) {
+                  var r = ratioAt(mouse.x)
+                  preview = -1
+                  if (root.service) root.service.seekTo(r * root.duration)
+                }
+                onCanceled: preview = -1
+              }
             }
           }
         }
       }
+    }
+
+    // v3.5.4: the cat column. From the search field's right edge to the
+    // panel's right inner edge, and from the panel's top border down to the
+    // top of the panes. The whole column is the settings button; the mark is
+    // fitted inside it and positioned by its ink centroid.
+    Item {
+      id: headerCatColumn
+      objectName: "headerCatColumn"
+      x: root.searchFieldWidth
+      y: -root.headerTopInset
+      width: root.headerCatColumnWidth
+      height: root.headerCatColumnHeight
+      z: 10
+
+      BcButton {
+        id: menuButton
+        objectName: "settingsButton"
+        x: 0
+        y: 0
+        width: parent.width
+        height: parent.height
+        text: ""
+        iconText: ""
+        bordered: false
+        focusable: true
+        tooltipText: "Settings"
+        active: root.menuOpen
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        // No static border or background. Keyboard focus is the same accent
+        // token as every other focused control (Item 3).
+        borderSpec: activeFocus ? Border.flat(Color.accent, Style.focusBorderWidth) : Border.none()
+        onClicked: root.toggleMenu()
+        Keys.onPressed: function(event) { root.handleTabKey(event) }
+        Keys.onEscapePressed: function(event) { root.handleEscape(); event.accepted = true }
+
+        CatMark {
+          id: catStencil
+          objectName: "catStencil"
+          readonly property real fitMargin: Style.space(4)
+          // Fit inside the whole column on both axes, preserving the slim
+          // trace's aspect ratio, then render at 95% of that fit.
+          width: Math.min(parent.width - 2 * fitMargin,
+            (parent.height - 2 * fitMargin) * artAspect) * root.catFitScale
+          height: width / artAspect
+          // v3.5.4.1: centre the rendered ink centroid, then nudge it down by
+          // 3 px. The clamps keep the whole bbox inside the column, the ink at
+          // least 6 px below the panel's top border, and the centroid target
+          // (column centre + nudge) inside the reachable placement range.
+          x: Math.max(0, Math.min(parent.width - width,
+            parent.width / 2 - inkCentroidX * width))
+          y: Math.max(Style.space(6), Math.min(parent.height - height - 1,
+            parent.height / 2 + root.catCentreNudgeY - inkCentroidY * height))
+          tintColor: Color.accent
+        }
+      }
+    }
+
+    // Panel-scoped key catcher for the two lists. It only has focus after the
+    // user enters a list (Down/Up or a row click); it registers nothing global.
+    Item {
+      id: listKeyCatcher
+      objectName: "listKeyCatcher"
+      anchors.fill: parent
+      focus: true
+      Keys.priority: Keys.BeforeItem
+      Keys.onPressed: function(event) {
+        // v3.5 addendum: while a row context menu is open it owns Up/Down,
+        // Enter and Esc. Focus returns to the row that opened it on close.
+        if (root.contextMenuOpen) {
+          if (event.key === Qt.Key_Escape) root.closeContextMenu()
+          else if (event.key === Qt.Key_Down) root.moveContextMenu(1)
+          else if (event.key === Qt.Key_Up) root.moveContextMenu(-1)
+          else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.activateContextMenu()
+          event.accepted = true
+          return
+        }
+        // v3.3.1/v3.5: Tab/Shift+Tab move focus out of the lists. Handled
+        // before the type-to-search branch so U+0009 can never become query text.
+        if (root.handleTabKey(event)) return
+        if (event.key === Qt.Key_Escape) {
+          root.handleEscape(); event.accepted = true; return
+        }
+        // v3.5 Part C addendum: Menu / Shift+F10 opens the focused row's menu.
+        if (event.key === Qt.Key_Menu
+            || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+          root.openFocusedRowMenu(); event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+          root.moveCursor(event.key === Qt.Key_Down ? 1 : -1); event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Left) { root.switchPane(-1); event.accepted = true; return }
+        if (event.key === Qt.Key_Right) { root.switchPane(1); event.accepted = true; return }
+        if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+          // v3.5 Part C: Ctrl/Alt+Enter are queue actions on the focused track
+          // or album/playlist, never the plain Enter activation. Up Next has
+          // only Delete and Enter (play now).
+          if (event.modifiers & Qt.ControlModifier) {
+            if (root.focusPane === "tracks") root.addFocusedTrackToQueue()
+            else if (root.focusPane === "list") root.addFocusedItemToQueue()
+            event.accepted = true; return
+          }
+          if (event.modifiers & Qt.AltModifier) {
+            if (root.focusPane === "tracks") root.playNextFocusedTrack()
+            event.accepted = true; return
+          }
+          if (root.focusPane === "queue") root.playQueueRow(root.queueCursor)
+          else root.activateCursor()
+          event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Delete && root.focusPane === "queue") {
+          root.removeFocusedQueueRow(); event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Space) {
+          // Only reached when the search field does NOT have focus, so Space
+          // never steals a space from a search query.
+          if (root.service) root.service.togglePlay()
+          event.accepted = true; return
+        }
+        if (event.key === Qt.Key_Slash || event.text === "/") { root.focusSearch(); event.accepted = true; return }
+        // Typing while a list is focused returns to search and keeps the character.
+        // v3.3.1: only a genuine printable character qualifies; navigation and
+        // control keys carry empty or control-character event.text and must never
+        // be appended to the query (the Tab/Down/Tab blanking bug).
+        if (root.isPrintableText(event.text) && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+          root.focusSearch()
+          searchField.text = searchField.text + event.text
+          searchField.cursorPosition = searchField.text.length
+          event.accepted = true
+        }
+      }
+    }
+
+    // v3.4 row context menu (Play Next / Add to Queue / Remove from queue).
+    // Separate from the gear/sort card so right-click never moves the toolbar
+    // menu. Clamped inside the window; click-outside closes it.
+    Item {
+      id: contextMenuLayer
+      anchors.fill: parent
+      visible: root.contextMenuOpen
+      z: 60
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.closeContextMenu()
+      }
+
+      BorderSurface {
+        id: contextMenuCard
+        objectName: "contextMenu"
+        width: Style.space(240)
+        height: contextMenuColumn.implicitHeight + contentTopInset + contentBottomInset
+        radius: Style.cornerRadius
+        color: Color.popups.background
+        borderSpec: Border.flat(Color.popups.border, Style.normalBorderWidth)
+        padding: Style.space(6)
+        x: Math.max(0, Math.min(contextMenuLayer.width - width, root.contextMenuAnchorX))
+        y: Math.max(0, Math.min(contextMenuLayer.height - height, root.contextMenuAnchorY))
+
+        MouseArea { anchors.fill: parent; onClicked: {} }
+
+        Column {
+          id: contextMenuColumn
+          anchors.fill: parent
+          anchors.topMargin: contextMenuCard.contentTopInset
+          anchors.rightMargin: contextMenuCard.contentRightInset
+          anchors.bottomMargin: contextMenuCard.contentBottomInset
+          anchors.leftMargin: contextMenuCard.contentLeftInset
+          spacing: Style.spacing.sm
+
+          Repeater {
+            model: root.contextMenuEntries
+
+            BcButton {
+              required property int index
+              required property var modelData
+              objectName: "contextMenuButton"
+              width: contextMenuColumn.width
+              leftAlign: true
+              text: modelData.label
+              iconText: "\u2003"
+              trailingText: modelData.hint || ""
+              active: root.contextMenuIndex === index
+              enabled: modelData.enabled !== false
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.runContextAction(modelData.action)
+            }
+          }
+        }
+      }
+    }
+
+    // Menu card (⋯ overflow menu and Sort menu) ------------------------------------
+    // Click anywhere outside the card closes the menu (the window itself stays open);
+    // the card sits just under the button that opened it.
+    Item {
+      id: menuLayer
+      anchors.fill: parent
+      visible: root.menuOpen
+      z: 50
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: root.closeMenu()
+      }
+
+      BorderSurface {
+        id: menuCard
+        objectName: "menuCard"
+        width: Math.min(root.menuKind === "sort" ? Style.space(220) : Style.space(300), parent.width)
+        height: menuColumn.implicitHeight + contentTopInset + contentBottomInset
+        radius: Style.cornerRadius
+        color: Color.popups.background
+        borderSpec: Border.flat(Color.popups.border, Style.normalBorderWidth)
+        padding: Style.space(6)
+
+        MouseArea { anchors.fill: parent; onClicked: {} }
+
+        Column {
+          id: menuColumn
+          anchors.fill: parent
+          anchors.topMargin: menuCard.contentTopInset
+          anchors.rightMargin: menuCard.contentRightInset
+          anchors.bottomMargin: menuCard.contentBottomInset
+          anchors.leftMargin: menuCard.contentLeftInset
+          spacing: Style.spacing.sm
+
+          Repeater {
+            model: root.menuItems
+
+            BcButton {
+              required property int index
+              required property var modelData
+              width: menuColumn.width
+              leftAlign: true
+              text: modelData.label
+              leadingIconText: modelData.leadingIcon || ""
+              leadingIconSpinning: modelData.spinning === true
+              iconText: modelData.icon !== undefined ? modelData.icon : ""
+              tooltipText: modelData.tooltip || ""
+              trailingText: modelData.trailing || ""
+              selected: modelData.checked === true
+              active: root.menuIndex === index
+              enabled: modelData.enabled !== false
+              iconSpinning: modelData.spinning === true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.runMenuAction(modelData.action)
+            }
+          }
+        }
+      }
+    }
+
+    // Logout confirmation. Cancel is preselected so an accidental Return is the
+    // safe answer.
+    ConfirmDialog {
+      id: logoutConfirm
+      anchors.fill: parent
+      z: 100
+      opened: root.logoutConfirmOpen
+      message: "Log out of Bandcamp? This deletes the Bandcamp session the plugin imported from your browser. "
+        + "Your cached library stays, but private items won't load until a session is imported again on the next Refresh."
+      cancelText: "Cancel"
+      confirmText: "Log out"
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+      onOpenedChanged: if (opened) selectedIndex = 0
+      onCanceled: root.cancelLogout()
+      onConfirmed: root.confirmLogout()
     }
   }
 }

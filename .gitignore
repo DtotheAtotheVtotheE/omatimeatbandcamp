@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.sqlite
+*.tmp
+*.txt
+*.json
+*.log
+.cache/
+
+# Sensitive files: browser-session importer, cookie jars and backups, credentials, env files
+cookies.py
+cookies.txt*
+*.bak
+*.bak-*
+credentials*
+.env*
+
+# QML test fixture (synthetic library, no account data)
+!tests/qml/fixtures/library.json
