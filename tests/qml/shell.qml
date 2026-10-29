@@ -14,6 +14,7 @@ import qs.Commons
 import qs.Commons as Commons
 import "plug" as Plug
 import "plug/LibraryModel.js" as LibraryModel
+import "plug/UserQueue.js" as UserQueue
 
 ShellRoot {
   id: host
@@ -101,6 +102,15 @@ ShellRoot {
     cache: false
     asynchronous: true
     source: "file://" + svc.artPath + "?v=" + svc.artRevision
+  }
+
+  // v3.5.5: write a deliberately corrupt queue.json so the restore path reads a
+  // real file off disk (the service watches its own queue file).
+  FileView {
+    id: rawQueueFile
+    path: svc.stateDir + "/queue.json"
+    atomicWrites: true
+    printErrors: false
   }
 
   // Load the gear-menu screenshot back from disk so the check measures a real
@@ -408,6 +418,12 @@ ShellRoot {
     svc.pendingSeek = -1
     svc.playbackError = ""
     svc.notice = ""
+    // v3.5.5: tests mutate the model directly here, so keep the persisted copy
+    // in step with the clean slate too.
+    svc.saveQueue()
+  }
+  function clearQueueMemory() {
+    svc.userQueueState = { pending: [], current: null, resumeIndex: -1, history: [] }
   }
   function queueTitles() {
     return svc.userQueue.map(function(t) { return t.title })
@@ -3302,6 +3318,137 @@ ShellRoot {
       check("cold start: next never starts unrequested playback", svc.isPlaying === false && svc.currentTrack === null && svc.position === 0)
       svc.prev()
       check("cold start: previous never starts unrequested playback", svc.isPlaying === false && svc.currentTrack === null && svc.position === 0)
+    },
+
+    // ---- v3.5.5: queue persistence (Up Next only) ------------------------
+    function() {
+      resetUserQueueChecks()
+      svc.loadLibrary()
+      panel.selectedPlaylistUid = ""
+      panel.selectedAlbumUid = ""
+      panel.pickAlbum(svc.collection[collIndex("La Dee La La")])
+      var alb = svc.collection[collIndex("La Dee La La")]
+      host.probe = { t0: alb.tracks[0], t1: alb.tracks[1], t2: alb.tracks[2] }
+      check("v3.5.5: a clean slate starts with an empty Up Next queue", svc.userQueue.length === 0)
+    },
+    function() {
+      // Save/load round-trip: add two fixture tracks, forget the in-memory
+      // state, and read the persisted queue back.
+      svc.addTrackToQueue(host.probe.t0)
+      svc.addTrackToQueue(host.probe.t1)
+      host.probe.saved = queueTitles().join("|")
+      clearQueueMemory()
+      svc.restoreQueue()
+      check("v3.5.5: the Up Next queue survives a save/load round-trip",
+        queueTitles().join("|") === host.probe.saved &&
+        host.probe.saved === "La Dee La La Song|Waiting For Marvin")
+      check("v3.5.5: a restored queue starts stopped (playback is not restored)",
+        svc.currentUserTrack === null && svc.isPlaying === false && svc.isPaused === false)
+    },
+    function() {
+      // Duplicates are entries, not indices: A,B,A must come back as A,B,A.
+      svc.clearUserQueue()
+      svc.addTrackToQueue(host.probe.t0)
+      svc.addTrackToQueue(host.probe.t1)
+      svc.addTrackToQueue(host.probe.t0)
+      clearQueueMemory()
+      svc.restoreQueue()
+      check("v3.5.5: duplicates and their order survive a save/load round-trip",
+        queueTitles().join("|") === "La Dee La La Song|Waiting For Marvin|La Dee La La Song")
+    },
+    function() {
+      // Consumption: playing the head removes it, and the persisted copy must
+      // not bring it back after a simulated restart. Synthetic collection
+      // tracks keep this check off the network (no stream source).
+      resetUserQueueChecks()
+      var ts = [
+        { uid: "v355#0", title: "Persist A", artist: "P", album: "Persist", duration: 10, streamable: true },
+        { uid: "v355#1", title: "Persist B", artist: "P", album: "Persist", duration: 10, streamable: true },
+        { uid: "v355#2", title: "Persist C", artist: "P", album: "Persist", duration: 10, streamable: true }
+      ]
+      svc.collection = svc.collection.concat([synth("v355", "Persist", "P", ts)])
+      svc.addTrackToQueue(ts[0])
+      svc.addTrackToQueue(ts[1])
+      svc.addTrackToQueue(ts[2])
+      svc.startUserQueueAt(0)
+      check("v3.5.5: starting a queued track consumes it from Up Next",
+        svc.currentUserTrack === ts[0] && queueTitles().join("|") === "Persist B|Persist C")
+      clearQueueMemory()
+      svc.restoreQueue()
+      check("v3.5.5: consumption persists across a simulated restart",
+        queueTitles().join("|") === "Persist B|Persist C" && svc.currentUserTrack === null)
+    },
+    function() {
+      // Clear persists: the live queue and the file both end up empty.
+      resetUserQueueChecks()
+      svc.addTrackToQueue(host.probe.t0)
+      svc.clearUserQueue()
+      clearQueueMemory()
+      svc.restoreQueue()
+      check("v3.5.5: Clear persists across a simulated restart", svc.userQueue.length === 0)
+    },
+    function() {
+      // A new playback context clears the queue AND its persisted copy.
+      resetUserQueueChecks()
+      var a = synth("v355nca", "Persist A", "P", mk("v355pa", 2))
+      var b = synth("v355ncb", "Persist B", "P", mk("v355pb", 2))
+      svc.collection = svc.collection.concat([a, b])
+      svc.playContext("album", "Persist A", a.tracks, 0, "album:v355nca")
+      svc.addTrackToQueue(a.tracks[1])
+      svc.playContext("album", "Persist B", b.tracks, 0, "album:v355ncb")
+      clearQueueMemory()
+      svc.restoreQueue()
+      check("v3.5.5: a new playback context clears the persisted queue",
+        svc.userQueue.length === 0)
+    },
+    function() {
+      // Revalidation: an entry whose track is gone is dropped silently.
+      resetUserQueueChecks()
+      var gone = { uid: "gone#0", title: "Gone Track", artist: "Nobody", album: "Nowhere" }
+      svc.restoreQueue(JSON.stringify({ version: 1, pending: [UserQueue.identityOf(gone), UserQueue.identityOf(host.probe.t0)] }))
+      check("v3.5.5: restore silently drops an entry whose track is gone",
+        queueTitles().join("|") === "La Dee La La Song")
+    },
+    function() {
+      // Revalidation: an entry that is no longer streamable is dropped too.
+      resetUserQueueChecks()
+      var ut = { uid: "v355u#0", title: "Not Streamable", artist: "P", album: "Persist", duration: 10, streamable: false }
+      svc.collection = svc.collection.concat([synth("v355u", "Persist", "P", [ut])])
+      svc.restoreQueue(JSON.stringify({ version: 1, pending: [UserQueue.identityOf(host.probe.t0), UserQueue.identityOf(ut)] }))
+      check("v3.5.5: restore silently drops an entry that is no longer streamable",
+        queueTitles().join("|") === "La Dee La La Song")
+    },
+    function() {
+      // Corrupt and missing data both mean an empty queue, never an error and
+      // never a broken panel.
+      svc.userQueueState = { pending: [host.probe.t0], current: null, resumeIndex: -1, history: [] }
+      svc.restoreQueue("{ this is not json")
+      check("v3.5.5: a corrupt persisted queue restores as empty and leaves the panel working",
+        svc.userQueue.length === 0 && panel.opened === true && named(stage, "upNext").visible === false)
+      svc.restoreQueue("")
+      check("v3.5.5: a missing persisted queue restores as empty (no error)",
+        svc.userQueue.length === 0 && panel.opened === true)
+    },
+    function() {
+      // Real corrupt file on disk (the service watches queue.json).
+      svc.userQueueState = { pending: [host.probe.t0], current: null, resumeIndex: -1, history: [] }
+      rawQueueFile.setText("{ definitely not json")
+    },
+    function() {
+      svc.restoreQueue()
+      check("v3.5.5: an on-disk corrupt queue.json restores as empty, panel fine",
+        svc.userQueue.length === 0 && panel.opened === true)
+    },
+    function() {
+      // Leave a real fixture queue on disk for the relaunch phase. This is the
+      // last mutation: no later step may overwrite it.
+      resetUserQueueChecks()
+      svc.loadLibrary()
+      var alb = svc.collection[collIndex("La Dee La La")]
+      svc.addTrackToQueue(alb.tracks[0])
+      svc.addTrackToQueue(alb.tracks[1])
+      check("v3.5.5: the queue left for the relaunch phase is the fixture album's first two tracks",
+        queueTitles().join("|") === "La Dee La La Song|Waiting For Marvin")
     }
   ]
 
@@ -3326,7 +3473,9 @@ ShellRoot {
       prepLists()
       check("[relaunch] sort choice restored from disk (Title A–Z)", svc.sortMode === "title" && !!button("Sort: Title A–Z"))
       check("[relaunch] Hide pre-orders restored (On)", svc.hidePreorders === true)
-      check("[relaunch] session-only user queue starts empty on a fresh service", svc.userQueue.length === 0 && svc.currentUserTrack === null)
+      check("[relaunch] v3.5.5: the persisted Up Next queue is restored, stopped",
+        svc.userQueue.length === 2 && queueTitles().join("|") === "La Dee La La Song|Waiting For Marvin" &&
+        svc.currentUserTrack === null && svc.isPlaying === false)
       check("[relaunch] list is Title A–Z without pre-orders", titlesEqual(leftTitles(), noPre(expTitle)))
       check("[relaunch] Albums (N) reflects the restored filter", !!button("Albums (11)"))
       openSettings()

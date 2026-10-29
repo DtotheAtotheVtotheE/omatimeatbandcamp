@@ -191,6 +191,7 @@ Item {
         if (d.meta.finished) lastUpdated = String(d.meta.finished)
         if (d.meta.user) detectedUser = String(d.meta.user)
       }
+      maybeRestoreQueue()
     } catch (e) {
     }
   }
@@ -205,6 +206,82 @@ Item {
   }
 
   Process { id: mkStateDir; running: false; command: ["mkdir", "-p", root.stateDir] }
+
+  // v3.5.5: the Up Next list survives a shell restart. Same state directory and
+  // FileView pattern as ui.json. Only identity records are written (see
+  // UserQueue.serialize); playback context, now-playing and position are not.
+  //
+  // Writes are synchronous: a queue mutation and the shell restarting right
+  // after it must not race, or a played/resumed item could come back. Reads are
+  // synchronous too, so restore always sees the file on disk (never a cached
+  // previous copy).
+  FileView {
+    id: queueFile
+    path: root.stateDir + "/queue.json"
+    blockLoading: true
+    blockWrites: true
+    blockAllReads: true
+    atomicWrites: true
+    printErrors: false
+  }
+
+  // True once the startup restore has been attempted against a loaded library.
+  // Later library reloads must not replace the live queue with the file again.
+  property bool queueRestored: false
+
+  function libraryTrackPool() {
+    var out = []
+    var i, j
+    for (i = 0; i < collection.length; i++) {
+      var ts = collection[i].tracks || []
+      for (j = 0; j < ts.length; j++) out.push(ts[j])
+    }
+    for (i = 0; i < playlists.length; i++) {
+      var pts = playlists[i].tracks || []
+      for (j = 0; j < pts.length; j++) out.push(pts[j])
+    }
+    return out
+  }
+
+  // Persist exactly the pending Up Next list. Called after every queue mutation.
+  function saveQueue() {
+    mkStateDir.running = true
+    queueFile.setText(JSON.stringify({
+      version: 1,
+      pending: UserQueue.serialize(userQueueState)
+    }) + "\n")
+  }
+
+  // Restore the persisted pending list, revalidated against the current library.
+  // Missing or corrupt files, and entries whose track is gone or unstreamable,
+  // all resolve to an empty/dropped list rather than an error. Playback stays
+  // stopped: only `pending` is restored.
+  function restoreQueue(rawText) {
+    var pending = []
+    try {
+      var txt
+      if (rawText === undefined) {
+        queueFile.reload()
+        txt = queueFile.text()
+      } else {
+        txt = String(rawText || "")
+      }
+      var d = JSON.parse(txt || "{}")
+      if (d && d.pending) pending = UserQueue.restorePending(d.pending, libraryTrackPool())
+    } catch (e) {
+      pending = []
+    }
+    userQueueState = { pending: pending, current: null, resumeIndex: -1, history: [] }
+    queueRestored = true
+    return pending
+  }
+
+  // Called by loadLibrary(): wait for a populated library, then restore once.
+  function maybeRestoreQueue() {
+    if (queueRestored) return
+    if (collection.length === 0 && playlists.length === 0) return
+    restoreQueue()
+  }
 
   function loadUi() {
     try {
@@ -600,6 +677,7 @@ Item {
   function playNextTrack(track) {
     var r = UserQueue.enqueueFront(userQueueState, track)
     userQueueState = r.state
+    if (r.added > 0) saveQueue()
     if (r.added === 0) notify(unavailableMessage(track))
     return r.added > 0
   }
@@ -607,6 +685,7 @@ Item {
   function addTrackToQueue(track) {
     var r = UserQueue.enqueueTrack(userQueueState, track)
     userQueueState = r.state
+    if (r.added > 0) saveQueue()
     if (r.added === 0) notify(unavailableMessage(track))
     return r.added > 0
   }
@@ -616,6 +695,7 @@ Item {
   function addTracksToQueue(tracks) {
     var r = UserQueue.enqueueTracks(userQueueState, tracks || [])
     userQueueState = r.state
+    if (r.added > 0) saveQueue()
     var msg = "Added " + r.added + (r.added === 1 ? " track" : " tracks") + " to queue"
     if (r.skipped > 0) msg += " · " + r.skipped + " skipped (not streamable)"
     notify(msg)
@@ -629,10 +709,12 @@ Item {
 
   function clearUserQueue() {
     userQueueState = UserQueue.clearPending(userQueueState)
+    saveQueue()
   }
 
   function removeUserQueueAt(index) {
     userQueueState = UserQueue.removeAt(userQueueState, index)
+    saveQueue()
   }
 
   // Start pending[0] / pending[index]. The service's context queue/index stays
@@ -641,6 +723,9 @@ Item {
     var r = UserQueue.startAt(userQueueState, index, queueIndex, queue.length, contextTrack())
     userQueueState = r.state
     if (!r.changed) return false
+    // Consumption: the item has left the pending list, so the persisted copy
+    // must no longer contain it (a restart must never resurrect it).
+    saveQueue()
     playCurrent()
     return true
   }
@@ -664,6 +749,7 @@ Item {
   function resumeContextAfterUserQueue() {
     var r = UserQueue.drain(userQueueState)
     userQueueState = r.state
+    saveQueue()
     if (r.stopped) {
       isPlaying = false
       isPaused = false
@@ -683,6 +769,7 @@ Item {
     var r = UserQueue.startAt(userQueueState, 0, queueIndex, queue.length, contextTrack(), false)
     if (r.changed) {
       userQueueState = r.state
+      saveQueue()
       playCurrent()
       return true
     }
@@ -719,6 +806,9 @@ Item {
     } else {
       userQueueState = UserQueue.releaseCurrent(userQueueState)
     }
+    // v3.5.5: a new context clears the persisted queue with the live one; a
+    // same-context start only releases `current` and keeps pending on disk.
+    saveQueue()
     var startAt = clicked ? indexOfTrack(playable, clicked) : -1
     context = { type: type, name: name, tracks: playable.slice(), key: ctxKey }
     playingContextKey = ctxKey
@@ -767,12 +857,14 @@ Item {
       // Same context: keep the pending user queue, but this context track is
       // now what is playing.
       userQueueState = UserQueue.releaseCurrent(userQueueState)
+      saveQueue()
       queueIndex = idx
       playCurrent()
       return
     }
     // A one-track context is a new context, so the user queue clears.
     userQueueState = UserQueue.emptyState()
+    saveQueue()
     queue = [track]
     queueIndex = 0
     context = { type: "single", name: track.album || "", tracks: [track], key: "" }
@@ -967,6 +1059,8 @@ Item {
       var back = UserQueue.previous(userQueueState)
       if (!back.changed) return
       userQueueState = back.state
+      // Previous puts the left track back at the front of pending; persist that.
+      saveQueue()
       if (!back.user) {
         var idx = indexOfTrack(queue, back.track)
         queueIndex = idx >= 0 ? idx : (queue.length > 0 ? 0 : -1)

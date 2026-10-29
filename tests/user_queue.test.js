@@ -8,7 +8,7 @@ const vm = require("vm")
 
 const source = fs.readFileSync(path.join(__dirname, "..", "UserQueue.js"), "utf8")
 const sandbox = {}
-vm.runInNewContext(source + "\nthis.api = { emptyState, canQueue, isNewContext, resumeIndexAfter, enqueueFront, enqueueTrack, enqueueTracks, clearPending, removeAt, releaseCurrent, startAt, startHead, drain, previous }\n", sandbox)
+vm.runInNewContext(source + "\nthis.api = { emptyState, canQueue, isNewContext, resumeIndexAfter, enqueueFront, enqueueTrack, enqueueTracks, clearPending, removeAt, releaseCurrent, startAt, startHead, drain, previous, identityOf, serialize, resolveEntry, restorePending }\n", sandbox)
 const Q = sandbox.api
 
 function track(uid, title, streamable) {
@@ -16,6 +16,11 @@ function track(uid, title, streamable) {
 }
 function streamable(uid, title) { return track(uid, title, true) }
 function unstreamable(uid, title) { return track(uid, title, false) }
+function libraryTrack(uid, title, extra) {
+  var t = { uid: uid, title: title || uid, artist: "Artist", album: "Album", streamable: true }
+  if (extra) for (var k in extra) t[k] = extra[k]
+  return t
+}
 function names(list) { return list.map(function(t) { return t.uid }) }
 function eq(a, b, msg) {
   const x = JSON.stringify(a), y = JSON.stringify(b)
@@ -138,6 +143,61 @@ const cases = {
     eq(c.current.uid, "a", "Clear does not stop the queued track that is already playing")
     var removed = Q.removeAt(Q.enqueueTracks(Q.emptyState(), [streamable("a"), streamable("b")]).state, 0)
     eq(names(removed.pending), ["b"], "Remove from queue removes only that row")
+  },
+
+  "persistence-round-trip": function() {
+    var a = libraryTrack("alb#0", "One", { subsonicId: "t:1", streamUrl: "https://secret.example/stream?token=CREDENTIAL", coverArtId: "cover-1" })
+    var b = libraryTrack("alb#1", "Two", { bandcampId: "bc-2" })
+    var s = Q.enqueueTracks(Q.emptyState(), [a, b]).state
+    var saved = Q.serialize(s)
+    var text = JSON.stringify({ version: 1, pending: saved })
+    ok(text.indexOf("secret.example") < 0 && text.indexOf("CREDENTIAL") < 0 && text.indexOf("streamUrl") < 0,
+       "persisted entries carry no stream URL or credential")
+    ok(text.indexOf("cover-1") < 0 && text.indexOf("coverArtId") < 0, "persisted entries carry no cover id")
+    var restored = Q.restorePending(JSON.parse(text).pending, [a, b])
+    eq(names(restored), ["alb#0", "alb#1"], "a saved queue restores in order")
+    eq([restored[0].title, restored[0].artist, restored[0].album], ["One", "Artist", "Album"],
+       "restored entries are the live library tracks, metadata intact")
+  },
+
+  "persistence-duplicates-and-order": function() {
+    var a = libraryTrack("alb#0", "One", { subsonicId: "t:1" })
+    var b = libraryTrack("alb#1", "Two", { subsonicId: "t:2" })
+    var s = Q.enqueueTracks(Q.emptyState(), [a, b, a, b, a]).state
+    var saved = JSON.parse(JSON.stringify(Q.serialize(s)))
+    var restored = Q.restorePending(saved, [a, b])
+    eq(names(restored), ["alb#0", "alb#1", "alb#0", "alb#1", "alb#0"],
+       "duplicates and their order survive a save/load round-trip")
+  },
+
+  "restore-drops-deleted": function() {
+    var a = libraryTrack("alb#0", "One", { subsonicId: "t:1" })
+    var b = libraryTrack("alb#1", "Two", { subsonicId: "t:2" })
+    var c = libraryTrack("alb#2", "Three", { subsonicId: "t:3" })
+    var saved = Q.serialize(Q.enqueueTracks(Q.emptyState(), [a, b, c]).state)
+    // b's album was removed from the library since the queue was saved.
+    var restored = Q.restorePending(saved, [a, c])
+    eq(names(restored), ["alb#0", "alb#2"], "an entry whose track is gone is dropped silently")
+  },
+
+  "restore-drops-unstreamable": function() {
+    var a = libraryTrack("alb#0", "One", { subsonicId: "t:1" })
+    var b = libraryTrack("alb#1", "Two", { subsonicId: "t:2", streamable: false })
+    var saved = Q.serialize(Q.enqueueTracks(Q.emptyState(), [a, b]).state)
+    var restored = Q.restorePending(saved, [a, b])
+    eq(names(restored), ["alb#0"], "an entry that is no longer streamable is dropped silently")
+  },
+
+  "restore-rejects-stale-uid": function() {
+    // Same uid index, different track: the metadata guard must not restore it.
+    var saved = Q.serialize(Q.enqueueTrack(Q.emptyState(), libraryTrack("alb#0", "Old Name")).state)
+    var recycled = libraryTrack("alb#0", "Different Song")
+    eq(names(Q.restorePending(saved, [recycled])), [],
+       "a uid that now points at different metadata is not restored")
+    // A rebuilt library with a new uid still resolves by exact metadata.
+    var moved = libraryTrack("alb#9", "Old Name")
+    eq(names(Q.restorePending(saved, [moved])), ["alb#9"],
+       "the same track under a new uid still restores by metadata")
   }
 }
 

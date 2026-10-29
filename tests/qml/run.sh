@@ -253,6 +253,52 @@ else
   echo "  FAIL phase 1's choices were not written to ui.json"; fail=1
 fi
 
+# v3.5.5: queue.json must hold identity records only - no stream/cover URL and
+# no credential-bearing value - and the queue left for the relaunch phase.
+queue_file="$home/.local/state/omatimeatbandcamp/queue.json"
+if python3 - "$queue_file" <<'PY'
+import json, sys
+path = sys.argv[1]
+try:
+    d = json.load(open(path, encoding="utf-8"))
+except Exception as exc:
+    print("queue.json unreadable or invalid: %s" % type(exc).__name__)
+    sys.exit(1)
+keys = {"version", "pending"}
+entry_keys = {"uid", "subsonicId", "bandcampId", "title", "artist", "album"}
+if set(d) != keys:
+    print("queue.json top-level keys are not identity-only: %s" % sorted(d))
+    sys.exit(1)
+pending = d.get("pending")
+if not isinstance(pending, list) or len(pending) != 2:
+    print("queue.json pending is not the two restored entries")
+    sys.exit(1)
+bad_keys = [sorted(set(e) - entry_keys) or ["<missing>"] for e in pending if not isinstance(e, dict) or set(e) != entry_keys]
+if bad_keys:
+    print("queue.json entry keys are not identity-only: %s" % bad_keys)
+    sys.exit(1)
+bad_values = []
+for e in pending:
+    for k, v in e.items():
+        if not isinstance(v, str):
+            bad_values.append(k)
+        elif "://" in v.lower() or "token=" in v.lower() or "credential" in v.lower():
+            bad_values.append(k)
+if bad_values:
+    print("queue.json contains a non-identity value in: %s" % sorted(set(bad_values)))
+    sys.exit(1)
+titles = [e["title"] for e in pending]
+if titles != ["La Dee La La Song", "Waiting For Marvin"]:
+    print("queue.json pending titles are wrong: %s" % titles)
+    sys.exit(1)
+sys.exit(0)
+PY
+then
+  echo "  PASS phase 1's queue.json contains identity-only records (no URLs/credentials) and the two fixture entries"; passes=$((passes + 1))
+else
+  echo "  FAIL phase 1's queue.json is missing, invalid, unsafe or holds the wrong queue"; fail=1
+fi
+
 # Phase 7 (v3/v3.5.1): the single Collection menu item must have invoked the opener with exactly
 # the verified URL. Exact match also proves no other URL was opened. The fixture
 # library's meta.user is "fixture-user".

@@ -24,6 +24,11 @@ CASES = [
     "previous-history",
     "play-at-drops-ahead",
     "clear-keeps-current-playback",
+    "persistence-round-trip",
+    "persistence-duplicates-and-order",
+    "restore-drops-deleted",
+    "restore-drops-unstreamable",
+    "restore-rejects-stale-uid",
 ]
 
 
@@ -70,6 +75,21 @@ class UserQueueModel(unittest.TestCase):
 
     def test_clear_keeps_current_queued_track_playing(self):
         self.run_case("clear-keeps-current-playback")
+
+    def test_persisted_queue_round_trips_without_urls_or_credentials(self):
+        self.run_case("persistence-round-trip")
+
+    def test_duplicates_and_order_survive_a_save_load_round_trip(self):
+        self.run_case("persistence-duplicates-and-order")
+
+    def test_restore_drops_an_entry_whose_track_is_gone(self):
+        self.run_case("restore-drops-deleted")
+
+    def test_restore_drops_an_entry_that_is_no_longer_streamable(self):
+        self.run_case("restore-drops-unstreamable")
+
+    def test_restore_rejects_a_stale_uid_and_keeps_metadata_matches(self):
+        self.run_case("restore-rejects-stale-uid")
 
 
 if __name__ == "__main__":

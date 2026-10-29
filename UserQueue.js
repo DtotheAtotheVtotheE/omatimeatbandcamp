@@ -1,4 +1,4 @@
-// Session-only user queue model for v3.4.
+// User queue model, introduced session-only in v3.4 and persisted in v3.5.5.
 //
 // This file is deliberately free of Qt/QML imports so the same code that the
 // service runs can be unit-tested under Node (tests/test_user_queue.py). The
@@ -164,4 +164,102 @@ function previous(state) {
   n.current = null
   n.resumeIndex = -1
   return { state: n, track: entry.track, user: false, changed: true }
+}
+
+// ---- v3.5.5 queue persistence --------------------------------------------
+//
+// Only the pending list (what the UI calls Up Next) is persisted. Playback
+// context, now-playing, position, resume point and history stay session-only:
+// a restart restores a stopped panel with the same queue it had.
+//
+// An entry is an identity record, never a track. Full tracks can carry a
+// streamUrl (whose URL may embed credentials) and cover ids; none of that may
+// reach disk. The entry is re-resolved against the live library on restore, so
+// streamability is re-derived exactly as when queueing by hand.
+//
+//   uid        library key ("<album uid>#<index>") - the primary lookup
+//   subsonicId stable Subsonic track id, when the track has one
+//   bandcampId stable Bandcamp track id, when the track has one
+//   title/artist/album  metadata used to reject a stale uid and as a fallback
+//
+// Duplicates are entries, not indices: each pending item gets its own record,
+// so duplicate tracks and their order survive a round-trip unchanged.
+function identityOf(track) {
+  if (!track) return null
+  return {
+    uid: String(track.uid || ""),
+    subsonicId: String(track.subsonicId || ""),
+    bandcampId: String(track.bandcampId || ""),
+    title: String(track.title || ""),
+    artist: String(track.artist || ""),
+    album: String(track.album || "")
+  }
+}
+
+function validIdentity(entry) {
+  if (!entry || typeof entry !== "object") return false
+  return !!(entry.uid || entry.subsonicId || entry.bandcampId || entry.title)
+}
+
+function sameMetadata(track, entry) {
+  return String(track.title || "") === String(entry.title || "") &&
+    String(track.artist || "") === String(entry.artist || "") &&
+    String(track.album || "") === String(entry.album || "")
+}
+
+function serialize(state) {
+  var out = []
+  var pending = state && state.pending ? state.pending : []
+  for (var i = 0; i < pending.length; i++) {
+    var id = identityOf(pending[i])
+    if (id) out.push(id)
+  }
+  return out
+}
+
+function resolveEntry(entry, tracks) {
+  if (!validIdentity(entry)) return null
+  var pool = tracks || []
+  var i, t
+  // A stable per-track id is authoritative even if the album/track order moved.
+  if (entry.subsonicId) {
+    for (i = 0; i < pool.length; i++) {
+      if (String(pool[i].subsonicId || "") === String(entry.subsonicId)) return pool[i]
+    }
+  }
+  if (entry.bandcampId) {
+    for (i = 0; i < pool.length; i++) {
+      if (String(pool[i].bandcampId || "") === String(entry.bandcampId)) return pool[i]
+    }
+  }
+  // uid is only trusted together with the metadata it was saved with: a library
+  // whose track order changed must not restore a different track under the same
+  // index.
+  if (entry.uid) {
+    for (i = 0; i < pool.length; i++) {
+      t = pool[i]
+      if (String(t.uid || "") === String(entry.uid) && sameMetadata(t, entry)) return t
+    }
+  }
+  // Last resort for a library that rebuilt uids/ids but still has the same
+  // track metadata: only when the entry names a track.
+  if (entry.title) {
+    for (i = 0; i < pool.length; i++) {
+      t = pool[i]
+      if (sameMetadata(t, entry)) return t
+    }
+  }
+  return null
+}
+
+// Revalidate a persisted pending list against the live library. Entries whose
+// track is missing or no longer streamable are dropped silently, in order.
+function restorePending(entries, tracks) {
+  var out = []
+  if (!entries || !entries.length) return out
+  for (var i = 0; i < entries.length; i++) {
+    var track = resolveEntry(entries[i], tracks)
+    if (track && canQueue(track)) out.push(track)
+  }
+  return out
 }

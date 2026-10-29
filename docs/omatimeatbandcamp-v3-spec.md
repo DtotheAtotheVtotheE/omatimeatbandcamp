@@ -2700,3 +2700,192 @@ No existing check was weakened or deleted silently; the one semantic change
    `/tmp/omatime-v3541-syncing.png`: identical layout, only the status label
    differs. Compare the two live-path captures for the same geometry with the
    real KeyboardPanel.
+
+## v3.5.5 queue persistence — Up Next survives a shell restart (2026-10-28)
+
+### Decision and why it reverses v3.4
+
+v3.4 deliberately made the user queue session-only: it started empty on every
+shell launch and disappeared with the session. That assumption is wrong on
+Omarchy. The shell is restarted for reasons unrelated to music — switching
+themes, applying tweaks, updating the shell — and a queue built up while
+listening must survive those restarts. v3.5.5 therefore reverses the v3.4
+policy for the Up Next list.
+
+The reversal is deliberately narrow:
+
+- **Persist only the user queue — the Up Next list.** Playback context,
+  now-playing, position, resume point and queue history stay session-only. On
+  startup the panel restores the queue; playback itself starts stopped, exactly
+  as it does today.
+- **Store the minimum identity needed to re-resolve each entry** against
+  `library.json`. Entries are never stored as tracks: no stream URL, no cover
+  URL, no cookie, no credential-bearing value reaches disk. At restore every
+  entry is re-resolved against the loaded library and streamability is
+  re-derived exactly as when queueing by hand. Duplicates remain allowed and
+  order is preserved.
+- **Save on every mutation.** Add to Queue, Play Next, remove, Clear,
+  consumption (a queued item starting playback leaves `pending`) and Previous
+  (which moves items back into `pending`) all rewrite the persisted copy. There
+  is no user reorder feature in the queue, so there is no separate reorder
+  hook; the only operation that reorders pending items is Previous, and it is
+  persisted.
+- **Restore revalidates.** An entry whose track is gone from the library, or
+  is no longer streamable, is dropped silently. A missing or corrupt file
+  restores as an empty queue, never an error and never a broken panel.
+- **Unchanged.** Clear empties both the live queue and the persisted copy.
+  Starting a new playback context clears the queue (the v3.4 rule) and its
+  persisted copy with it. Play Next ordering and the Up Next frame are
+  untouched.
+
+### Scope guard
+
+The queue is the v3.4 immutable `{ pending, current, resumeIndex, history }`
+object whose `pending` items are ordinary library tracks. Persistence only
+needed a pure identity projection and a resolver, both added to `UserQueue.js`;
+no playback refactor was required and no playback code changed shape. The guard
+did not trigger.
+
+### What changed
+
+- **`UserQueue.js`** gains pure, Qt-free persistence helpers:
+  `identityOf(track)`, `serialize(state)`, `resolveEntry(entry, tracks)`,
+  `restorePending(entries, tracks)`. They are exercised by the same Node-under-
+  unittest path as the rest of the model.
+- **The persisted record** is a small JSON object at
+  `~/.local/state/omatimeatbandcamp/queue.json`, next to `ui.json`:
+
+  ```json
+  {"version":1,"pending":[
+    {"uid":"<album uid>#<index>","subsonicId":"<id or empty>",
+     "bandcampId":"<id or empty>","title":"<title>",
+     "artist":"<artist>","album":"<album>"}
+  ]}
+  ```
+
+  `uid` is the primary lookup. `subsonicId`/`bandcampId`, when present, are
+  stable ids that survive an album re-order. `title`/`artist`/`album` stop a
+  stale `uid` pointing at a different track and let a rebuilt library still
+  re-resolve the same track. Nothing else from the track is stored.
+- **`Service.qml`** adds `queue.json` as a `FileView` with the same state
+  directory and `blockLoading`/`atomicWrites` pattern as `ui.json`, plus
+  synchronous writes and reads (`blockWrites`, `blockAllReads`). Writes are
+  synchronous so a mutation followed immediately by a shell restart cannot
+  race and resurrect an item; reads are synchronous so restore always sees the
+  file rather than a cached previous copy. `saveQueue()` writes
+  `{version, pending: UserQueue.serialize(userQueueState)}` after every queue
+  mutation. `restoreQueue()` parses and revalidates; `maybeRestoreQueue()`
+  runs once, when the library has first loaded, and never again on later
+  library reloads.
+- **Restore is stopped.** `restoreQueue()` sets
+  `{ pending: restored, current: null, resumeIndex: -1, history: [] }`; it
+  never starts mpv and never restores a now-playing row.
+- **Restored entries are live library objects.** They are looked up in
+  `collection` and `playlists`, so a restored row is the same object the UI
+  would have queued by hand and carries re-derived `streamable`.
+
+### Tests changed or added
+
+No existing product assertion was weakened or removed. One relaunch assertion
+had to be replaced because it asserted the reversed v3.4 policy:
+
+- `[relaunch] session-only user queue starts empty on a fresh service` →
+  `[relaunch] v3.5.5: the persisted Up Next queue is restored, stopped`. Reason:
+  the queue is no longer session-only; the new check still proves the relaunch
+  is a fresh service by requiring `currentUserTrack === null` and
+  `isPlaying === false`, while asserting the two persisted fixture tracks came
+  back in order.
+
+The harness `resetUserQueueChecks()` helper (test setup, not an assertion) now
+also calls `svc.saveQueue()` after clearing in memory, so the directly-mutated
+model and the persisted copy stay in step between test blocks.
+
+New model tests (Python, 5; `UserQueue.js` run under Node):
+
+- `test_persisted_queue_round_trips_without_urls_or_credentials` — save/load
+  round-trip; serialized text contains no stream URL, no `streamUrl`, no
+  credential, no cover id; restored entries are the live library tracks.
+- `test_duplicates_and_order_survive_a_save_load_round_trip` — `A,B,A,B,A`
+  returns identical, duplicates intact.
+- `test_restore_drops_an_entry_whose_track_is_gone` — deleted album/track
+  entry dropped silently, neighbours kept in order.
+- `test_restore_drops_an_entry_that_is_no_longer_streamable` — the
+  now-unstreamable entry is dropped, the streamable one stays.
+- `test_restore_rejects_a_stale_uid_and_keeps_metadata_matches` — a recycled
+  `uid` with different metadata is not restored; the same track under a new
+  `uid` still resolves by exact metadata.
+
+New QML checks (phase 1, 14; all named `v3.5.5`):
+
+- a clean slate starts with an empty Up Next queue (setup guard);
+- `the Up Next queue survives a save/load round-trip`;
+- `a restored queue starts stopped (playback is not restored)`;
+- `duplicates and their order survive a save/load round-trip`;
+- `starting a queued track consumes it from Up Next`;
+- `consumption persists across a simulated restart`;
+- `Clear persists across a simulated restart`;
+- `a new playback context clears the persisted queue`;
+- `restore silently drops an entry whose track is gone`;
+- `restore silently drops an entry that is no longer streamable`;
+- `a corrupt persisted queue restores as empty and leaves the panel working`;
+- `a missing persisted queue restores as empty (no error)`;
+- `an on-disk corrupt queue.json restores as empty, panel fine` (the harness
+  writes a real corrupt file, then the service reloads it from disk);
+- `the queue left for the relaunch phase is the fixture album's first two
+  tracks`.
+
+New script-side check (1): phase 1's `queue.json` exists, is valid JSON, has
+only the top-level `version`/`pending` keys, has exactly the six identity keys
+per entry, contains no `://`/`token=`/credential-bearing value, and holds the
+two expected fixture titles. The file itself is not echoed, so a regression
+could not print a URL or credential.
+
+### Results
+
+- Baseline (fresh session, before editing), matching the quoted figures:
+  Python **100 tests OK, 5 skipped**; live fixtures **5 OK**; QML **592**
+  checks, `FAILS=0` (phase 1 550 + relaunch 15 + real-data 17 + script-side 10).
+- Python: **105 tests OK, 5 skipped** (100 + 5 persistence model tests).
+- Live fixtures (`OMATIME_LIVE=1`): **5 tests OK** (unchanged; the full
+  discovery run is 105 with the 5 live checks included when enabled).
+- QML: **607 checks**, `FAILS=0` in every phase (phase 1 **564**, relaunch 15,
+  real-data 17, script-side **11**); `QML tests: OK` (`592 → 607`, +14 QML,
+  +1 script-side).
+- `omarchy plugin validate .`: exit 0.
+- `qmllint -s Service.qml` and `qmllint -s BcButton.qml`: exit 0.
+  `qmllint` on `Panel.qml` did not finish in this environment (pre-existing,
+  the file is unchanged by v3.5.5); no new warning was reported before it was
+  stopped.
+- Credential files were not opened (paths/modes only). No stream URL, cover
+  URL or credential value was printed or committed. `--load-scripts=no` is
+  untouched and the MPRIS whitelist is untouched.
+
+### Deviations / owner-visible decisions
+
+- **Writes and reads are synchronous** for `queue.json` only. This is a
+  deliberate durability choice for the shell-restart case; the queue is tiny
+  and mutations are user-driven, so the blocking cost is negligible.
+- **Restore does not rewrite the file.** Revalidation drops entries in memory;
+  the cleaned list is written on the next mutation. This avoids rewriting or
+  truncating the file if the library is temporarily incomplete at startup.
+- **Restore happens once per service.** A later library reload does not replace
+  a queue the user has since changed.
+- **No user queue reorder exists**, so `queue.json` has no reorder hook; the
+  Previous operation's move back into `pending` is persisted.
+- **Queue history and the resume point are not persisted.** A restart with a
+  restored queue has no Previous history and no context to resume when the
+  queue drains; Next from the stopped state plays the restored head, and the
+  context underneath starts empty.
+
+### Owner live check
+
+1. Open the panel, right-click two or three tracks and choose Add to Queue (or
+   Play Next), then `omarchy restart shell`.
+2. Open the panel again. Up Next shows the same tracks in the same order,
+   including duplicates, and playback is stopped (no now-playing row is
+   restored).
+3. Press Play/Next. The restored queue head plays; check that it disappeared
+   from Up Next, then restart the shell again and confirm it does not come back.
+4. Press Clear, restart, and confirm Up Next is empty. Then queue something,
+   start a track in a different album, restart, and confirm the queue is still
+   empty.
