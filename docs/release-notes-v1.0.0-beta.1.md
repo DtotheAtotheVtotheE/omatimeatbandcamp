@@ -29,7 +29,7 @@ Include your Omarchy version, monitor resolution and scale, theme name, and roug
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/gy9cd2bvr7-svg/omatimeatbandcamp.git --enable
+omarchy plugin add https://github.com/dtotheatothevtothee/omatimeatbandcamp.git --enable
 ```
 
 Then follow the README's setup walkthrough: import the browser session, generate a Subsonic pair under **Bandcamp → Fan Settings → Subsonic**, and save it in `~/.config/omatimeatbandcamp/credentials.toml` (`0600`).
@@ -46,7 +46,7 @@ Then follow the README's setup walkthrough: import the browser session, generate
 
 Please use the GitHub issue tracker:
 
-**https://github.com/gy9cd2bvr7-svg/omatimeatbandcamp/issues**
+**https://github.com/dtotheatothevtothee/omatimeatbandcamp/issues**
 
 For setup failures, say which step failed (browser import, Subsonic pair, first sync) and what the panel showed. **Never paste cookie values, Subsonic credentials, stream URLs or screenshots containing them.** Redact first.
 
