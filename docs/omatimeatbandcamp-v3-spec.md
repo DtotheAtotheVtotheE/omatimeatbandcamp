@@ -3173,3 +3173,172 @@ fix it passes with `max=114.20`, `margin=8.58`, `truncated=false`.
    frame, then hide as before; no `10`-only frame.
 3. Confirm the label still starts 8 px after Sort direction, stays right-aligned
    to the search field, and does not overlap or shift any control.
+
+## Security audit — HEAD @ 88d4175 (2026-10-29, read-only)
+
+Scope: HEAD and all reachable refs, plus local reflog/unreachable objects, and the
+working tree. The tree was not edited during the audit except for this section.
+No credential file was opened; `credentials.toml`, `cookies.txt` and the cookie
+backup were inspected by path/mode/size only.
+
+Baseline confirmed first: Python **105 OK, 5 skipped**; live fixtures **5 OK**;
+QML **616 checks, FAILS=0**.
+
+Method: gitleaks 8.30.1 (official release) over full git history and the working
+tree; a redacted targeted scan of every reachable commit, reflog commit and
+unreachable commit/blob for the requested identities, paths, hostnames, IP
+shapes, Subsonic URL parameters, cookie names, auth/token/password assignments,
+private-key markers and Anthropic key shapes; `git ls-files` and historical path
+inventory; fixture/data inventory; and a manual review of the subprocess,
+network, cookie, MPRIS, file-permission, IPC/JSON and error-path surfaces.
+
+### Findings
+
+1. **Medium — Bandcamp cookies can be sent to a non-Bandcamp `userUrl`.**
+   `backend/bandcamp.py:40-47,98-99` attaches the Cookie header to whatever URL
+   it fetches, while `Service.qml:447-449` passes the user-configured
+   `settings.userUrl` straight through. The legacy `fetch.py:42-48` has the same
+   shape. If the setting is a typo or a hostile host, the imported Bandcamp
+   session can go off-domain. Redacted evidence: cookie jar contains an
+   `identity` cookie; no cookie value was read or printed.
+   *Remediation:* require `https` and a `bandcamp.com` host (or explicit
+   allow-list) before attaching cookies; reject other URLs.
+
+2. **Medium — browser cookie database copied through `tempfile.mktemp`.**
+   `cookies.py:66-70` copies the whole Chromium/Firefox cookie database to a
+   `/tmp` path chosen by the deprecated, race-prone `mktemp`, with no explicit
+   `0600` mode. Only Bandcamp rows are later selected, but the temporary copy is
+   the full browser jar. Redacted evidence: full-database copy, local temp path.
+   *Remediation:* use `mkstemp` inside the `0700` cache directory, `chmod 0600`
+   immediately, and unlink in `finally`.
+
+3. **Low — Subsonic credential permissions are not enforced.**
+   `backend/subsonic.py:49-57` opens `~/.config/omatimeatbandcamp/credentials.toml`
+   without checking its mode. Observed: credentials file `0600`, but its parent
+   directory is `0755`, while the spec calls for directory `0700` and refusal on
+   looser permissions. No value was read.
+   *Remediation:* `stat` the directory/file and refuse if group/other bits are
+   set; create and repair the directory as `0700`.
+
+4. **Low — state and MPRIS files are `0644` in a `0755` state directory.**
+   `Service.qml:204-229,1318-1339` writes `ui.json`, `queue.json` and
+   `mpris-state.json`; observed state directory `0755`, files `0644`. Contents
+   are identity-only (sort/filter/queue and title/artist/album), with no stream
+   URL or credential. This is local metadata exposure, not credential exposure.
+   *Remediation:* create the state directory `0700` and write state files `0600`.
+
+5. **Low — predictable mpv log path in `/tmp`, default mode `0644`.**
+   `mpvctl.py:69-71` opens `/tmp/omatime-mpv-<uid>.log` without `0600` or
+   `O_NOFOLLOW`; observed log `0644` and empty, IPC socket `0600`. If mpv ever
+   writes a load URL to that log, another local user can read it; a pre-created
+   symlink is also a local race.
+   *Remediation:* keep the log under the `0700` cache directory, open it `0600`
+   with `O_NOFOLLOW`, and leave the socket private.
+
+6. **Low — error paths can echo public collection/album URLs.**
+   `fetch.py:54`, `backend/bandcamp.py:52-55`, `backend/library.py:315-317` and
+   `Service.qml:495-505` can put a Bandcamp URL into stderr, the sync log or the
+   panel. These URLs can identify the owner's public collection/profile but do
+   not contain Subsonic `u/t/s` or session-cookie values. The current
+   `library/sync.log` scan found no auth parameters, emails, home paths, IPs or
+   URLs.
+   *Remediation:* redact to host/path or omit the URL in errors; parse and
+   whitelist backend stderr before showing it in the panel.
+
+7. **Low — the log redaction filter does not cover traceback text.**
+   `backend/__main__.py:33-36` rewrites `record.msg`, while
+   `backend/library.py:158-159` uses `log.exception`; `record.exc_text` can carry
+   an unredacted exception string into `sync.log`. Subsonic network exceptions
+   are already redacted and the current log is clean, so this is a defense gap.
+   *Remediation:* redact the formatted exception text too, or set `exc_info` to a
+   sanitized exception before logging.
+
+8. **Info — legacy `t.streamUrl` branch would put a URL in process argv.**
+   `Service.qml:933-935` can call `mpvctl.py load <URL>`; `mpvctl.py:202-256`
+   then accepts the URL from argv. Current `LibraryModel.js:94-110` does not
+   populate `streamUrl`, and Subsonic playback uses the in-process
+   `backend play` path, so no credential URL reaches argv today.
+   *Remediation:* remove or guard the branch; load any URL through IPC/in-process.
+
+9. **Info — `.gitignore` covers `*.bak-*` but not plain `*.bak`.**
+   `.gitignore:13` is `*.bak-*`; `git check-ignore foo.bak` reports not ignored.
+   No `.bak` file is tracked or present in the repo tree.
+   *Remediation:* add `*.bak`.
+
+10. **Info — owner identity/local host metadata is in docs and commit metadata.**
+    `docs/omatimeatbandcamp-v2-spec.md:3-4,531` and
+    `docs/omatimeatbandcamp-v3-spec.md:4` contain the owner's first name and
+    `<owner-handle>`; all 40 commit objects use local author/committer identity
+    `<local-username>@<local-hostname>` rather than a GitHub noreply address.
+    `spike/SUBSONIC-REPORT.md:118` contains one real playlist name and ID;
+    `V2-NOTES.md:366` contains the hostname. No secret value is present.
+    *Remediation:* for public publication, use a noreply commit identity and
+    scrub owner/host/playlist identifiers from docs and reports.
+
+11. **Info — tracked fixtures contain a little real public library data.**
+    `tests/qml/fixtures/library.json:11,16,17,133,138,217` has 3 of 13 album
+    titles matching the owner's cache, one real public Bandcamp album URL and
+    two real Bandcamp album IDs. `tests/fixtures/first_impressions_page.html`
+    matches a real album ID/title; `spike/phase1_results.py:28` hardcodes the
+    same public album URL; `spike/SUBSONIC-REPORT.md` records real library
+    measurements and names. No stream URL, cover URL, cookie or credential is
+    present in these files.
+    *Remediation:* treat as public album data; replace with synthetic values if
+    collection anonymity matters.
+
+12. **Info — gitleaks false positive in a test fixture.**
+    `tests/test_library.py:16` (`SECRET_S`) is an 8-character dummy test value
+    used to prove the cache write guard. It is not a live secret.
+    *Remediation:* add a `.gitleaksignore` entry or rename the placeholder.
+
+### Secret and identity scan result
+
+- **No live secret found** in HEAD or history: no cookie value, Subsonic
+  `u/t/s/p` value, Authorization value, API key/token/password literal,
+  private-key marker or `sk-ant-` key.
+- gitleaks: **1 finding**, the dummy test value above; working tree and full
+  history agree.
+- Historical `cookies.py`: **no commit in the current object database contains
+  `cookies.py`** (40 commits considered, including 3 unreachable/reflog
+  commits). The old incident commit `12471a4` is absent (`git cat-file` says
+  missing). The ignored working-tree loader has no hardcoded cookie values.
+- `git ls-files`: only the synthetic fixture `tests/qml/fixtures/library.json`
+  matches a data-file name; no `credentials.toml`, `cookies.txt`, `*.bak`,
+  real `library.json`, cache or state file is tracked.
+- Historical paths: 67 unique paths ever tracked; the only sensitive-looking
+  one is the tracked fixture library. No historical `cookies.py` path.
+- Requested patterns: no requested hostname, home-path literal, LAN/Tailscale IP
+  literal, `Authorization` literal, Subsonic URL credential value, private-key
+  marker or Anthropic key was found. The targeted identity failures are only
+  the documented owner handle/local host metadata and the public fixture data
+  above.
+
+### Verified controls
+
+- Subprocesses use argument lists, never `shell=True`; no `eval`, `exec` or
+  `pickle` on untrusted data. mpv receives metadata through IPC
+  (`--load-scripts=no` remains at `mpvctl.py:63`), not through a shell.
+- TLS uses `urllib`/`requests` defaults; no `verify=False`, custom unverified
+  SSL context, or disabled hostname check.
+- MPRIS reads only the explicit `STATE_KEYS` whitelist
+  (`backend/mpris.py:37-38,64-84`), never `path`/`url`; `mpris:artUrl` is built
+  only from a local `file://` file. Current state file has no URL/credential
+  keys.
+- IPC methods take ids/numbers only and resolve them against the library;
+  `openExternal` accepts only `https`. JSON parsing is `json.loads`/`JSON.parse`,
+  with malformed input ignored.
+- Credential/cache files observed with `ls -l` only: credentials `0600`,
+  cookies `0600`, cookie backup `0600`, cache library files `0600`; cache
+  directory `0700`. State directory/file permissions are the low finding above.
+
+### Verdicts
+
+1. **Is HEAD safe to publish as-is? YES for secret safety** — no credential,
+   session-cookie, token, private-key or credential-bearing URL is present in the
+   tracked tree. It is **not anonymity-clean**: it publishes the owner handle,
+   local host metadata and some real public album/playlist references noted
+   above.
+2. **Is HISTORY safe to publish as-is? YES for secret safety** — no credential
+   material exists in reachable refs or the local unreachable/reflog objects,
+   and the old hardcoded-cookie commit is absent. The same low-sensitivity
+   identity/privacy caveat applies to commit metadata and docs.
