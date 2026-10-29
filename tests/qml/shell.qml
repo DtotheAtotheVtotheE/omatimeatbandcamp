@@ -113,6 +113,15 @@ ShellRoot {
     source: ""
   }
 
+  // v3.5.4.1: measure every possible status string with the label's exact font
+  // without needing a paint/frame between each one. The label width itself is
+  // read from the real panel instance in the check below.
+  TextMetrics {
+    id: statusMetrics
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+  }
+
   // Load the full-popup header screenshot back from disk, so its dimensions are
   // the real panel size rather than a scaled or mocked preview.
   Image {
@@ -428,19 +437,19 @@ ShellRoot {
         !!settingsButton() && settingsButton().iconText === "" && settingsButton().tooltipText === "Settings" &&
         isInside(settingsButton(), named(stage, "headerCatColumn")) && !button("\uf141"))
       var cat = named(stage, "catStencil")
-      check("v3.5.4: the cat mark is the bold shipped SVG trace, not a raster stencil",
+      check("v3.5.4.1: the cat mark is the slim smoothed shipped SVG trace, not a raster stencil",
         !!cat && !named(stage, "catMaskCanvas") && !named(stage, "catMaskImage") &&
         !named(stage, "catMarkShape") &&
         String(cat.svgFile).indexOf("cat-flute.svg") >= 0 &&
-        cat.implicitWidth === 508 && cat.implicitHeight === 346 &&
+        cat.implicitWidth === 508 && cat.implicitHeight === 345 &&
         cat.pathCount === 3 && cat.isVector === true &&
         !!named(stage, "catPath0") && !!named(stage, "catPath2"))
-      check("v3.5.4: every bold cat path is filled from the theme accent binding (no baked colour)",
+      check("v3.5.4.1: every slim cat path is filled from the theme accent binding (no baked colour)",
         !!cat && cat.pathData.length === 3 &&
         String(cat.tintColor) === String(Color.accent) &&
         String(cat.fillColor) === String(Color.accent) &&
         String(cat.renderedColor) === String(Color.accent) &&
-        Math.abs(cat.artAspect - 508 / 346) < 0.0001)
+        Math.abs(cat.artAspect - 508 / 345) < 0.0001)
       check("fixture library loaded: 13 albums, 2 playlists", svc.collection.length === 13 && svc.playlists.length === 2)
       check("v3.1: the old left-hand search icon is gone", !named(stage, "searchIcon"))
       check("search field is shortened (narrower than its row)", searchField().width < searchField().parent.width)
@@ -490,10 +499,12 @@ ShellRoot {
       var cx = ap.x + art.inkCentroidX * art.width
       var cy = ap.y + art.inkCentroidY * art.height
       var colCx = z.x + cc.width / 2, colCy = z.y + cc.height / 2
-      log("v3.5.4 normal geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
+      var targetCy = colCy + panel.catCentreNudgeY
+      log("v3.5.4.1 normal geometry: art=" + art.width.toFixed(2) + "x" + art.height.toFixed(2) +
         " bbox=" + ap.x.toFixed(2) + "," + ap.y.toFixed(2) +
         " centroid=" + cx.toFixed(2) + "," + cy.toFixed(2) +
         " columnCentre=" + colCx.toFixed(2) + "," + colCy.toFixed(2) +
+        " nudge=" + panel.catCentreNudgeY + " target=" + colCx.toFixed(2) + "," + targetCy.toFixed(2) +
         " heightRatio=" + (art.height / cc.height).toFixed(3) +
         " topMargin=" + (ap.y - z.y).toFixed(2))
       // Pixel probe bounds, relative to the panel that the screenshot captures.
@@ -504,20 +515,25 @@ ShellRoot {
         (Math.ceil(art.width) + 1) + "," + (Math.ceil(art.height) + 1) +
         " column=" + Math.floor(z.x - po.x) + "," + Math.floor(z.y - po.y) + "," +
         (Math.ceil(cc.width) + 1) + "," + (Math.ceil(cc.height) + 1))
-      check("v3.5.4: the bold mark is fitted inside the column on both axes, aspect preserved",
+      check("v3.5.4.1: the slim mark is fitted inside the column on both axes, aspect preserved",
         art.width <= cc.width + 0.5 && art.height <= cc.height + 0.5 &&
-        Math.abs((art.width / art.height) - (508 / 346)) <= 0.01)
-      check("v3.5.4: the mark's ink centroid matches the cat-column centre on both axes",
-        Math.abs(cx - colCx) <= 2 && Math.abs(cy - colCy) <= 2)
-      check("v3.5.4: the mark's bbox sits fully inside the column with the ears clear of the top border",
+        Math.abs((art.width / art.height) - (508 / 345)) <= 0.01)
+      check("v3.5.4.1: the mark's ink centroid matches the column centre plus the 3 px down-nudge",
+        Math.abs(cx - colCx) <= 2 && Math.abs(cy - targetCy) <= 2)
+      check("v3.5.4.1: the mark's bbox sits fully inside the column with all ink clear of the edges",
         ap.x >= z.x - 0.5 && ap.y >= z.y + 0.5 &&
         ap.x + art.width <= z.x + cc.width + 0.5 &&
         ap.y + art.height <= z.y + cc.height + 0.5)
-      check("v3.5.4: the bold mark still fills at least 90% of the column height",
-        art.height >= cc.height * 0.90)
-      check("v3.5.4: the ink centroid is measured from the bold asset, not the bbox",
-        Math.abs(art.inkCentroidX - 0.3739915779) < 0.0001 &&
-        Math.abs(art.inkCentroidY - 0.5262729689) < 0.0001)
+      check("v3.5.4.1: the rendered ink's top edge sits at least 6 px below the panel top border",
+        ap.y - z.y >= Style.space(6) - 0.5)
+      var previousFitWidth = Math.min(cc.width - 2 * Style.space(4),
+        (cc.height - 2 * Style.space(4)) * (508 / 345))
+      check("v3.5.4.1: the slim mark renders at 95% of the previous fit (~145 x 99)",
+        Math.abs(art.width - previousFitWidth * 0.95) <= 1 &&
+        Math.abs((art.width / art.height) - (508 / 345)) <= 0.01)
+      check("v3.5.4.1: the ink centroid is measured from the slim asset, not the bbox",
+        Math.abs(art.inkCentroidX - 0.3889005865) < 0.0001 &&
+        Math.abs(art.inkCentroidY - 0.5202530254) < 0.0001)
       check("v3.1: search text still fits at the shared height (no vertical clipping)", sf.implicitHeight <= sf.height + 0.5)
       var lp = named(stage, "leftPane").mapToItem(stage, 0, 0), tb = button("Albums (" + svc.albumsView.length + ")").mapToItem(stage, 0, 0)
       check("v3.1: the search field's left edge aligns with the album list and toolbar below (no indent)",
@@ -577,9 +593,9 @@ ShellRoot {
       host.headerSave = false
       headerShotProbe.source = ""
       keyboardPanel().grabToImage(function(result) {
-        host.headerSave = result.saveToFile("/tmp/omatime-v354-header.png")
+        host.headerSave = result.saveToFile("/tmp/omatime-v3541-header.png")
         host.headerShot = result
-        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v354-header.png?" + Date.now()
+        if (host.headerSave) headerShotProbe.source = "file:///tmp/omatime-v3541-header.png?" + Date.now()
       })
     },
     function() { },
@@ -594,6 +610,30 @@ ShellRoot {
         headerShotProbe.implicitHeight === keyboardPanel().height)
     },
     function() { svc.status = "Syncing library…" },
+    function() { },
+    function() {
+      // v3.5.4.1: every string the label can actually show, generated by the
+      // service (percent detail, 0-100) must fit the full label width without
+      // eliding at the real panel size.
+      var label = named(stage, "syncStatusLabel")
+      var statuses = ["Syncing library…"]
+      for (var p = 0; p <= 100; p++) statuses.push(svc.syncStatusText(p, 100))
+      var allFit = true
+      var minWidth = 1e9, maxWidth = 0, worst = "", worstText = 0
+      for (var i = 0; i < statuses.length; i++) {
+        statusMetrics.text = statuses[i]
+        var measured = statusMetrics.advanceWidth
+        if (measured > label.width + 0.5) allFit = false
+        if (measured > maxWidth) { maxWidth = measured; worst = statuses[i]; worstText = measured }
+        minWidth = Math.min(minWidth, measured)
+      }
+      log("v3.5.4.1 status widths: count=" + statuses.length + " labelWidth=" + label.width.toFixed(2) +
+        " min=" + minWidth.toFixed(2) + " max=" + maxWidth.toFixed(2) +
+        " worst=" + JSON.stringify(worst) + " worstWidth=" + worstText.toFixed(2))
+      check("v3.5.4.1: every enumerated sync status fits the full label width at the real panel size",
+        allFit && label.visible && label.implicitWidth <= label.width + 0.5 && !label.truncated)
+      svc.status = "Syncing library… 100%"
+    },
     function() { },
     function() {
       var label = named(stage, "syncStatusLabel"), sf = searchField()
@@ -629,6 +669,9 @@ ShellRoot {
         lr.y >= tr.y - 0.5 && lr.y + label.height <= tr.y + tb.height + 0.5)
       check("v3.5.4: the syncing label's right edge is flush with the search field's right edge",
         Math.abs((lr.x + label.width) - sfRight) <= 1)
+      check("v3.5.4.1: the label spans the full gap from Sort direction + 8 px to the field's right edge",
+        Math.abs(lr.x - (sr.x + sd.width + Style.space(8))) <= 0.5 &&
+        Math.abs(label.width - (sfRight - lr.x)) <= 0.5)
       check("v3.5.4: the syncing label clears Sort direction by at least 8 px and overlaps nothing",
         clearance >= Style.space(8) - 0.5 && noOverlap)
       check("v3.5.4: showing the syncing label shifts no header, field, column or control geometry",
@@ -640,9 +683,9 @@ ShellRoot {
       host.syncSave = false
       syncShotProbe.source = ""
       keyboardPanel().grabToImage(function(result) {
-        host.syncSave = result.saveToFile("/tmp/omatime-v354-syncing.png")
+        host.syncSave = result.saveToFile("/tmp/omatime-v3541-syncing.png")
         host.syncShot = result
-        if (host.syncSave) syncShotProbe.source = "file:///tmp/omatime-v354-syncing.png?" + Date.now()
+        if (host.syncSave) syncShotProbe.source = "file:///tmp/omatime-v3541-syncing.png?" + Date.now()
       })
     },
     function() { },

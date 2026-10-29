@@ -157,6 +157,11 @@ Panel {
   readonly property real headerCatColumnWidth: Math.max(0, contentColumn.width - searchFieldWidth)
   readonly property real headerCatColumnHeight: headerTopInset + headerStack.height
     + contentColumn.spacing + controlHeight + contentColumn.spacing
+  // v3.5.4.1: the slim trace renders at 95% of the old fit, and its ink centroid
+  // is nudged 3 px below the column centre so the ears sit >= 6 px below the
+  // panel's top border in both the harness and the live-path instantiation.
+  readonly property real catFitScale: 0.95
+  readonly property real catCentreNudgeY: 3
   // The sync label is only for the "Syncing library..." state; other statuses
   // keep their existing non-header behaviour (they are not rendered here).
   readonly property bool syncStatusVisible: !!service
@@ -1284,9 +1289,11 @@ Panel {
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
           horizontalAlignment: Text.AlignRight
-          x: root.searchFieldWidth - width
-          width: Math.min(implicitWidth, Math.max(0, root.searchFieldWidth
-            - (toolbarLeft.x + sortDirectionButton.x + sortDirectionButton.width + Style.space(8))))
+          // v3.5.4.1: use the full gap from Sort direction's right edge + 8 px
+          // to the search field's right edge. Keeping a fixed full-width label
+          // means the measured gap cannot shrink to fit an elided string.
+          x: toolbarLeft.x + sortDirectionButton.x + sortDirectionButton.width + Style.space(8)
+          width: Math.max(0, root.searchFieldWidth - x)
           anchors.verticalCenter: parent.verticalCenter
         }
       }
@@ -2482,18 +2489,19 @@ Panel {
           id: catStencil
           objectName: "catStencil"
           readonly property real fitMargin: Style.space(4)
-          // Fit inside the whole column on both axes, preserving the bold
-          // trace's aspect ratio.
+          // Fit inside the whole column on both axes, preserving the slim
+          // trace's aspect ratio, then render at 95% of that fit.
           width: Math.min(parent.width - 2 * fitMargin,
-            (parent.height - 2 * fitMargin) * artAspect)
+            (parent.height - 2 * fitMargin) * artAspect) * root.catFitScale
           height: width / artAspect
-          // v3.5.4: centre the rendered ink centroid, not the bounding box.
-          // The clamps keep the whole bbox inside the column and the ears
-          // clear of the panel's top border.
+          // v3.5.4.1: centre the rendered ink centroid, then nudge it down by
+          // 3 px. The clamps keep the whole bbox inside the column, the ink at
+          // least 6 px below the panel's top border, and the centroid target
+          // (column centre + nudge) inside the reachable placement range.
           x: Math.max(0, Math.min(parent.width - width,
             parent.width / 2 - inkCentroidX * width))
-          y: Math.max(1, Math.min(parent.height - height - 1,
-            parent.height / 2 - inkCentroidY * height))
+          y: Math.max(Style.space(6), Math.min(parent.height - height - 1,
+            parent.height / 2 + root.catCentreNudgeY - inkCentroidY * height))
           tintColor: Color.accent
         }
       }

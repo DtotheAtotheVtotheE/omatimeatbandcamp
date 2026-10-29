@@ -2475,3 +2475,228 @@ phase 1 went from 544 to **547**, with relaunch 15, real-data 17 and script-side
    still frame the whole cat column.
 5. Compare the two live-path screenshots above; the cat column and field are
    identical in both, only the status label differs.
+
+## v3.5.4.1 art swap + fit + status fixups (2026-10-28)
+
+### Baseline (fresh session, before editing)
+
+- Branch/commit: `v2` @ `1cd6b3e`.
+- Python: **100 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`; the full discovery run is
+  100 tests OK with the 5 live checks included).
+- QML: **588 checks**, `FAILS=0` (phase 1 547, relaunch 15, real-data 17,
+  script-side 9); `QML tests: OK`.
+- All three surface-width regression checks (1280 / 1920 / 2560 px live
+  surfaces) passed before any file changed and still pass after this change.
+
+### ITEM 1 — slim smoothed art
+
+Input audit — `docs/cat-flute-smooth.svg`:
+
+- Present, exactly **19,564 bytes**, SHA-256
+  `aeaeed62a216dcac1e9c4d2fd883c3aa289de1492f7e189c4a16cd6e7d19a6cf`.
+- Header: `<!-- Generator: visioncortex VTracer 0.6.12 -->`.
+- Root is **508 × 345**, exactly **3 `<path>`** elements, all
+  `fill="currentColor"`. The file was copied byte-for-byte to
+  `assets/cat-flute.svg` (both files hash to the value above).
+- The old bold source `docs/cat-flute-bold.svg` remains as history; it is no
+  longer the shipped asset.
+
+| # | transform | `d` length | `d` sha256 |
+|---|-----------|-----------:|------------|
+| 1 | `translate(34,0)` | 18,357 | `1b85727bfea49c32a8075ab79d1c4ebde26009d8d17a74430fe6bd5e883b42fb` |
+| 2 | `translate(87.8125,103.5625)` | 416 | `d0b73e1444dc3411fef318638b5cae0c514f5529722759e0ab589e98f20eb5e2` |
+| 3 | `translate(172.8125,103.5625)` | 409 | `bdd4109181f3125f34d6d7f31a4e4d615e6a5df0a63dcba32e6ca85a5052d956` |
+
+`CatMark.qml` now carries those three exact `d` strings and transforms, with
+`artWidth = 508`, `artHeight = 345`, and the alpha-weighted centroid of a
+5,080 × 3,450 render of this asset:
+
+```
+inkCentroidX = 0.3889005865
+inkCentroidY = 0.5202530254
+```
+
+The renderer, `tintColor: Color.accent`, `fillColor`, `pathData`, `pathCount`,
+`isVector`, and the Shape/ShapePath/PathSvg structure are unchanged. The
+Python asset tests now assert the 19,564-byte asset hash, its byte identity to
+`docs/cat-flute-smooth.svg`, the 508 × 345 root, all three path lengths and
+full path hashes, and the exact QML path/transform inventory.
+
+### ITEM 2 — 95% fit + 3 px down-nudge
+
+- New Panel constants: `catFitScale = 0.95`, `catCentreNudgeY = 3`.
+- The old fit was 152.69 × 104.00 for the bold asset. The slim asset's old fit
+  would be 153.14 × 104.00; at 95% it renders **145.48 × 98.80** (the requested
+  ~145 × 99).
+- Placement still uses the ink centroid, but the vertical target is now the
+  column centre **+ 3 px**. The top clamp is `Style.space(6)` (6 px).
+- Harness geometry: art **145.48 × 98.80**, bbox top **7.60 px** below the
+  panel top border, centroid **710.00,99.00** against target **710.00,99.00**
+  (column centre 710.00,96.00 + nudge 3). All ink stays inside the 218 × 112
+  column; column, field, Sort direction and the settings button are unchanged.
+- Live-path geometry with the real `qs.Ui.KeyboardPanel` at 1280 × 720:
+  surfaceWidth **1280**, contentWidth **835**, content column **803 × 88**,
+  field **585**, column **218 × 112**, art **145.48 × 98.80**, art card y
+  **7.60** logical. The pixel probe on the live card found the first ink row at
+  **7.33 logical px** below the card's top border (>= 6).
+- The three surface-width regression checks still report
+  `field=585, column=218.00, cat=145.48x98.80, ok=true` at 1280/1920/2560.
+
+### ITEM 3 — status label fits its longest string
+
+Every service status value (measured at `Style.font.caption`; `N/N` uses the
+worst-case 4-digit `9999/9999`). Only values starting `Syncing library` are
+visible in this label:
+
+| status string (before shortening) | width |
+|---|---:|
+| `Syncing library…` | 96 |
+| `Syncing library · album lists…` | 180 |
+| `Syncing library · album lists N/N…` | 240 |
+| `Syncing library · matching…` | 162 |
+| `Syncing library · playlists…` | 168 |
+| `Syncing library · playlists N/N…` | 228 |
+| `Syncing library · album pages N/N…` | 240 |
+| `Syncing library · tracklists N/N…` | 234 |
+| `Syncing library · done N/N…` | 198 |
+
+Other service status values (never shown by this sync-only label, but
+enumerated for completeness): `Importing browser session…` **156**,
+`No browser session found — sign in to Bandcamp to see private items.` **408**,
+`Library updated · N albums` **174**, `Sync failed: <message>` variable
+(example 396), `Cleared imported session` **144**.
+
+At the real harness panel size the available gap is
+**601.00 − (455.84 + 8) = 137.16 px**. The longest old string, 240 px, would
+elide badly, so the strings were trimmed at the source in `Service.qml`: the
+headline `Syncing library…` is kept verbatim and the detail suffix is reduced
+to a 0–100 % value. `Service.syncStatusText(done, total)` is the single source
+of truth for these strings.
+
+Changed strings before -> after:
+
+| before | after |
+|---|---|
+| `Syncing library · album lists…` | `Syncing library…` |
+| `Syncing library · album lists N/N…` | `Syncing library… P%` |
+| `Syncing library · matching…` | `Syncing library…` |
+| `Syncing library · playlists…` | `Syncing library…` |
+| `Syncing library · playlists N/N…` | `Syncing library… P%` |
+| `Syncing library · album pages N/N…` | `Syncing library… P%` |
+| `Syncing library · tracklists N/N…` | `Syncing library… P%` |
+| `Syncing library · done N/N…` | `Syncing library… 100%` |
+
+After shortening, all **102** strings the label can show (base plus every
+0–100 %) were measured:
+
+| after string | width |
+|---|---:|
+| `Syncing library…` | 96 |
+| `Syncing library… 0–9%` | 114 |
+| `Syncing library… 10–99%` | 120 |
+| `Syncing library… 100%` | 126 |
+
+Layout:
+
+- The label is now sized to the **full available gap**:
+  `x = Sort direction right + 8 px`, `width = search field right − x`; it is
+  right-aligned, remains an overlay, and still only appears for
+  `Syncing library` statuses.
+- Harness: rect **463.84,127.00,137.16 × 14**, field right **601.00**,
+  Sort-direction right **455.84**, clearance exactly **8.00 px**.
+- Live scratch shell: label width **180.28 px** (its theme font metrics are
+  wider), longest string **126.00 px**, `truncated=false`.
+- New check iterates all 102 strings: each measured width is <= the real label
+  width, and the displayed longest string is not truncated.
+
+### Changed checks (enumerated)
+
+Replaced/renamed (phase 1):
+
+- `v3.5.4: the cat mark is the bold shipped SVG trace…` -> `v3.5.4.1: the cat
+  mark is the slim smoothed shipped SVG trace…`; implicit height 346 -> 345.
+- `v3.5.4: every bold cat path…` -> `v3.5.4.1: every slim cat path…`; aspect
+  508/346 -> 508/345.
+- `v3.5.4: the bold mark is fitted inside the column…` -> `v3.5.4.1: the slim
+  mark is fitted…`; aspect updated.
+- `v3.5.4: the mark's ink centroid matches the cat-column centre on both axes`
+  -> `v3.5.4.1: …matches the column centre plus the 3 px down-nudge`; same
+  2 px tolerance.
+- `v3.5.4: the mark's bbox sits fully inside…` -> `v3.5.4.1: …with all ink
+  clear of the edges`; still asserts left/top/right/bottom inside.
+- `v3.5.4: the bold mark still fills at least 90% of the column height` ->
+  `v3.5.4.1: the slim mark renders at 95% of the previous fit (~145 x 99)`.
+  This is a deliberate requirement change: 95% of the old fit is 88.2% of the
+  column height, so the old 90% check would contradict the requested fit; the
+  replacement asserts the exact 95% width and aspect instead.
+- `v3.5.4: the ink centroid is measured from the bold asset…` -> `v3.5.4.1:
+  …from the slim asset…`; constants updated.
+- Script-side accent check name bold -> slim; its ink-pixel floor was
+  recalibrated from **150** (solid bold silhouette) to **1,200** for this thin
+  outline. The reference render at ~145 × 99 has ~1,864 non-transparent ink
+  pixels (~988 alpha-weighted); the harness probe measures **1,333** ink
+  pixels. The semantic requirements are unchanged: peak is exactly the theme
+  accent, no pure white, none over accent.
+- Script-side centroid probe target changed from column centre to column
+  centre **+ 3 px**; same 3 px tolerance.
+- Python test names/docstrings changed bold -> slim; assertions now use the
+  smooth asset's byte hash, 508 × 345 root, and path lengths/hashes above.
+  Test count remains 3.
+
+Added:
+
+- `v3.5.4.1: the rendered ink's top edge sits at least 6 px below the panel top
+  border` (QML geometry).
+- `v3.5.4.1: the label spans the full gap from Sort direction + 8 px to the
+  field's right edge` (QML).
+- `v3.5.4.1: every enumerated sync status fits the full label width at the real
+  panel size` (QML, 102 strings).
+- Script-side `PASS the rendered ink's top edge is at least 6 px below the
+  panel top border` (pixel probe on the saved harness PNG).
+
+No existing check was weakened or deleted silently; the one semantic change
+(90% height coverage -> 95% of the previous fit) is the requested fit change.
+
+### Results
+
+- Python: **100 tests OK, 5 skipped**; with `OMATIME_LIVE=1`: **100 tests OK**
+  (the 5 live fixtures run).
+- QML: **592 checks**, `FAILS=0` in every phase (phase 1 **550**, relaunch 15,
+  real-data 17, script-side **10**); `QML tests: OK` (`588 -> 592`, +3 QML,
+  +1 script-side).
+- Surface-width regression: all three pass with field **585**, column
+  **218.00**, cat **145.48 × 98.80**, `ok=true`.
+- Accent probe: `rect=656,10,141,94 accent=#cacccc inkPixels=1333
+  exactAccentPixels=177 peak=#cacccc pureWhitePixels=0 overAccentPixels=0`.
+- Centroid probe: `column=601,0,219,113 centroid=709.33,58.49
+  target=710.50,59.50 nudge=3 error=-1.17,-1.01 inkWeight=992.4`.
+- Harness top-edge probe: `topEdge=8 limit=6` (geometric bbox top 7.60).
+- Live-path top-edge probe: `topEdge=11 physical / 7.33 logical limit=6`
+  (card 1253 × 180 physical = 835 × 120 logical at 1.5×).
+- Harness screenshots (full popup, real size): `/tmp/omatime-v3541-header.png`
+  and `/tmp/omatime-v3541-syncing.png`, both **835 × 570**, `saved=true`,
+  `Image.Ready`. The syncing shot uses the longest string,
+  `Syncing library… 100%`.
+- Live-path screenshots (real KeyboardPanel): `/tmp/omatime-v3541-live-normal.png`
+  and `/tmp/omatime-v3541-live-syncing.png`, both **1253 × 180** physical
+  (**835 × 120** logical). The cat/column geometry is identical in both; only
+  the status label appears. The scratch live shell does not resolve its theme
+  accent (`Color.accent` is undefined there), so the mark appears black in
+  these two diagnostic captures; the harness accent probe above is the
+  semantic check.
+
+### Owner live check
+
+1. `omarchy restart shell`, open the panel. The slim, smoothed cat is slightly
+   smaller than the bold v3.5.4 mark and sits a few pixels lower; the ears are
+   clearly clear of the top border.
+2. Confirm the ink looks centred in the right-hand column with the 3 px
+   downward nudge. Clicking the whole column still opens Settings.
+3. Trigger a refresh. The label shows `Syncing library…` and then short
+   percentage updates such as `Syncing library… 57%`; it is right-aligned to
+   the search field, starts 8 px after Sort direction, and never elides.
+4. Compare `/tmp/omatime-v3541-header.png` and
+   `/tmp/omatime-v3541-syncing.png`: identical layout, only the status label
+   differs. Compare the two live-path captures for the same geometry with the
+   real KeyboardPanel.

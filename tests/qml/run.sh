@@ -93,14 +93,18 @@ PY
 
 launch "phase 1 (fixture library)" "$home" 1
 
-# v3.5.4: the bold SVG mark must render in the theme accent at full strength,
-# from the saved real-size PNG (not just from the QML binding). Crop the art's
-# exact panel rect and require pixels equal to Color.accent; also prove no baked
-# white. A second probe measures the rendered ink centroid against the column.
-shot=/tmp/omatime-v354-header.png
+# v3.5.4.1: the slim smoothed SVG mark must render in the theme accent at full
+# strength, from the saved real-size PNG (not just from the QML binding). Crop
+# the art's exact panel rect and require pixels equal to Color.accent; also prove
+# no baked white. A second probe measures the rendered ink centroid against the
+# column centre plus the documented down-nudge, and a third measures the first
+# rendered ink row against the panel's top border.
+shot=/tmp/omatime-v3541-header.png
 accent=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.4 pixels: accent=\(#[0-9A-Fa-f]\{6\}\).*/\1/p' | head -1)
 rect=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.4 pixels: accent=#[0-9A-Fa-f]\{6\} art=\([0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*\).*/\1/p' | head -1)
 column=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.4 pixels: .*column=\([0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*,[0-9][0-9]*\).*/\1/p' | head -1)
+nudge=$(printf '%s\n' "$last_out" | sed -n 's/.*HARNESS v3\.5\.4\.1 normal geometry:.* nudge=\([-0-9.]*\) .*/\1/p' | head -1)
+[ -n "$nudge" ] || nudge=3
 if [ -n "$accent" ] && [ -n "$rect" ] && [ -f "$shot" ]; then
   probe=$(python3 - "$shot" "$accent" "$rect" <<'PY'
 import subprocess, sys
@@ -125,24 +129,29 @@ over_accent = sum(1 for p in pixels if max(p) > max(want) + 2)
 print(f"rect={x},{y},{w},{h} accent={accent} inkPixels={len(ink)} exactAccentPixels={exact} "
       f"peak=#{peak[0]:02x}{peak[1]:02x}{peak[2]:02x} pureWhitePixels={pure_white} "
       f"overAccentPixels={over_accent}")
-sys.exit(0 if len(ink) >= 150 and exact >= 1 and tuple(peak) == want and pure_white == 0 and
+# v3.5.4.1 reference render: the slim outline trace at the fitted ~145 x 99
+# size has ~1,860 non-transparent ink pixels and ~990 alpha-weighted pixels.
+# The old >=150 threshold belonged to the solid bold silhouette; 1,200 keeps a
+# firm floor for this thinner trace without admitting a blank/missing mark.
+sys.exit(0 if len(ink) >= 1200 and exact >= 1 and tuple(peak) == want and pure_white == 0 and
          (want == (255, 255, 255) or over_accent == 0) else 1)
 PY
 )
   if [ $? -eq 0 ]; then
-    echo "  PASS the rendered bold cat paths are the theme accent at full strength, with no baked white ($probe)"; passes=$((passes + 1))
+    echo "  PASS the rendered slim cat paths are the theme accent at full strength, with no baked white ($probe)"; passes=$((passes + 1))
   else
-    echo "  FAIL the rendered bold cat paths do not match the theme accent ($probe)"; fail=1
+    echo "  FAIL the rendered slim cat paths do not match the theme accent ($probe)"; fail=1
   fi
 else
   echo "  FAIL cat-SVG accent probe missing (accent='$accent' rect='$rect' shot='$shot')"; fail=1
 fi
 
 if [ -n "$accent" ] && [ -n "$column" ] && [ -f "$shot" ]; then
-  centroid=$(python3 - "$shot" "$accent" "$column" <<'PY'
+  centroid=$(python3 - "$shot" "$accent" "$column" "$nudge" <<'PY'
 import subprocess, sys
 from collections import Counter
-shot, accent, column = sys.argv[1:4]
+shot, accent, column, nudge = sys.argv[1:5]
+nudge = float(nudge)
 x, y, w, h = (int(v) for v in column.split(","))
 # Inset 2 px to exclude the panel's own border from the ink weighting.
 inset = 2
@@ -174,19 +183,61 @@ if sw == 0:
     sys.exit(1)
 cx, cy = sx / sw, sy / sw
 col_cx, col_cy = x + w / 2, y + h / 2
-dx, dy = cx - col_cx, cy - col_cy
-print(f"column={x},{y},{w},{h} centroid={cx:.2f},{cy:.2f} target={col_cx:.2f},{col_cy:.2f} "
+target_cy = col_cy + nudge
+dx, dy = cx - col_cx, cy - target_cy
+print(f"column={x},{y},{w},{h} centroid={cx:.2f},{cy:.2f} "
+      f"target={col_cx:.2f},{target_cy:.2f} nudge={nudge:g} "
       f"error={dx:.2f},{dy:.2f} inkWeight={sw:.1f}")
 sys.exit(0 if sw >= 100 and abs(dx) <= 3 and abs(dy) <= 3 else 1)
 PY
 )
   if [ $? -eq 0 ]; then
-    echo "  PASS the rendered bold cat's ink centroid is centred in the column ($centroid)"; passes=$((passes + 1))
+    echo "  PASS the rendered slim cat's ink centroid matches the column centre + down-nudge ($centroid)"; passes=$((passes + 1))
   else
-    echo "  FAIL the rendered bold cat's ink centroid is not centred in the column ($centroid)"; fail=1
+    echo "  FAIL the rendered slim cat's ink centroid misses the column centre + down-nudge ($centroid)"; fail=1
   fi
 else
   echo "  FAIL cat-column centroid probe missing (accent='$accent' column='$column' shot='$shot')"; fail=1
+fi
+
+# v3.5.4.1: the rendered ink's top edge must be at least 6 logical px below the
+# panel's top border, measured from the saved real-size PNG in the same column.
+if [ -n "$accent" ] && [ -n "$column" ] && [ -f "$shot" ]; then
+  topedge=$(python3 - "$shot" "$accent" "$column" <<'PY'
+import subprocess, sys
+from collections import Counter
+shot, accent, column = sys.argv[1:4]
+x, y, w, h = (int(v) for v in column.split(","))
+# Exclude the panel's own 2 px border from the scan.
+inset = 2
+x0, y0, w0, h0 = x + inset, y + inset, w - 2 * inset, h - 2 * inset
+raw = subprocess.check_output(["convert", shot, "-crop", f"{w0}x{h0}+{x0}+{y0}", "+repage",
+                               "-depth", "8", "rgb:-"], stderr=subprocess.DEVNULL)
+if len(raw) != w0 * h0 * 3:
+    print(f"wrong column crop: {len(raw)} bytes for {w0}x{h0}")
+    sys.exit(1)
+pixels = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+bg = Counter(pixels).most_common(1)[0][0]
+want = tuple(bytes.fromhex(accent[1:]))
+def closer_to_accent(p):
+    return sum(abs(p[i] - want[i]) for i in range(3)) < sum(abs(p[i] - bg[i]) for i in range(3))
+first = None
+for yy in range(h0):
+    row = pixels[yy * w0:(yy + 1) * w0]
+    if sum(1 for p in row if closer_to_accent(p)) >= 2:
+        first = yy + inset
+        break
+print(f"column={x},{y},{w},{h} topEdge={first} limit=6")
+sys.exit(0 if first is not None and first >= 6 else 1)
+PY
+)
+  if [ $? -eq 0 ]; then
+    echo "  PASS the rendered ink's top edge is at least 6 px below the panel top border ($topedge)"; passes=$((passes + 1))
+  else
+    echo "  FAIL the rendered ink's top edge is too close to the panel top border ($topedge)"; fail=1
+  fi
+else
+  echo "  FAIL cat top-edge probe missing (accent='$accent' column='$column' shot='$shot')"; fail=1
 fi
 
 if [ -e "$home/.cache/omatimeatbandcamp/cookies.txt" ]; then

@@ -304,6 +304,18 @@ Item {
     cookiesProc.running = true
   }
 
+  // v3.5.4.1: the toolbar label has ~137 px between Sort direction and the
+  // search field's right edge. Keep the "Syncing library…" headline verbatim
+  // and shorten the detail suffix to a 0-100% value, so the longest sync
+  // string stays inside that gap at the real panel size.
+  function syncStatusText(done, total) {
+    var have = Number(done) || 0
+    var all = Number(total) || 0
+    if (all <= 0) return "Syncing library…"
+    var pct = Math.max(0, Math.min(100, Math.floor(have * 100 / all)))
+    return "Syncing library… " + pct + "%"
+  }
+
   function startSync() {
     if (syncProc.running) return
     status = "Syncing library…"
@@ -353,7 +365,7 @@ Item {
             root.loadLibrary()
           }
           syncProc.stage = d.stage
-          root.status = "Syncing library · " + d.stage + (d.total > 0 ? " " + d.done + "/" + d.total : "") + "…"
+          root.status = root.syncStatusText(d.done, d.total)
         } catch (e) {}
       }
     }
