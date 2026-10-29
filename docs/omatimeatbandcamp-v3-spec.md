@@ -3460,3 +3460,54 @@ behaviour is testable.
   no credential file was opened by this pass (`ls -l` only).
 - gitleaks 8.30.1 over the working tree and reachable history: **0 findings**
   after the rename, with no ignore file.
+
+---
+
+## v1.0.0-beta.1 — public release preparation
+
+The internal v3.5.x lineage ends here; public versioning starts at
+`v1.0.0-beta.1`. The internal history stays documented above and is not
+retagged or rewritten.
+
+### Merge and tag
+
+- `v2` merged into `master` with a merge commit (`--no-ff`); the resulting tree
+  is byte-for-byte `v2`'s tree (`git diff v2 HEAD` empty). `master` and the new
+  tag were pushed. No history was rewritten.
+- Annotated tag `v1.0.0-beta.1` is on the merge commit.
+- `manifest.json` version is now `1.0.0-beta.1`; its stale "streams extracted
+  from Bandcamp pages" description was replaced with the Subsonic/bar-panel
+  description. The older `0.1.0` value belonged to the internal lineage.
+
+### Installability fix
+
+`cookies.py` had been left untracked and `.gitignore`d after the cookie
+incident remediation. That was safe for the private working tree but made a
+fresh clone unable to import a browser session, so the public install would
+have failed at setup. The current loader contains no cookie values (only generic
+browser paths and code), and is now tracked; `.gitignore` still ignores the
+cookie jar (`cookies.txt*`), credentials, backups, caches and logs.
+
+### Documentation and screenshots
+
+- `README.md` was rewritten as the tester's front door: what it is, the Omarchy
+  plugin install command, the full cookie and Subsonic setup walkthrough, one
+  short security section, panel/queue shortcuts, the two optional (not shipped)
+  `bindings.lua` lines, and screenshots.
+- `docs/release-notes-v1.0.0-beta.1.md` drafts the GitHub Release: feature
+  summary, beta environment-testing asks (resolutions, scaling, themes, library
+  sizes), known limitations (streaming only, no downloads, pre-orders list but
+  do not play until release day) and the issue tracker.
+- Fresh captures were generated through the live-theme lane (real `$HOME` theme
+  tokens and font, real `Bar.qml` and `qs.Ui.KeyboardPanel`, synthetic fixture
+  data, no credentials/network/mpv/MPRIS): `docs/images/panel-normal.png`,
+  `panel-queue.png`, `panel-syncing.png`. The README embeds the normal and queue
+  captures.
+
+### Verification
+
+- Python: **119 tests OK, 5 skipped**. Live fixtures: **5 tests OK**.
+- QML: **624 checks, FAILS=0**. `omarchy plugin validate .` passes.
+- `--load-scripts=no` is unchanged; no credential or cookie value was read or
+  printed during release preparation. No history rewrite, no visibility change,
+  and nothing was published beyond the requested branch and tag push.

@@ -7,8 +7,8 @@ __pycache__/
 *.log
 .cache/
 
-# Sensitive files: browser-session importer, cookie jars and backups, credentials, env files
-cookies.py
+# Sensitive files: cookie jars and backups, credentials, env files.
+# cookies.py is the source importer (no secrets), so it is tracked for installs.
 cookies.txt*
 *.bak
 *.bak-*

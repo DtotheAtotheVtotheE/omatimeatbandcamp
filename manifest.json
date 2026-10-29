@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "com.github.dtotheatothevtothee.omatimeatbandcamp",
   "name": "OmaTimeAtBandcamp",
-  "version": "0.1.0",
+  "version": "1.0.0-beta.1",
   "author": "dtotheatothevtothee",
   "license": "MIT",
-  "description": "Bandcamp collection and playlist player. Streams are extracted from Bandcamp pages and played through mpv. Sign in to Bandcamp in your browser and the plugin imports the session automatically to unlock purchased and private items; your account is detected automatically. Browse albums and playlists, search everything, and shuffle all tracks, an album, or a playlist.",
+  "description": "Your Bandcamp collection and playlists in an Omarchy bar panel. Streams through Bandcamp's official Subsonic API and plays through mpv. Imports your browser session automatically, shows your real collection including pre-orders, and works with the keyboard.",
   "kinds": [
     "service",
     "bar-widget"
