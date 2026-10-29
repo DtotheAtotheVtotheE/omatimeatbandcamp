@@ -2571,8 +2571,10 @@ At the real harness panel size the available gap is
 **601.00 − (455.84 + 8) = 137.16 px**. The longest old string, 240 px, would
 elide badly, so the strings were trimmed at the source in `Service.qml`: the
 headline `Syncing library…` is kept verbatim and the detail suffix is reduced
-to a 0–100 % value. `Service.syncStatusText(done, total)` is the single source
-of truth for these strings.
+to a 0–100 % value. `Service.syncStatusText(done, total)` was the single source
+of truth for these strings at v3.5.4.1; v3.5.6 keeps the headline and replaces
+that formatter with `syncStatusText(percent)`, fed by the whole-sync percentage
+below.
 
 Changed strings before -> after:
 
@@ -2889,3 +2891,175 @@ could not print a URL or credential.
 4. Press Clear, restart, and confirm Up Next is empty. Then queue something,
    start a track in a different album, restart, and confirm the queue is still
    empty.
+
+## v3.5.6 whole-sync percentage (2026-10-29)
+
+### Baseline (fresh session, before editing)
+
+- Branch/commit: `v2` @ `31ecd71`.
+- Python: **105 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`).
+- QML: **607 checks**, `FAILS=0` (phase 1 **564**, relaunch 15, real-data 17,
+  script-side 11); `QML tests: OK`.
+- These match the quoted baseline exactly; the stop-if-different guard did not
+  trigger.
+
+### Problem and decision
+
+v3.5.4.1 made every sync string truthful at the *phase* scale: the front
+phases had no denominator, so the label showed the bare `Syncing library…`
+headline, and only the counted tail phases showed `P%`. On a real sync the
+uncounted front (album lists, matching) is most of the wall clock, so the
+number appeared briefly at the end and was absent when the owner looked.
+
+v3.5.6 composes **one overall percentage for the whole sync** in the Service
+layer, from the `stage/done/total` events the backend already emits. The label
+format, placement, visibility rule and no-layout-shift behaviour are unchanged.
+This trades the old per-phase percentages (truthful but mostly invisible) for a
+number that is always present and never moves backwards. It does not invent
+progress inside a phase that has no denominator: such a phase holds at its band
+floor.
+
+### Phase map (in order)
+
+The backend prints JSON progress lines `{stage, done, total}`. The real-library
+sizes below come from the cached 688-album / 33-playlist library and
+`spike/SUBSONIC-REPORT.md`.
+
+| # | stage | events the backend emits | real-library size | role |
+|---|---|---|---:|---|
+| 0 | *(browser import)* | none (status `Importing browser session…`, not a sync label) | — | precedes the sync; outside the percentage |
+| 1 | `album lists` | start `0/0`; end `N/N`, N = web feed + Subsonic list | 645 + 687 = **1332** | no intermediate denominator; holds, then reaches the band top at the end |
+| 2 | `matching` | start `0/0` only; next event is the playlists start | **688** merged albums | uncounted; holds at its floor |
+| 3 | `playlists` | start `0/0`; then `i/33` for i = 0…32; no final `33/33` | **33** playlists | counted; last event is `(N-1)/N` |
+| 4 | `album pages` | `i/N` before each page; no final `N/N` | **1** pre-order/web-only target | counted; `0/1` is the only real event here |
+| 5 | `tracklists` | start `0/N`; then every `SAVE_EVERY` (100) albums; no final `N/N` | **608** fetched in the cold real sync | counted; the longest tail phase |
+| 6 | `done` | `N/N` (688/688) | **688** | actual completion; the only event allowed to print 100% |
+
+`matching` has no completion count, and `tracklists` previously had no start
+event. The other phases already announced their start. Backend change required
+for the map to be exact (enumerated here, nothing else changed):
+
+- `backend/library.py`: one added `_checkpoint("tracklists", 0, total,
+  progress)` immediately before the worker pool when `total > 0`. Without it
+  the first tracklists event is after 100 albums, leaving the overall number in
+  the previous band for that interval. No event shape/field changed; no event
+  was removed or reordered.
+
+### Weights and derivation
+
+Weights are the measured cold-sync timing shares on the real library
+(`spike/SUBSONIC-REPORT.md`: 93.6 s total) rounded to whole points. Cold timing
+is used, not the latest incremental sync, so the bands also cover a first/deep
+sync. The item counts in the phase map corroborate the same order of work.
+
+| stage | band | weight | cold timing | share |
+|---|---:|---:|---:|---:|
+| `album lists` | 0 → 36 | 36 | 33.63 s | 35.9% |
+| `matching` | 36 → 53 | 17 | 15.76 s | 16.8% |
+| `playlists` | 53 → 66 | 13 | 12.15 s | 13.0% |
+| `album pages` | 66 → 67 | 1 | 0.79 s (remainder) | 0.8% |
+| `tracklists` | 67 → 100 | 33 | 31.27 s | 33.4% |
+| `done` | 100 | — | completion marker | — |
+
+The weights sum to **100**. A counted phase interpolates
+`floor + floor((ceiling − floor) × done / total)` inside its band (ratio
+clamped to 0…1). A phase with `total <= 0` or `done <= 0` returns its floor.
+Because an uncounted phase never consumes its reserved weight, the number holds
+there and resumes at the next phase's floor; that jump is deliberate and is not
+invented progress.
+
+### Composition and invariants
+
+`Service.qml` now owns the whole calculation, next to the label text:
+
+- `syncPhaseBand(stage)` — the table above.
+- `syncPercentFor(stage, done, total)` — pure band interpolation.
+- `advanceSyncProgress(stage, done, total)` — advances the single
+  `syncPercent`, clamps it to `max(previous, next)`, and writes the label
+  string.
+- `beginSyncProgress()` — resets to 0 only when a new sync starts.
+- `syncStatusText(percent)` — the only formatter: `Syncing library… P%`.
+
+Invariants:
+
+1. **Monotonic non-decreasing for the whole sync.** A revised denominator, a
+   late event or a phase change can never move the number backwards.
+2. **100 only at actual completion.** Every non-`done` result is capped at 99,
+   including a tracklists checkpoint where `done == total`; only the backend's
+   explicit `done` stage prints 100%.
+3. **A percentage whenever a band is active.** `startSync()` enters at
+   `Syncing library… 0%`, so after the opening instant every sync state is
+   numeric. The bare headline remains a possible string only at the opening
+   instant/manual setup.
+4. **Everything else unchanged.** The string format, the label's position
+   (Sort direction + 8 px to the search field's right edge), its
+   `Syncing library` visibility rule, its overlay/no-layout-shift behaviour,
+   and `Panel.qml` are untouched.
+
+Label budget remains pre-proven: the new string set is the headline plus every
+0–100% value (102 strings). Measured at the label font, widths are **96 px**
+(headline), **114 px** (0–9%), **120 px** (10–99%), **126 px** (100%) against
+the real **137.16 px** gap. The v3.5.4.1 every-string-fits check now enumerates
+the new formatter and stays green (`count=102`, `max=126.00`,
+`labelWidth=137.16`).
+
+### Checks changed or added
+
+- **Extended** `v3.5.4.1: every enumerated sync status fits the full label width
+  at the real panel size`: it now builds the set through the new
+  `syncStatusText(percent)` formatter (headline + 0–100), still 102 strings.
+  Reason: the formatter is now percent-first; the budget and assertions are
+  unchanged.
+- **Added** `v3.5.6: the label shows a percentage during the front album-list
+  phase`. Reason: the front phase used to show only the bare headline.
+- **Added** `v3.5.6: the whole scripted phase sequence never moves the overall
+  percent backwards`. Reason: end-to-end monotonicity over every phase in
+  order.
+- **Added** `v3.5.6: a revised denominator never moves the percent backwards
+  (304/608 = 83%, then 200/800 stays 83%)`. Reason: proves the clamp, not just
+  a naturally increasing script.
+- **Added** `v3.5.6: an uncounted phase holds at its band floor (matching stays
+  at 36%)`. Reason: no invented progress.
+- **Added** `v3.5.6: a counted phase interpolates inside its band (album lists
+  666/1332 = 18%, tracklists 100/608 = 72%, 304/608 = 83%)`. Reason: proves
+  N/total inside the band.
+- **Added** `v3.5.6: 100% appears only at the backend's done event`. Reason:
+  the 99 cap plus the real completion event.
+- **Added** `v3.5.6: the label hides at completion per the existing rule`.
+  Reason: completion still uses the existing `Library updated` status and
+  visibility rule; no new hide path.
+
+No existing check was weakened or deleted. The scripted sequence uses the
+backend's real event shapes (last playlist/page event `(N-1)/N`, tracklists
+start `0/N`, then every 100) plus the explicit revised-denominator event.
+
+### Results
+
+- Python: **105 tests OK, 5 skipped** (backend change adds no test; the existing
+  count is unchanged).
+- Live fixtures (`OMATIME_LIVE=1`): **5 tests OK**.
+- QML: **614 checks**, `FAILS=0` in every phase (phase 1 **571**, relaunch 15,
+  real-data 17, script-side 11); `QML tests: OK` (`607 → 614`, +7 QML checks).
+- Scripted sequence logged:
+  `album lists 0/0=0`, `666/1332=18`, `1332/1332=36`,
+  `matching 0/0=36`, `playlists 0/0=53`, `16/33=59`, `32/33=65`,
+  `album pages 0/1=66`, `tracklists 0/608=67`, `100/608=72`,
+  `304/608=83`, revised `200/800=83` (clamped), `600/608=99`,
+  `done 688/688=100`.
+- `omarchy plugin validate .`: exit 0.
+- Credential files were not opened (paths/modes only). No stream URL, cover URL
+  or credential value was printed or committed. `--load-scripts=no` is
+  untouched; the MPRIS whitelist is untouched.
+
+### Owner live check
+
+1. Trigger Refresh. The label should read `Syncing library… 0%` immediately,
+   then step through the bands; it never returns to the bare headline during
+   the sync.
+2. Confirm it never goes backwards and that the only `100%` is the last sync
+   frame, after which the label disappears and `Library updated · N albums`
+   (or the existing failure text) takes over.
+3. Confirm the label still sits in the Albums/Playlists/Sort row, right-aligned
+   to the search field, starts 8 px after Sort direction, and opens no gap or
+   shift when it appears.

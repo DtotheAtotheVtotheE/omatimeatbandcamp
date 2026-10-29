@@ -140,6 +140,10 @@ Item {
   property string searchQuery: ""
   property string detectedUser: ""
   property string status: ""
+  // v3.5.6: one overall sync percentage, composed from the stage/count events
+  // the backend already prints. Kept separate from status so the clamp survives
+  // every event and can be reset only when a new sync starts.
+  property int syncPercent: 0
   property string lastUpdated: ""
   // Short-lived message for the user ("Not yet released"); cleared by noticeTimer.
   property string notice: ""
@@ -381,21 +385,63 @@ Item {
     cookiesProc.running = true
   }
 
-  // v3.5.4.1: the toolbar label has ~137 px between Sort direction and the
-  // search field's right edge. Keep the "Syncing library…" headline verbatim
-  // and shorten the detail suffix to a 0-100% value, so the longest sync
-  // string stays inside that gap at the real panel size.
-  function syncStatusText(done, total) {
+  // v3.5.6: one overall percentage for the whole sync. The backend emits
+  // stage/done/total at phase boundaries and at the counted work inside each
+  // phase; this table maps those phases onto one monotonic 0-100 scale.
+  //
+  // Bands are the cold-sync timing shares measured on the real library
+  // (spike/SUBSONIC-REPORT.md, 93.6 s total): album lists 35.9 -> 36,
+  // matching 16.8 -> 17, playlists 13.0 -> 13, album pages 0.8 -> 1,
+  // tracklists 33.4 -> 33. They sum to 100. A phase with no denominator holds
+  // at its floor; a counted phase interpolates inside [floor, ceiling]. The
+  // ceiling is capped at 99 until the backend's explicit "done" stage.
+  function syncPhaseBand(stage) {
+    var bands = {
+      "album lists": { floor: 0, ceiling: 36 },
+      "matching": { floor: 36, ceiling: 53 },
+      "playlists": { floor: 53, ceiling: 66 },
+      "album pages": { floor: 66, ceiling: 67 },
+      "tracklists": { floor: 67, ceiling: 100 },
+      "done": { floor: 100, ceiling: 100 }
+    }
+    return bands[String(stage)] || null
+  }
+
+  function syncPercentFor(stage, done, total) {
+    var band = syncPhaseBand(stage)
+    if (!band) return root.syncPercent
+    if (stage === "done") return 100
     var have = Number(done) || 0
     var all = Number(total) || 0
-    if (all <= 0) return "Syncing library…"
-    var pct = Math.max(0, Math.min(100, Math.floor(have * 100 / all)))
+    if (all <= 0 || have <= 0) return band.floor
+    var ratio = Math.max(0, Math.min(1, have / all))
+    var pct = Math.floor(band.floor + (band.ceiling - band.floor) * ratio)
+    return Math.max(band.floor, Math.min(99, Math.min(band.ceiling, pct)))
+  }
+
+  function syncStatusText(percent) {
+    var pct = Math.max(0, Math.min(100, Math.floor(Number(percent) || 0)))
     return "Syncing library… " + pct + "%"
+  }
+
+  // Advance the single percentage; a revised denominator or late event can
+  // never move it backwards. Only the backend's "done" stage can print 100.
+  function advanceSyncProgress(stage, done, total) {
+    var next = root.syncPercentFor(stage, done, total)
+    if (next < root.syncPercent) next = root.syncPercent
+    root.syncPercent = Math.max(0, Math.min(100, next))
+    root.status = root.syncStatusText(root.syncPercent)
+    return root.status
+  }
+
+  function beginSyncProgress() {
+    root.syncPercent = 0
+    root.status = root.syncStatusText(0)
   }
 
   function startSync() {
     if (syncProc.running) return
-    status = "Syncing library…"
+    beginSyncProgress()
     syncProc.lastError = ""
     syncProc.stage = ""
     var cmd = ["python3", root.pluginDir + "/backend", "sync", "--workers", "4"]
@@ -442,7 +488,7 @@ Item {
             root.loadLibrary()
           }
           syncProc.stage = d.stage
-          root.status = root.syncStatusText(d.done, d.total)
+          root.advanceSyncProgress(d.stage, d.done, d.total)
         } catch (e) {}
       }
     }

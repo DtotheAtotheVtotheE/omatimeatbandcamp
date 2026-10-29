@@ -262,6 +262,10 @@ class Library:
             done = 0
             failures = []
             if total:
+                # v3.5.6: announce the phase start, like the other phases do.
+                # Without this the first event is after SAVE_EVERY=100 albums,
+                # so the overall percentage would sit in the previous band.
+                self._checkpoint("tracklists", 0, total, progress)
                 with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
                     futs = {ex.submit(self._fetch_album, sub, a): a for a in todo}
                     for fut in futs:
