@@ -1286,7 +1286,12 @@ Panel {
           text: root.service ? root.service.status : ""
           color: Qt.darker(root.foreground, 1.4)
           font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
+          // v3.5.6.1: one pixel below caption. On the real library toolbar the
+          // live gap is 122.78 px (688 albums / 33 playlists widen the Sort
+          // row); caption-sized "100%" is 126.00 px, so the live label elided
+          // it even though the fixture font fitted. This keeps every string's
+          // live-font margin >= 6 px without changing the text format.
+          font.pixelSize: Math.max(1, Style.font.caption - 1)
           elide: Text.ElideRight
           horizontalAlignment: Text.AlignRight
           // v3.5.4.1: use the full gap from Sort direction's right edge + 8 px

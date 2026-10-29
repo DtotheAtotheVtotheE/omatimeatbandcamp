@@ -3063,3 +3063,113 @@ start `0/N`, then every 100) plus the explicit revised-denominator event.
 3. Confirm the label still sits in the Albums/Playlists/Sort row, right-aligned
    to the search field, starts 8 px after Sort direction, and opens no gap or
    shift when it appears.
+
+## v3.5.6.1 100% label clip fix (2026-10-29)
+
+### Baseline (fresh session, before editing)
+
+- Branch/commit: `v2` @ `69fa1a0`.
+- Python: **105 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`).
+- QML: **614 checks**, `FAILS=0` (phase 1 571, relaunch 15, real-data 17,
+  script-side 11); `QML tests: OK`.
+- These matched the quoted baseline exactly; the stop-if-different guard did
+  not trigger.
+
+### Reproduction with the real theme (live path)
+
+The live-path probe loaded the owner's real theme from `$HOME`: the real
+`Color`/`Style` singletons (`accent=#9a724a`, `foreground=#afa89c`,
+`caption=10`, `spacingScale=1`) and the real `Bar.qml` (not a fake bar) plus
+the real `qs.Ui.KeyboardPanel`. The service was a deterministic stub only so
+the label could be driven straight to `Syncing library… 100%` without racing
+a real sync. The toolbar used the owner's real library size: **688 albums /
+33 playlists**, sort **Recently added**, descending.
+
+At 100%, with the label still at caption size:
+
+| measurement | live path | fixture |
+|---|---:|---:|
+| label rect | `462.22, 71.00, 122.78 × 14.00` | `463.84, 127.00, 137.16 × 14` |
+| label gap (width) | **122.78** | **137.16** |
+| Sort-direction right | 454.22 | 455.84 |
+| search-field right | 585.00 | 601.00 |
+| `Syncing library… 100%` in the live font | **126.00** | — |
+| `Syncing library… 100%` in the fixture font | — | **126.00** |
+| label `truncated` | **true** | false |
+
+The hypothesis that the live theme font draws the string wider is **refuted**:
+both fonts measure **126.00 px**. The defect is real, but it is a **gap-width**
+failure, not a string-width failure. The real library counts widen the
+Albums/Playlists buttons under the real theme, moving Sort direction right and
+shrinking the label from the fixture's 137.16 px to **122.78 px** — 3.22 px
+less than the 126 px worst string. That is why 100% elided while the shorter
+single/double-digit strings still fitted.
+
+### Layer chosen
+
+Measured options against the live gap of 122.78 px:
+
+| option | result | 100% margin |
+|---|---|---:|
+| a. drop the space before `%` | string 126.00 → 120.00 | 2.78 px (below 6) |
+| b. clearance 8 px → 4 px | gap 122.78 → 126.78 | 0.78 px (below 6) |
+| **c. caption 10 → 9 px** | worst string 126.00 → **114.20** | **8.58 px** |
+
+Because neither a nor b alone reached 6 px, the formatter was left untouched
+(no visible-text change) and the label font was reduced by one pixel:
+`font.pixelSize: Math.max(1, Style.font.caption - 1)`. Clearance stays at
+8 px, so the label still starts 8 px after Sort direction and never overlaps.
+The percent composition, monotonicity, 99-cap and hide-at-completion
+invariants are unchanged. After the fix: label rect
+`462.22, 71.00, 122.78 × 14.00`, worst live-font string **114.20 px**, margin
+**8.58 px**.
+
+### Hardened check
+
+New live-path launch in `tests/qml/run.sh` (real `$HOME` theme/font, real
+`Bar.qml`, real `qs.Ui.KeyboardPanel`) runs `tests/qml/live_theme.qml` and
+enumerates all **102** strings. The deterministic stub uses the real library
+counts and Recently-added sort that exposed the clip.
+
+Changed checks:
+
+- **Added** `v3.5.6.1: every enumerated sync status fits the live-path label
+  with the real theme font (100% clip incident)`. Reason: the existing
+  every-string check used the fixture font/gap and could not see the live
+  real-library gap. It asserts every string has rendered width <= label width
+  and `truncated == false` in the live path.
+- **Added** `v3.5.6.1: the live-path 100% capture shows the full string, not
+  truncated`. Reason: saves and checks the real 100% frame, not just the
+  measurement.
+- **Unchanged**: `v3.5.4.1: every enumerated sync status fits the full label
+  width at the real panel size` still runs with the fixture font. All v3.5.6
+  percent/invariant checks remain as written. No check was weakened or removed.
+
+Against `69fa1a0` the new live-path check fails exactly as the owner reported:
+`labelWidth=122.78`, `max=126.00`, `margin=-3.22`, `truncated=true`. After the
+fix it passes with `max=114.20`, `margin=8.58`, `truncated=false`.
+
+### Results
+
+- Python: **105 tests OK, 5 skipped**.
+- Live fixtures: **5 tests OK** (`OMATIME_LIVE=1`).
+- QML: **616 checks**, `FAILS=0` (phase 1 571, relaunch 15, real-data 17,
+  script-side 11, live-theme 2); `QML tests: OK` (`614 → 616`, +2 live-path
+  checks).
+- Live-path capture of the 100% state:
+  `/tmp/omatime-v3561-live-100.png`, **1253 × 855** physical (835 × 570
+  logical at 1.5×), showing the complete `Syncing library… 100%` string.
+- Credential files were not opened (paths/modes only). No stream URL, cover
+  URL or credential value was printed or committed. `--load-scripts=no` is
+  untouched.
+
+### Owner live check
+
+1. On the real panel with 688 albums / 33 playlists, trigger Refresh. The
+   label is one pixel smaller than before and reads single/double-digit
+   percentages normally.
+2. At completion it must show the whole `Syncing library… 100%` for its final
+   frame, then hide as before; no `10`-only frame.
+3. Confirm the label still starts 8 px after Sort direction, stays right-aligned
+   to the search field, and does not overlap or shift any control.

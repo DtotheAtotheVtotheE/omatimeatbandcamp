@@ -8,11 +8,13 @@
 # plugin in, and runs tests/qml/shell.qml with a FAKE $HOME, so logout, refresh and the
 # persisted UI choices are exercised for real without touching your files.
 #
-# Three launches:
+# Four launches:
 #   1. phase 1: all behaviour, against the synthetic library in tests/qml/fixtures/
 #   2. phase 2: relaunch on the same fake HOME; the sort/filter choices from phase 1 must come back
 #   3. real:    invariants against YOUR library cache (~/.cache/omatimeatbandcamp/library/library.json),
 #               read-only copy; skipped if it does not exist. Skip with REAL=0.
+#   4. live theme: v3.5.6.1 every-string-fits check with the real $HOME theme/font and the
+#               real Bar.qml + qs.Ui.KeyboardPanel; needs a Wayland session, else skipped.
 #
 # NOT covered (stubbed): the real KeyboardPanel's click-outside-to-close and window focus
 # handling. Those are the shell's own code and are unchanged by the plugin.
@@ -350,6 +352,30 @@ if [ "${REAL:-1}" != "0" ] && [ -f "$real_lib" ]; then
   launch "real-data smoke (your library cache)" "$rhome" real
 else
   echo "== real-data smoke skipped (no $real_lib, or REAL=0)"
+fi
+
+# v3.5.6.1: the every-string-fits check must also run in the live-path
+# environment with the real theme tokens and font. This launch uses the real
+# $HOME (so qs.Commons loads the owner's actual theme), the real Bar.qml and
+# the real qs.Ui.KeyboardPanel, not the plain-Item stub or a fake bar. A
+# deterministic service stub drives the label straight to 100%; it never
+# starts a sync or touches credentials. The check is named for the incident.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  live_shell="$work/live-theme-shell"
+  cp -r "$omarchy/shell" "$live_shell"
+  cp "$here/live_theme.qml" "$live_shell/shell.qml"
+  ln -s "$plugin" "$live_shell/plug"
+  out=$(HOME="$HOME" HARNESS_PHASE=live OMARCHY_PATH="$omarchy" OMATIME_PLUGIN_DIR="$plugin" \
+    timeout 60 quickshell -n -p "$live_shell" 2>&1 || true)
+  echo "== live-path real-theme font (v3.5.6.1)"
+  echo "$out" | grep -E "HARNESS|ERROR" | sed -E 's/\x1b\[[0-9;]*m//g; s/^.*HARNESS /  /'
+  p=$(echo "$out" | grep -c "HARNESS PASS")
+  passes=$((passes + p))
+  echo "$out" | grep -q "HARNESS FAILS=0" || fail=1
+  echo "$out" | grep -q "ERROR" && fail=1
+  echo "  -> live-path real-theme font: $p checks passed"
+else
+  echo "== live-path real-theme font skipped (no Wayland session)"
 fi
 
 echo "QML checks passed in total: $passes"
