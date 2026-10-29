@@ -21,7 +21,7 @@ release day).
 > **Beta.** v1.0.0-beta.1 is a feature-complete public beta looking for
 > environment testing — different resolutions, display scaling, themes and
 > library sizes. See the [release notes](docs/release-notes-v1.0.0-beta.1.md)
-> and [file an issue](https://github.com/gy9cd2bvr7-svg/omatimeatbandcamp/issues)
+> and [file an issue](https://github.com/dtotheatothevtothee/omatimeatbandcamp/issues)
 > if something does not fit.
 
 ## Install
@@ -349,4 +349,4 @@ sync, `backend/mpris.py` the plugin's own MPRIS bridge (not mpv-mpris),
 - Stream URLs are time-limited; the library refreshes on an interval.
 - This is for personal use. Respect Bandcamp's terms of service and the artists
   you listen to — buying the music is the point.
-- License: MIT (see `manifest.json`).
+- License: MIT (see `LICENSE`).
