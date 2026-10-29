@@ -3347,8 +3347,10 @@ network, cookie, MPRIS, file-permission, IPC/JSON and error-path surfaces.
 
 Work order: the security-audit findings above. Baseline at `d3386a2` was
 confirmed before editing: Python **105 tests OK, 5 skipped**; live fixtures
-**5 OK**; QML **616 checks, FAILS=0**. Nothing was weakened; every change below
-adds a regression check where the behaviour is testable.
+**5 OK**; QML **616 checks, FAILS=0**. The dummy-only history rewrite for
+finding 12 changes that audit commit's hash to `14cf791`; its tree is identical.
+Nothing was weakened; every change below adds a regression check where the
+behaviour is testable.
 
 ### Finding-to-fix map
 
