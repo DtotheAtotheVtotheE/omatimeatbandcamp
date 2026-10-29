@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import secrets
+import stat
 import time
 import tomllib
 import urllib.error
@@ -46,7 +47,32 @@ class CredentialsError(SubsonicError):
     pass
 
 
+def _enforce_private(path, mode, kind):
+    """Tighten a plugin-owned path to `mode`; refuse if group/other bits remain."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        raise CredentialsError(
+            f"cannot inspect {kind} {path}: {e}; run: chmod {mode:o} {path}") from None
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        try:
+            os.chmod(path, mode)
+            st = os.stat(path)
+        except OSError as e:
+            raise CredentialsError(
+                f"{kind} {path} is group/world-accessible and could not be tightened: {e}; "
+                f"run: chmod {mode:o} {path}") from None
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            raise CredentialsError(
+                f"{kind} {path} is still group/world-accessible; "
+                f"run: chmod {mode:o} {path}")
+
+
 def load_credentials(path=CRED_PATH):
+    _enforce_private(os.path.dirname(os.path.abspath(path)), 0o700, "credentials directory")
+    _enforce_private(path, 0o600, "credentials file")
     try:
         with open(path, "rb") as f:
             cfg = tomllib.load(f)

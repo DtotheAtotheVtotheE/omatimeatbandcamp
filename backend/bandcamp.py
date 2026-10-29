@@ -13,11 +13,55 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
 FEED_URL = "https://bandcamp.com/api/fancollection/1/collection_items"
 SETTINGS_URL = "https://bandcamp.com/settings"
+
+
+def _host(url):
+    try:
+        parsed = urllib.parse.urlsplit(str(url))
+        host = (parsed.hostname or "").rstrip(".").lower()
+    except ValueError:
+        return None
+    return host
+
+
+def cookie_allowed(url):
+    """True only for https URLs on bandcamp.com or a *.bandcamp.com host."""
+    try:
+        parsed = urllib.parse.urlsplit(str(url))
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").rstrip(".").lower()
+    return (parsed.scheme == "https" and bool(host)
+            and (host == "bandcamp.com" or host.endswith(".bandcamp.com")))
+
+
+def safe_url(url):
+    """Return scheme://host/path, dropping userinfo, query and fragment."""
+    try:
+        parsed = urllib.parse.urlsplit(str(url))
+    except ValueError:
+        return "<url>"
+    host = _host(url)
+    if not parsed.scheme or not host:
+        return "<url>"
+    try:
+        port = f":{parsed.port}" if parsed.port else ""
+    except ValueError:
+        port = ""
+    return f"{parsed.scheme}://{host}{port}{parsed.path}"
+
+
+def scrub_urls(text):
+    """Redact every URL embedded in free-form error text to its safe form."""
+    def repl(match):
+        return safe_url(match.group(0))
+    return re.sub(r"https?://[^\s'\"<>]+", repl, str(text))
 
 
 def load_cookie(path):
@@ -43,16 +87,16 @@ def default_http(url, cookie=None, data=None, timeout=60):
     if data is not None:
         headers["Content-Type"] = "application/json"
         body = json.dumps(data).encode()
-    if cookie:
+    if cookie and cookie_allowed(url):
         headers["Cookie"] = cookie
     req = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read().decode("utf-8", "ignore")
     except urllib.error.HTTPError as e:
-        raise BandcampError(f"HTTP {e.code} for {url}") from None
+        raise BandcampError(f"HTTP {e.code} for {safe_url(url)}") from None
     except (urllib.error.URLError, OSError) as e:
-        raise BandcampError(f"network error for {url}: {e}") from None
+        raise BandcampError(f"network error for {safe_url(url)}: {scrub_urls(e)}") from None
 
 
 class BandcampError(Exception):

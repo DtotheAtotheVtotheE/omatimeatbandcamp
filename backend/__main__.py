@@ -33,6 +33,12 @@ class _Redact(logging.Filter):
     def filter(self, record):
         record.msg = self.lib._redact(record.getMessage())
         record.args = ()
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = self.lib._redact(record.exc_text)
+        if record.stack_info:
+            record.stack_info = self.lib._redact(record.stack_info)
         return True
 
 

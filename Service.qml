@@ -72,6 +72,32 @@ Item {
     return true
   }
 
+  // The Bandcamp session cookie may only travel to https://bandcamp.com or a
+  // *.bandcamp.com subdomain. This is the QML-side gate for the user-typed
+  // collection URL; backend/bandcamp.py repeats the check before every request.
+  function isBandcampUrl(url) {
+    var m = String(url || "").match(/^https:\/\/([^\/?#]+)(?:[\/?#]|$)/i)
+    if (!m) return false
+    var host = m[1].toLowerCase()
+    if (host.indexOf("@") >= 0) return false
+    var colon = host.indexOf(":")
+    if (colon >= 0) host = host.substring(0, colon)
+    host = host.replace(/\.$/, "")
+    return host === "bandcamp.com" || host.slice(-13) === ".bandcamp.com"
+  }
+
+  // Backend errors may mention a public collection/album URL. Show only
+  // scheme://host/path: drop userinfo, query and fragment.
+  function redactUrls(text) {
+    return String(text || "").replace(
+      /([a-z][a-z0-9+.-]*:\/\/)([^\s\/?#]*)([^\s?#]*)(\?[^\s#]*)?(#\S*)?/gi,
+      function(match, scheme, authority, path) {
+        var at = authority.lastIndexOf("@")
+        if (at >= 0) authority = authority.substring(at + 1)
+        return scheme + authority + path
+      })
+  }
+
   Process { id: openProc; running: false }
 
   // Path to the Netscape cookies.txt used for authenticated requests. When the
@@ -207,9 +233,12 @@ Item {
     blockLoading: true
     atomicWrites: true
     printErrors: false
+    onSaved: { chmodUi.running = false; chmodUi.running = true }
   }
 
-  Process { id: mkStateDir; running: false; command: ["mkdir", "-p", root.stateDir] }
+  // `install -d -m 700` also tightens an existing directory, unlike mkdir -p.
+  Process { id: mkStateDir; running: false; command: ["install", "-d", "-m", "700", root.stateDir] }
+  Process { id: chmodUi; running: false; command: ["chmod", "600", root.stateDir + "/ui.json"] }
 
   // v3.5.5: the Up Next list survives a shell restart. Same state directory and
   // FileView pattern as ui.json. Only identity records are written (see
@@ -227,7 +256,10 @@ Item {
     blockAllReads: true
     atomicWrites: true
     printErrors: false
+    onSaved: { chmodQueue.running = false; chmodQueue.running = true }
   }
+
+  Process { id: chmodQueue; running: false; command: ["chmod", "600", root.stateDir + "/queue.json"] }
 
   // True once the startup restore has been attempted against a loaded library.
   // Later library reloads must not replace the live queue with the file again.
@@ -441,12 +473,17 @@ Item {
 
   function startSync() {
     if (syncProc.running) return
+    var userUrl = String(root.settings.userUrl || "")
+    if (userUrl !== "" && !root.isBandcampUrl(userUrl)) {
+      root.status = "Collection URL must be https on bandcamp.com or a subdomain"
+      return
+    }
     beginSyncProgress()
     syncProc.lastError = ""
     syncProc.stage = ""
     var cmd = ["python3", root.pluginDir + "/backend", "sync", "--workers", "4"]
     if (String(root.cookiePath || "") !== "") cmd = cmd.concat(["--cookies", String(root.cookiePath)])
-    if (String(root.settings.userUrl || "") !== "") cmd = cmd.concat(["--user-url", String(root.settings.userUrl)])
+    if (userUrl !== "") cmd = cmd.concat(["--user-url", userUrl])
     if (!root.settings.includePlaylists) cmd.push("--no-playlists")
     syncProc.command = cmd
     syncProc.running = true
@@ -482,7 +519,7 @@ Item {
       onRead: function(line) {
         try {
           var d = JSON.parse(line)
-          if (d.error) { syncProc.lastError = String(d.error); return }
+          if (d.error) { syncProc.lastError = root.redactUrls(String(d.error)); return }
           if (d.stage === "playlists" && syncProc.stage !== "playlists") {
             libraryFile.reload()
             root.loadLibrary()
@@ -502,7 +539,8 @@ Item {
         root.status = "Library updated · " + root.collection.length + " albums"
         statusClearTimer.restart()
       } else {
-        root.status = "Sync failed: " + (syncProc.lastError || (syncErr.text || "").trim() || ("exit " + code))
+        var detail = syncProc.lastError || (syncErr.text || "").trim() || ("exit " + code)
+        root.status = "Sync failed: " + root.redactUrls(detail)
       }
     }
   }
@@ -930,8 +968,12 @@ Item {
       return
     }
     playbackError = ""
-    if (t.streamUrl) {
-      mpvProc.command = ["python3", root.pluginDir + "/mpvctl.py", "load", t.streamUrl, String(root.cookiePath || ""), t.title || ""]
+    // Legacy `streamUrl` is not populated by LibraryModel. Keep only local
+    // file:// playback (the test harness's tone); remote URLs would put a
+    // potentially credential-bearing URL in argv, so they fall through.
+    var localUrl = String(t.streamUrl || "")
+    if (localUrl.indexOf("file://") === 0) {
+      mpvProc.command = ["python3", root.pluginDir + "/mpvctl.py", "load", localUrl, String(root.cookiePath || ""), t.title || ""]
     } else if (t.subsonicId) {
       // The backend builds the Subsonic stream URL (it embeds credentials) and hands it
       // to mpv itself, so the URL is never in argv, in output or in any log.
@@ -1321,7 +1363,7 @@ Item {
   function startMpris() {
     if (!mprisEnabled || mprisStarted) return
     mprisStarted = true
-    Quickshell.execDetached(["mkdir", "-p", root.cacheDir])
+    Quickshell.execDetached(["install", "-d", "-m", "700", root.cacheDir])
     writeMprisState()
     mprisProc.command = ["python3", root.pluginDir + "/backend/mpris.py",
       "--state", root.mprisStatePath, "--art", root.artPath]
@@ -1336,7 +1378,12 @@ Item {
     running: false
     onTriggered: root.writeMprisState()
   }
-  FileView { id: mprisFile; path: root.mprisStatePath }
+  FileView {
+    id: mprisFile
+    path: root.mprisStatePath
+    onSaved: { chmodMpris.running = false; chmodMpris.running = true }
+  }
+  Process { id: chmodMpris; running: false; command: ["chmod", "600", root.mprisStatePath] }
   Process { id: mprisProc; running: false }
   Process { id: quitPlayerProc; running: false }
 

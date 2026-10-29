@@ -1701,6 +1701,30 @@ ShellRoot {
       log("status after refresh: " + JSON.stringify(svc.status))
     },
 
+    // ---- Audit F1/F6: cookie host gate and URL-redacted errors ----
+    function() {
+      var savedUrl = svc.settings.userUrl
+      var savedStatus = svc.status
+      svc.settings.userUrl = "http://evil.example/collection?x=1"
+      svc.startSync()
+      check("F1: an http collection URL is refused before a sync starts",
+        !svc.refreshing && svc.status.indexOf("must be https") >= 0)
+      svc.settings.userUrl = "https://bandcamp.com.evil.example/collection"
+      svc.startSync()
+      check("F1: a lookalike non-Bandcamp host is refused before a sync starts",
+        !svc.refreshing && svc.status.indexOf("must be https") >= 0)
+      check("F1: bandcamp.com and subdomains pass, http and lookalikes do not",
+        svc.isBandcampUrl("https://bandcamp.com/fixture-user") &&
+        svc.isBandcampUrl("https://x.bandcamp.com/album/1") &&
+        !svc.isBandcampUrl("http://bandcamp.com/fixture-user") &&
+        !svc.isBandcampUrl("https://bandcamp.com.evil.example/x"))
+      check("F6: an error URL keeps scheme://host/path and drops userinfo/query/fragment",
+        svc.redactUrls("boom https://user:pw@bandcamp.com/a/b?u=x&t=y#z end") ===
+          "boom https://bandcamp.com/a/b end")
+      svc.settings.userUrl = savedUrl
+      svc.status = savedStatus
+    },
+
     // ---- Phase 8: panel-scoped keyboard navigation ----
     function() {
       panel.focusSearch()

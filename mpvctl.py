@@ -24,10 +24,30 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 UID = os.getuid()
 SOCK = os.environ.get("OMATIME_MPV_SOCK") or f"/tmp/omatime-mpv-{UID}.sock"
+CACHE_DIR = Path(os.environ.get("OMATIME_CACHE_DIR")
+                 or (Path.home() / ".cache" / "omatimeatbandcamp"))
+
+
+def _open_log():
+    """Open the mpv log at 0600 under the private cache dir, never following a symlink."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CACHE_DIR, 0o700)
+    except OSError:
+        pass
+    path = CACHE_DIR / f"mpv-{UID}.log"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    return os.fdopen(fd, "ab")
 
 
 def connect(timeout=2.0):
@@ -66,9 +86,12 @@ def spawn_mpv():
     extra = os.environ.get("OMATIME_MPV_FLAGS", "").strip()
     if extra:
         args.extend(extra.split())
-    log = open(f"/tmp/omatime-mpv-{UID}.log", "ab")
-    subprocess.Popen(args, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
-                     start_new_session=True)
+    log = _open_log()
+    try:
+        subprocess.Popen(args, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                         start_new_session=True)
+    finally:
+        log.close()
 
 
 def ensure():
@@ -95,6 +118,26 @@ def send(command):
             return s.recv(65536).decode("utf-8", "ignore").strip()
         except socket.timeout:
             return ""
+
+
+AUTH_PARAMS = {"u", "t", "s", "p", "token", "password", "auth", "key", "sig"}
+
+
+def url_has_credentials(url):
+    """True when an argv URL carries embedded credentials or auth parameters."""
+    try:
+        parsed = urllib.parse.urlsplit(str(url))
+    except ValueError:
+        return True
+    if parsed.scheme not in ("file", "http", "https"):
+        return True
+    if parsed.username is not None or parsed.password is not None:
+        return True
+    try:
+        names = urllib.parse.parse_qs(parsed.query, keep_blank_values=True).keys()
+    except ValueError:
+        return True
+    return any(name.lower() in AUTH_PARAMS for name in names)
 
 
 def cookie_header(cookie_path):
@@ -251,9 +294,16 @@ def main():
     if action == "load":
         if len(sys.argv) < 3:
             return 2
+        url = sys.argv[2]
+        if url_has_credentials(url):
+            # The in-process `backend play` path calls do_load() with the signed
+            # stream URL; argv must never carry one.
+            print(json.dumps({"ok": False, "error": "refusing a credential-bearing URL in argv",
+                              "kind": "environment"}))
+            return 2
         cookie = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
         title = sys.argv[4] if len(sys.argv) > 4 else None
-        print(do_load(sys.argv[2], cookie, title))
+        print(do_load(url, cookie, title))
         return 0
     if action == "cmd":
         if len(sys.argv) < 3:

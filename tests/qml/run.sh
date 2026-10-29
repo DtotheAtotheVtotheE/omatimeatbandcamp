@@ -335,6 +335,22 @@ else
   echo "  PASS no global/window shortcut API in the plugin (keys are panel-scoped)"; passes=$((passes + 1))
 fi
 
+# Audit F4: the state directory and its files (plus the MPRIS state file) are
+# private. The service writes them through FileView; these checks read the real
+# modes on disk after phase 1 has written all three.
+state_dir="$home/.local/state/omatimeatbandcamp"
+for spec in "$state_dir:700" "$state_dir/ui.json:600" "$state_dir/queue.json:600" \
+            "$home/.cache/omatimeatbandcamp/mpris-state.json:600"; do
+  path=${spec%:*}
+  want=${spec##*:}
+  got=$(stat -c '%a' "$path" 2>/dev/null || echo missing)
+  if [ "$got" = "$want" ]; then
+    echo "  PASS audit F4: $path is $want"; passes=$((passes + 1))
+  else
+    echo "  FAIL audit F4: $path mode is $got, expected $want"; fail=1
+  fi
+done
+
 launch "phase 2 (relaunch, same HOME)" "$home" 2
 ui_after=$(cat "$home/.local/state/omatimeatbandcamp/ui.json" 2>/dev/null)
 echo "  ui.json on disk after phase 2: $ui_after"

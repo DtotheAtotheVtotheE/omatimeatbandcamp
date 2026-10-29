@@ -314,7 +314,8 @@ class Library:
     def _apply_page(self, a, web):
         info = web.album_page(a.bandcamp_url)
         if info is None:
-            log.warning("no data-tralbum for %s (page missing or unreadable); leaving tracks unloaded", a.bandcamp_url)
+            log.warning("no data-tralbum for %s (page missing or unreadable); leaving tracks unloaded",
+                        bc.safe_url(a.bandcamp_url))
             return
         a.album_is_preorder = info["album_is_preorder"]
         a.is_preorder = bool(info["is_preorder"] or info["album_is_preorder"])

@@ -10,6 +10,7 @@ __pycache__/
 # Sensitive files: browser-session importer, cookie jars and backups, credentials, env files
 cookies.py
 cookies.txt*
+*.bak
 *.bak-*
 credentials*
 .env*

@@ -33,7 +33,8 @@ your Bandcamp session cookie (`identity`), which is imported automatically:
 - `cookies.py` reads the cookies straight out of the browser you are already signed
   in to (Chromium family decrypted via the `secretstorage` keyring + AES-128-CBC, or
   Firefox's plaintext `cookies.sqlite`) and writes a Netscape `cookies.txt` into the
-  cache. `fetch.py` sends it as a `Cookie` header; `mpvctl.py` passes it to mpv.
+  cache. The backend sends it as a `Cookie` header only to Bandcamp hosts;
+  `mpvctl.py` passes it to mpv for the legacy local-file path.
 - The cookie jar and cache live in `~/.cache/omatimeatbandcamp/` (dir `0700`,
   `cookies.txt` `0600`) and are **never** part of the plugin source.
 - Use the settings menu's "Log out" item (or `clearCookies`
@@ -242,7 +243,7 @@ These work only while the popup is open and focused:
 - Subsonic credentials: `~/.config/omatimeatbandcamp/credentials.toml` (`user`, `pass`)
 - Browser session: imported by `cookies.py` (gitignored) into `~/.cache/omatimeatbandcamp/cookies.txt`
 - Cached cover: `~/.cache/omatimeatbandcamp/current-art.jpg` (local copy only; source is Subsonic `getCoverArt`)
-- `fetch.py` (the v1 scraper) is no longer used by the UI
+- The v1 scraper `fetch.py` has been removed; it was dead code superseded by `backend/library.py`
 
 ## IPC
 

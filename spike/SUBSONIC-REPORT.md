@@ -115,7 +115,7 @@ All playlists (name, id, songCount, changed):
 | broôöòóøōõtul | pl:42842 | 441 | 25 Mar 2025 13:52:07 GMT |
 | cannibale & friends | pl:513058 | 245 | 25 Mar 2025 13:51:51 GMT |
 | ISMATIC GURU | pl:498478 | 26 | 03 Mar 2025 20:11:43 GMT |
-| OMG it’s OMA | pl:481861 | 66 | 05 Feb 2025 02:53:18 GMT |
+| Example Playlist | pl:000000 | 66 | 05 Feb 2025 02:53:18 GMT |
 | cello&stuff | pl:120175 | 99 | 27 Jan 2025 02:55:05 GMT |
 | feeble little horse. | pl:473778 | 416 | 24 Jan 2025 02:22:09 GMT |
 | sleepy world. | pl:471587 | 17 | 19 Jan 2025 02:48:59 GMT |

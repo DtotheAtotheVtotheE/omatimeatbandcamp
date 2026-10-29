@@ -3342,3 +3342,119 @@ network, cookie, MPRIS, file-permission, IPC/JSON and error-path surfaces.
    material exists in reachable refs or the local unreachable/reflog objects,
    and the old hardcoded-cookie commit is absent. The same low-sensitivity
    identity/privacy caveat applies to commit metadata and docs.
+
+## Audit fixes — findings 1-9, 12 + doc scrub (2026-10-29)
+
+Work order: the security-audit findings above. Baseline at `d3386a2` was
+confirmed before editing: Python **105 tests OK, 5 skipped**; live fixtures
+**5 OK**; QML **616 checks, FAILS=0**. Nothing was weakened; every change below
+adds a regression check where the behaviour is testable.
+
+### Finding-to-fix map
+
+1. **Medium — cookies only go to Bandcamp.**
+   `backend/bandcamp.py` now has `cookie_allowed()`: the `Cookie` header is
+   attached only for `https` URLs whose host is exactly `bandcamp.com` or ends
+   in `.bandcamp.com`. Lookalikes (`bandcamp.com.evil.example`), plain `http`,
+   userinfo tricks and non-Bandcamp hosts get no cookie. `Service.qml` has the
+   matching `isBandcampUrl()` gate and refuses a non-conforming `userUrl`
+   before starting a sync. The legacy `fetch.py` was dead code (no live caller;
+   only prose/spike references), so it was deleted rather than patched.
+   *Checks:* `tests/test_audit_fixes.py::CookieHostGate` (non-Bandcamp/http get
+   no header; `bandcamp.com` and subdomains do), plus three QML checks that an
+   http URL and a lookalike host are refused and the helper accepts only the
+   real host/suffix.
+
+2. **Medium — browser cookie copy.**
+   `cookies.py::private_copy()` uses `tempfile.mkstemp()` inside the `0700`
+   cache directory, `fchmod`s the descriptor to `0600`, copies with
+   `shutil.copyfile` (so it cannot inherit a looser browser mode), and unlinks
+   the copy on any failure. Both readers already unlink in `finally`.
+   *Checks:* `CookieTempCopy` verifies the copy's location, `0600`/`0700`
+   modes, contents, and that the cache directory is empty after both a direct
+   copy and a reader call.
+
+3. **Low — Subsonic credential permissions.**
+   `backend/subsonic.py::load_credentials()` stats the credential file and its
+   plugin-owned directory before opening either. Group/other bits are tightened
+   to `0600`/`0700`; if the path cannot be tightened the call fails with an
+   error naming the exact `chmod` command. No credential value is read on the
+   failure path.
+   *Checks:* `CredentialPermissions` covers the repair case and the refusal
+   message (`chmod 700 <dir>`).
+
+4. **Low — state/MPRIS permissions.**
+   `Service.qml` creates the state directory with `install -d -m 700` (which
+   also tightens an existing directory) and each `FileView` runs `chmod 600`
+   after saving `ui.json`, `queue.json` and `mpris-state.json`. The MPRIS cache
+   directory is created the same way.
+   *Checks:* four QML harness checks read the real modes on disk after phase 1:
+   state dir `700`, `ui.json`/`queue.json`/`mpris-state.json` `600`.
+
+5. **Low — mpv log.**
+   `mpvctl.py` writes the log as `~/.cache/omatimeatbandcamp/mpv-<uid>.log`
+   instead of `/tmp`. `_open_log()` creates/repairs the cache directory at
+   `0700`, opens with `O_NOFOLLOW` where available and mode `0600`, then
+   `fchmod`s the descriptor; the parent closes its copy after spawn.
+   *Checks:* `MpvLog` verifies the location, `0600` file/`0700` directory, and
+   that a pre-created symlink is refused without touching its target.
+
+6. **Low — public URLs in error paths.**
+   `backend/bandcamp.py` reduces HTTP/network error URLs to
+   scheme+host+path with `safe_url()` and scrubs embedded URLs in exception
+   text with `scrub_urls()`; `backend/library.py` logs the same safe form; and
+   `Service.qml::redactUrls()` strips userinfo, query and fragment from any
+   backend error shown in the panel. `fetch.py`'s copy of this path is gone
+   with the file.
+   *Checks:* `ErrorUrlRedaction` covers the HTTP-error and embedded-URL cases;
+   one QML check covers the panel-side redaction.
+
+7. **Low — traceback redaction.**
+   `backend/__main__.py::_Redact.filter()` now formats `record.exc_info` into
+   `exc_text` and runs the existing redactor over it (and over `stack_info`),
+   so `log.exception()` cannot carry an unredacted exception string into
+   `sync.log`.
+   *Checks:* `TracebackRedaction` raises an exception containing a
+   credential-shaped URL and asserts the formatted traceback shows the
+   placeholder, not the value.
+
+8. **Info — legacy `t.streamUrl` argv branch.**
+   Verified: `LibraryModel.adaptTrack()` does not populate `streamUrl`; only the
+   QML first-track regression uses a synthetic local tone. Removing the branch
+   cascades into that check, so the branch is **guarded** instead of removed:
+   `Service.qml` only passes `file://` URLs to `mpvctl.py`, and `mpvctl.py`
+   refuses credential-bearing URLs (userinfo or `u/t/s/p/token/password/...`
+   query parameters) arriving in argv before any player call. The in-process
+   `backend play` path still calls `do_load()` directly and is unaffected.
+   *Checks:* `ArgvCredentialGuard` covers detection and the refusal (no
+   `do_load` call, no secret echoed); the existing first-track QML check still
+   proves local-file playback.
+
+9. **Info — `.gitignore` backups.**
+   Added plain `*.bak` beside the existing `*.bak-*`.
+   *Checks:* `GitignoreBackups`.
+
+10. **Info (partial) — doc scrub.**
+    Replaced the one audit-cited real playlist name/ID in
+    `spike/SUBSONIC-REPORT.md` with a generic `Example Playlist`
+    (`pl:000000`). The owner handle stays (it is the product name). Fixtures
+    (finding 11) were left alone as public, load-bearing data.
+
+12. **Info — gitleaks placeholder.**
+    Renamed the dummy test values in `tests/test_library.py` from the
+    secret-shaped names to `DUMMY_T`/`DUMMY_S`. No `.gitleaksignore` was added.
+    The rename was also applied to the single historical commit that introduced
+    the placeholder so the reachable history is clean too.
+
+### Changed checks and results
+
+- Python: **119 tests OK, 5 skipped** (105 + 14 new audit regression tests).
+- Live fixtures: **5 tests OK**.
+- QML: **624 checks, FAILS=0** (616 + 8 new: 3 F1, 1 F6, 4 F4).
+- Existing checks were not loosened or removed. `tests/test_library.py` only
+  renamed its dummy sentinels; the QML first-track check still exercises the
+  local `file://` tone.
+- `--load-scripts=no` remains, all subprocess calls remain argument lists, and
+  no credential file was opened by this pass (`ls -l` only).
+- gitleaks 8.30.1 over the working tree and reachable history: **0 findings**
+  after the rename, with no ignore file.
