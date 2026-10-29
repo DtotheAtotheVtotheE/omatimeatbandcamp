@@ -15,7 +15,7 @@ release day).
   queue, keyboard navigation, MPRIS media keys.
 - Playback through mpv; no browser tab, no downloads, no separate music app.
 - Session import from the browser you already use, or a manual cookie file.
-- Everything stays local; the only network destinations are Bandcamp hosts.
+- Your data stays local; the only network destinations are Bandcamp hosts.
 
 > **Beta.** v1.0.0-beta.1 is a feature-complete public beta looking for
 > environment testing — different resolutions, display scaling, themes and
@@ -109,7 +109,7 @@ session (`https://bandcamp.com/settings`). To browse a different profile, set
 Bandcamp's Subsonic API is what actually streams the audio. On
 [bandcamp.com](https://bandcamp.com), open **Fan Settings → Subsonic** and
 generate the username/password pair for a Subsonic client. Bandcamp shows the
-pair once; copy it into the local file below.
+pair on that page; copy it into the local file below.
 
 - It is a **dedicated app-style pair**, not your Bandcamp account password.
 - It is **revocable** from the same Fan Settings → Subsonic page. Revoking it
